@@ -86,9 +86,8 @@ fetch_sources() {
           "$SRC/libdrm-${LIBDRMVER}.tar.xz"
     fetch "https://xkbcommon.org/download/libxkbcommon-${LIBXKBCOMMONVER}.tar.xz" \
           "$SRC/libxkbcommon-${LIBXKBCOMMONVER}.tar.xz"
-    # libseat (skip for now - repository not found)
-    # fetch "https://github.com/kennylevinsen/seat/releases/download/v${LIBSEATVER}/libseat-${LIBSEATVER}.tar.gz" \
-    #       "$SRC/libseat-${LIBSEATVER}.tar.gz"
+    fetch "https://gitlab.freedesktop.org/libseat/libseat/-/releases/v${LIBSEATVER}/downloads/libseat-v${LIBSEATVER}.tar.gz" \
+          "$SRC/libseat-${LIBSEATVER}.tar.gz"
     fetch "https://github.com/eudev-project/eudev/releases/download/v${UDEVVER}/eudev-${UDEVVER}.tar.gz" \
           "$SRC/eudev-${UDEVVER}.tar.gz"
     fetch "https://gitlab.freedesktop.org/libinput/libinput/-/releases/${LIBINPUTVER}/downloads/libinput-${LIBINPUTVER}.tar.xz" \
