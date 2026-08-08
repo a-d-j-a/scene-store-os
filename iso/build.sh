@@ -106,8 +106,13 @@ build_musl() {
     cd "$BUILD/musl-${MUSLVER}"
     ./configure --prefix=/usr
     make -j"$JOBS" || die "musl build failed"
+    # musl-gcc wrapper is created during make, copy it explicitly
+    if [ -f "musl-gcc" ]; then
+        cp musl-gcc "$SYSROOT/bin/musl-gcc"
+        chmod +x "$SYSROOT/bin/musl-gcc"
+    fi
     make install DESTDIR="$SYSROOT" || die "musl install failed"
-    # musl ships a musl-gcc wrapper — verify it exists
+    # verify musl-gcc wrapper exists
     [ -x "$SYSROOT/bin/musl-gcc" ] || die "musl-gcc wrapper not installed"
     cd -
     msg "musl done (musl-gcc at $SYSROOT/bin/musl-gcc)"
