@@ -129,6 +129,9 @@ build_musl() {
 build_busybox() {
     msg "=== Phase 3: Building busybox ==="
     setup_musl_gcc
+    # Install kernel headers for features that need them (like kbd_mode)
+    apt-get update -qq 2>/dev/null || true
+    apt-get install -y -qq linux-headers-generic 2>/dev/null || true
     extract "$SRC/busybox-${BUSYBOXVER}.tar.bz2" "$BUILD/busybox-${BUSYBOXVER}"
     cd "$BUILD/busybox-${BUSYBOXVER}"
     make mrproper 2>/dev/null || true
