@@ -136,6 +136,9 @@ build_busybox() {
     cd "$BUILD/busybox-${BUSYBOXVER}"
     make mrproper 2>/dev/null || true
     make defconfig
+    # Disable features that require kernel headers (not available in all build environments)
+    sed -i 's/# CONFIG_KBD_MODE is not set/CONFIG_KBD_MODE=n/' .config
+    sed -i 's/CONFIG_KBD_MODE=y/CONFIG_KBD_MODE=n/' .config
     # enable static build
     sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
     # enable standalone shell for initramfs
