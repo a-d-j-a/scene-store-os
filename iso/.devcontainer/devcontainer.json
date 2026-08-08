@@ -1,0 +1,17 @@
+{
+  "name": "ISO Build Environment",
+  "image": "mcr.microsoft.com/devcontainers/base:debian",
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/git-lfs:1": {}
+  },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y build-essential gcc g++ make cmake meson ninja-build pkg-config autoconf automake libtool flex bison libelf-dev libssl-dev libffi-dev python3 python3-pip curl wget git xorriso genisoimage grub-pc-bin grub-common mtools cpio gzip xz-utils zlib1g-dev libglib2.0-dev libpango1.0-dev libcairo2-dev libfontconfig-dev libfreetype-dev libinput-dev libxkbcommon-dev libdrm-dev libgbm-dev libudev-dev libseat-dev libpixman-1-dev libwayland-dev wayland-protocols",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.makefile-tools"
+      ]
+    }
+  }
+}

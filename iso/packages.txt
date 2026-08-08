@@ -1,0 +1,34 @@
+# User applications to install after base build.
+# These are compiled against musl and installed into the sysroot.
+# Format: name version source_url
+#
+# Core desktop apps:
+firefox-esr    115.8.0    https://download.mozilla.org/?product=firefox-esr-latest&os=linux64
+mpv            0.37.0     https://github.com/mpv-player/mpv/archive/refs/tags/v0.37.0.tar.gz
+feh            3.10.1     https://github.com/derf/feh/archive/refs/tags/v3.10.1.tar.gz
+nano           8.0        https://.nano-editor.org/dist/v8/nano-8.0.tar.xz
+htop           3.3.0      https://github.com/htop-dev/htop/archive/refs/tags/3.3.0.tar.gz
+pcmanfm        1.3.2      https://github.com/pcmanfm/pcmanfm/archive/refs/tags/1.3.2.tar.gz
+galculator     4.0        https://github.com/galculator/galculator/archive/refs/tags/v4.0.tar.gz
+file-roller    42.2       https://download.gnome.org/sources/file-roller/42/file-roller-42.2.tar.xz
+lXTerminal     0.3.1      https://github.com/lxterminal/lxterminal/archive/refs/tags/v0.3.1.tar.gz
+xterm          390        https://invisible-island.net/datafiles/release/xterm.tar.gz
+glxinfo        mesa       (part of mesa-utils, built from mesa source)
+networkmanager 1.44.0     https://download.gnome.org/sources/NetworkManager/1.44/NetworkManager-1.44.0.tar.xz
+pulseaudio     17.0       https://www.freedesktop.org/software/pulseaudio/releases/pulseaudio-17.0.tar.xz
+pipewire       1.0.0      https://gitlab.freedesktop.org/pipewire/pipewire/-/releases/1.0.0/downloads/pipewire-1.0.0.tar.xz
+
+# System:
+glib           2.78.3     https://download.gnome.org/sources/glib/2.78/glib-2.78.3.tar.xz
+pango          1.51.2     https://download.gnome.org/sources/pango/1.51/pango-1.51.2.tar.xz
+cairo          1.18.0     https://cairographics.org/releases/cairo-1.18.0.tar.xz
+fontconfig     2.14.2     https://www.freedesktop.org/software/fontconfig/release/fontconfig-2.14.2.tar.gz
+freetype       2.13.2     https://download.savannah.gnu.org/releases/freetype/freetype-2.13.2.tar.gz
+harfbuzz       8.3.0      https://github.com/harfbuzz/harfbuzz/archive/refs/tags/8.3.0.tar.gz
+libpng         1.6.40     https://sourceforge.net/projects/libpng/files/libpng16/1.6.40/libpng-1.6.40.tar.xz
+jpeg-turbo     3.0.1      https://github.com/libjpeg-turbo/libjpeg-turbo/archive/refs/tags/3.0.1.tar.gz
+zlib           1.3.1      https://zlib.net/zlib-1.3.1.tar.gz
+
+# Fonts:
+dejavu         2.37       https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.tar.bz2
+noto           20240101   https://github.com/notofonts/noto-fonts/releases

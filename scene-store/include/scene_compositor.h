@@ -1,0 +1,124 @@
+/*
+ * scene_compositor.h — compositor core: first consumer of the store.
+ *
+ * The compositor is the OS layer that draws the semantic scene. It owns
+ * one session (a scene_server seam), reads the store directly for the
+ * per-node visual state, diff-maps that state onto an internal render
+ * model to compute damage, and repaints only the damaged rects into its
+ * framebuffer. Backends (DRM/KMS, GDI, validation) copy the damage and
+ * need no scene knowledge.
+ *
+ * Composition happens on scene_compositor_frame(): the store's committed
+ * seq is diffed against the last rendered state; changed/deleted nodes
+ * add their old+new rects to the damage list; each damage rect is then
+ * repainted (clear to desktop color, then every intersecting visible
+ * node in document order, children over parents). No frame is repainted
+ * when nothing changed (damage = 0, backend skips the flush).
+ *
+ * Styles are server-owned (spec §7 re-theme): the compositor holds the
+ * style table; a node with style_ref 0 uses its role's default style.
+ * Changing a style entry dirties every node referencing it on the next
+ * frame — the OS re-themes the running app without touching it.
+ *
+ * Effects (v1, compositor-side): scene_compositor_set_effects(1) enables
+ * deterministic tick-driven transitions. A node that first appears in
+ * the render model fades in over 8 compositor ticks while sliding from
+ * 6px below its final position; a node removed from the store fades out
+ * over 8 ticks (a phantom snapshot of its last visuals, drawn after the
+ * live scene) before the model entry is dropped. Both share the per-
+ * channel premul blend used everywhere (src*a + dst*(255-a))/255 and are
+ * driven only by the internal tick counter — never wall-clock — so the
+ * whole pipeline stays deterministic. Replay mode (seek) and ghost-
+ * reconnect re-issues never animate: only genuinely new/deleted live
+ * nodes do. With effects off, output is byte-identical to the v1
+ * identity paint. Rounded corners are a style property: scene_style.radius
+ * clips the fill corners to a circle (radius 0 = square).
+ *
+ * Input is forwarded to the store (scene_server_input_pointer): fully
+ * flow-controlled (§8), semantics resolved by the engine (InputActivate
+ * goes to the app, not the compositor). The compositor renders no
+ * cursor in v1.
+ *
+ * Threading: one compositor, one session, one thread (as the store).
+ */
+#ifndef SCENE_COMPOSITOR_H
+#define SCENE_COMPOSITOR_H
+
+#include "scene_fb.h"
+#include "scene_font.h"
+#include "scene_server.h"
+
+typedef struct scene_compositor scene_compositor;
+
+typedef struct scene_style {
+    uint32_t fill, border, text;  /* premultiplied ARGB; border 0 = none  */
+    uint8_t  border_w;            /* px stroke width                      */
+    uint8_t  pad_x, pad_y;        /* layout reserved, 0 in v1             */
+    uint8_t  radius;              /* corner radius px; 0 = square         */
+} scene_style;
+
+scene_compositor *scene_compositor_new(const scene_limits *limits,
+                                       uint32_t fb_w, uint32_t fb_h);
+void scene_compositor_free(scene_compositor *cp);
+
+/* The session store (read-only queries) and the wire seam (feed apps).  */
+scene_store  *scene_compositor_store(scene_compositor *cp);
+scene_server *scene_compositor_server(scene_compositor *cp);
+
+void scene_compositor_resize(scene_compositor *cp, uint32_t w, uint32_t h);
+void scene_compositor_set_clear(scene_compositor *cp, uint32_t color);
+
+/* Texture pixels: w*h of premultiplied ARGB or XRGB per fmt.            */
+int scene_compositor_register_texture(scene_compositor *cp,
+                                      scene_texture_ref ref,
+                                      uint32_t w, uint32_t h, uint16_t fmt,
+                                      uint8_t opaque, const uint32_t *pixels);
+int scene_compositor_release_texture(scene_compositor *cp,
+                                     scene_texture_ref ref);
+
+/* Server-owned style table; ref must be < style_count (set it first).   */
+void scene_compositor_set_style_count(scene_compositor *cp, uint32_t n);
+int  scene_compositor_set_style(scene_compositor *cp, scene_style_ref ref,
+                                const scene_style *st);
+
+/* Forward to the store: flow-controlled, engine-resolved (§8, §7).      */
+int scene_compositor_input_pointer(scene_compositor *cp, uint8_t device,
+                                   int32_t x, int32_t y, uint8_t buttons);
+
+/* Key input feeder (flow-controlled, shares gate with pointer).         */
+int scene_compositor_input_key(scene_compositor *cp, uint32_t key_code,
+                               uint8_t state, uint8_t modifiers);
+
+/* One composition cycle. Returns 0 on success, -1 on internal failure.  */
+int  scene_compositor_frame(scene_compositor *cp);
+const scene_fb *scene_compositor_fb(scene_compositor *cp);
+/* Damage of the last frame (count written into out, capped by cap).     */
+uint32_t scene_compositor_damage(scene_compositor *cp, scene_rect *out,
+                                 uint32_t cap);
+/* Committed seq the framebuffer currently shows.                        */
+uint64_t scene_compositor_rendered_seq(scene_compositor *cp);
+void scene_compositor_force_repaint(scene_compositor *cp);
+
+/* Effects (v1): enter/exit fade+slide transitions, tick-driven and fully
+ * deterministic. on=1 enables (default off = identity paint).           */
+void scene_compositor_set_effects(scene_compositor *cp, int on);
+/* Deterministic frame counter (incremented by every frame()).           */
+uint64_t scene_compositor_tick(scene_compositor *cp);
+/* Number of running transitions (0 = fully settled).                    */
+uint32_t scene_compositor_anim_count(scene_compositor *cp);
+
+/* Hover style: allocates style slot 1 with the given fill/text colors.
+ * Shell nodes set style_ref=1 when hovered, 0 when not. Returns the
+ * style_ref (always 1) or 0 on failure.                                */
+scene_style_ref scene_compositor_setup_hover_style(scene_compositor *cp,
+                                                   uint32_t fill,
+                                                   uint32_t text);
+
+/* Active-focus style: allocates style slot 2 with the given fill/text
+ * colors. Shell nodes set style_ref=2 when their window is focused.
+ * Returns the style_ref (always 2) or 0 on failure.                    */
+scene_style_ref scene_compositor_setup_active_style(scene_compositor *cp,
+                                                    uint32_t fill,
+                                                    uint32_t text);
+
+#endif /* SCENE_COMPOSITOR_H */

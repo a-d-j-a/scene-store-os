@@ -1,0 +1,49 @@
+#!/bin/sh
+# scene-desktop — start the scene compositor + shell
+# Runs as PID 1 continuation from rcS
+
+export HOME=/home/user
+export USER=user
+export UID=1000
+export PATH=/usr/bin:/bin:/sbin:/usr/sbin
+export TERM=xterm-256color
+export LANG=en_US.UTF-8
+export XDG_RUNTIME_DIR=/run/user/1000
+export XDG_SESSION_TYPE=wayland
+export WLR_NO_HARDWARE_CURSORS=1
+export WLR_BACKENDS=drm
+
+mkdir -p "$XDG_RUNTIME_DIR"
+chown user:user "$XDG_RUNTIME_DIR" 2>/dev/null
+chmod 700 "$XDG_RUNTIME_DIR"
+
+# try to switch to a display tty
+chvt 7 2>/dev/null || chvt 1 2>/dev/null || true
+
+# wait for dri nodes
+for i in $(seq 1 10); do
+    [ -e /dev/dri/card0 ] && break
+    sleep 0.5
+done
+
+if [ ! -e /dev/dri/card0 ]; then
+    echo "No DRI device found. Trying VNC/turtle backend..."
+    export WLR_BACKENDS=turtle
+fi
+
+# try wlroots compositor first
+if [ -x /usr/bin/iso-compositor ]; then
+    echo "Starting wlroots compositor..."
+    exec su -c '/usr/bin/iso-compositor' user 2>/dev/null || \
+        exec /usr/bin/iso-compositor
+fi
+
+# fallback to scene preview (framebuffer mode)
+if [ -x /usr/bin/iso-preview ]; then
+    echo "Starting scene preview..."
+    exec su -c '/usr/bin/iso-preview' user 2>/dev/null || \
+        exec /usr/bin/iso-preview
+fi
+
+echo "No compositor found. Dropping to shell."
+exec /bin/sh

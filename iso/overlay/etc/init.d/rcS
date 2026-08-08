@@ -1,0 +1,73 @@
+#!/bin/sh
+# rcS — main init script, runs at boot via inittab
+export PATH=/usr/bin:/bin:/sbin:/usr/sbin
+
+echo "ISO Linux starting..."
+
+# ---- mount essential filesystems -------------------------------------------
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys
+mount -t devtmpfs devtmpfs /dev
+mount -t tmpfs    tmpfs    /run
+mount -t tmpfs    tmpfs    /tmp
+mkdir -p /dev/pts /dev/shm
+mount -t devpts   devpts   /dev/pts
+
+# ---- device manager --------------------------------------------------------
+if [ -x /sbin/udevd ]; then
+    /sbin/udevd --daemon 2>/dev/null
+    udevadm trigger --action=add 2>/dev/null || true
+    udevadm settle --timeout=10 2>/dev/null || true
+fi
+
+# ---- hostname --------------------------------------------------------------
+hostname -F /etc/hostname 2>/dev/null || true
+
+# ---- loopback network ------------------------------------------------------
+if command -v ifconfig >/dev/null 2>&1; then
+    ifconfig lo 127.0.0.1 up
+elif command -v ip >/dev/null 2>&1; then
+    ip link set lo up
+    ip addr add 127.0.0.1/8 dev lo 2>/dev/null || true
+fi
+
+# ---- mount filesystems from fstab -----------------------------------------
+if [ -f /etc/fstab ]; then
+    mount -a 2>/dev/null || true
+fi
+
+# ---- load kernel modules ---------------------------------------------------
+for mod in /lib/modules/*/kernel/drivers/video/*.ko \
+           /lib/modules/*/kernel/drivers/gpu/*.ko \
+           /lib/modules/*/kernel/drivers/input/*.ko \
+           /lib/modules/*/kernel/drivers/usb/*.ko \
+           /lib/modules/*/kernel/sound/*.ko; do
+    insmod "$mod" 2>/dev/null || true
+done
+
+# ---- setup runtime dirs ----------------------------------------------------
+mkdir -p /run/user/0
+mkdir -p /run/user/1000
+chown 0:0 /run/user/0
+chown 1000:1000 /run/user/1000
+chmod 700 /run/user/0
+chmod 700 /run/user/1000
+
+# ---- start console services ------------------------------------------------
+if [ -x /etc/init.d/networking ]; then
+    /etc/init.d/networking start 2>/dev/null || true
+fi
+
+# ---- start scene desktop ---------------------------------------------------
+echo "Launching scene compositor..."
+
+# create /tmp/.X11-unix for potential X fallback
+mkdir -p /tmp/.X11-unix 2>/dev/null || true
+
+# auto-login and start compositor
+if [ -x /etc/init.d/scene-desktop ]; then
+    exec /etc/init.d/scene-desktop
+fi
+
+# fallback: drop to shell
+exec /bin/sh

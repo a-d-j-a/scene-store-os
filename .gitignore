@@ -1,0 +1,27 @@
+# Build artifacts
+build/
+output/
+*.o
+*.exe
+*.iso
+*.qcow2
+iso/build/
+iso/output/
+
+# Temp files
+*.ppm
+ext4_out.txt
+query
+readext.txt
+session-handoff.txt
+start
+git_setup.bat
+wallpaper.bmp
+preview.ppm
+preview_static.ppm
+
+# Windows temp
+Thumbs.db
+desktop.ini
+*.swp
+*~

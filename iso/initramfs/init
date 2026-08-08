@@ -1,0 +1,103 @@
+#!/bin/sh
+# initramfs init — early userspace, finds root, switches to real init
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+echo "ISO Linux initramfs starting..."
+
+# ---- mount essential filesystems -------------------------------------------
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys
+mount -t devtmpfs devtmpfs /dev
+mount -t tmpfs    tmpfs    /run
+mkdir -p /dev/pts /dev/shm
+mount -t devpts   devpts   /dev/pts
+
+# ---- load kernel modules ---------------------------------------------------
+load_mods() {
+    for f in /lib/modules/*/kernel/drivers/usb/host/*.ko \
+             /lib/modules/*/kernel/drivers/usb/storage/*.ko \
+             /lib/modules/*/kernel/drivers/ata/*.ko \
+             /lib/modules/*/kernel/drivers/scsi/*.ko \
+             /lib/modules/*/kernel/drivers/nvme/*.ko \
+             /lib/modules/*/kernel/drivers/sata/*.ko \
+             /lib/modules/*/kernel/fs/ext4/*.ko \
+             /lib/modules/*/kernel/fs/vfat/*.ko \
+             /lib/modules/*/kernel/fs/ntfs3/*.ko; do
+        [ -f "$f" ] && insmod "$f" 2>/dev/null || true
+    done
+}
+load_mods
+
+# ---- find root device ------------------------------------------------------
+echo "Searching for root device..."
+ROOT=""
+for attempt in $(seq 1 3); do
+    for dev in /dev/sda2 /dev/sda1 /dev/sdb2 /dev/sdb1 \
+               /dev/nvme0n1p2 /dev/nvme0n1p1 /dev/sda3 /dev/sdb3; do
+        if [ -b "$dev" ]; then
+            # try to mount
+            if mount -t ext4 "$dev" /mnt 2>/dev/null; then
+                # verify it looks like a rootfs
+                if [ -f /mnt/etc/inittab ] || [ -d /mnt/usr/bin ]; then
+                    ROOT="$dev"
+                    echo "Root found: $dev"
+                    break 2
+                fi
+                umount /mnt 2>/dev/null
+            fi
+        fi
+    done
+    echo "Attempt $attempt failed, retrying in 2s..."
+    sleep 2
+done
+
+# ---- fallback: try everything ----------------------------------------------
+if [ -z "$ROOT" ]; then
+    echo "Probing all block devices..."
+    for dev in $(ls /dev/sd* /dev/nvme* 2>/dev/null); do
+        if mount -t ext4 "$dev" /mnt 2>/dev/null; then
+            if [ -f /mnt/etc/inittab ] || [ -d /mnt/usr/bin ]; then
+                ROOT="$dev"
+                echo "Root found (probe): $dev"
+                break
+            fi
+            umount /mnt 2>/dev/null
+        fi
+    done
+fi
+
+# ---- still no root? drop to shell ------------------------------------------
+if [ -z "$ROOT" ]; then
+    echo ""
+    echo "========================================="
+    echo "  No root device found."
+    echo "  Available devices:"
+    ls -la /dev/sd* /dev/nvme* 2>/dev/null || echo "  (none)"
+    echo "========================================="
+    echo ""
+    echo "Dropping to shell. Type 'reboot' to try again."
+    exec /bin/sh
+fi
+
+# ---- prepare switch_root ---------------------------------------------------
+# mount root read-write
+mount -o remount,rw "$ROOT" /mnt 2>/dev/null || true
+
+# create mount points in new root
+mkdir -p /mnt/{proc,sys,dev,run,tmp,boot}
+
+# copy kernel modules
+if [ -d /lib/modules ]; then
+    mkdir -p /mnt/lib
+    cp -a /lib/modules /mnt/lib/ 2>/dev/null || true
+fi
+
+# mount filesystems for new root
+mount -t proc     proc     /mnt/proc
+mount -t sysfs    sysfs    /mnt/sys
+mount -t devtmpfs devtmpfs /mnt/dev
+mount -t tmpfs    tmpfs    /mnt/run
+
+# ---- switch! ---------------------------------------------------------------
+echo "Switching to rootfs on $ROOT..."
+exec switch_root /mnt /sbin/init
