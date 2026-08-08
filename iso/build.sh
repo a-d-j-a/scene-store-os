@@ -154,6 +154,9 @@ build_busybox() {
 # ---- phase 4: build kernel -------------------------------------------------
 build_kernel() {
     msg "=== Phase 4: Building kernel ==="
+    # Install build prerequisites
+    apt-get update -qq 2>/dev/null || true
+    apt-get install -y -qq flex bison 2>/dev/null || true
     extract "$SRC/linux-${KVER}.tar.xz" "$BUILD/linux-${KVER}"
     cd "$BUILD/linux-${KVER}"
     make defconfig
