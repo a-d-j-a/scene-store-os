@@ -115,7 +115,10 @@ build_musl() {
     # verify musl-gcc wrapper exists (installed to usr/bin by musl's make install)
     [ -x "$SYSROOT/usr/bin/musl-gcc" ] || die "musl-gcc wrapper not installed at $SYSROOT/usr/bin/musl-gcc"
     # Also copy to bin for convenience
-    cp "$SYSROOT/usr/bin/musl-gcc" "$SYSROOT/bin/musl-gcc" 2>/dev/null || true
+    if [ -x "$SYSROOT/usr/bin/musl-gcc" ]; then
+        cp "$SYSROOT/usr/bin/musl-gcc" "$SYSROOT/bin/musl-gcc"
+        chmod +x "$SYSROOT/bin/musl-gcc" 2>/dev/null || true
+    fi
     [ -x "$SYSROOT/bin/musl-gcc" ] || die "musl-gcc wrapper not installed at $SYSROOT/bin/musl-gcc"
     cd -
     msg "musl done (musl-gcc at $SYSROOT/bin/musl-gcc)"
