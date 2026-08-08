@@ -129,16 +129,10 @@ build_musl() {
 build_busybox() {
     msg "=== Phase 3: Building busybox ==="
     setup_musl_gcc
-    # Install kernel headers for features that need them (like kbd_mode)
-    apt-get update -qq 2>/dev/null || true
-    apt-get install -y -qq linux-headers-generic 2>/dev/null || true
     extract "$SRC/busybox-${BUSYBOXVER}.tar.bz2" "$BUILD/busybox-${BUSYBOXVER}"
     cd "$BUILD/busybox-${BUSYBOXVER}"
     make mrproper 2>/dev/null || true
     make defconfig
-    # Disable features that require kernel headers (not available in all build environments)
-    sed -i 's/# CONFIG_KBD_MODE is not set/CONFIG_KBD_MODE=n/' .config
-    sed -i 's/CONFIG_KBD_MODE=y/CONFIG_KBD_MODE=n/' .config
     # enable static build
     sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
     # enable standalone shell for initramfs
@@ -564,17 +558,17 @@ case "${1:-}" in
     fetch)    fetch_sources ;;
     kernel)   fetch_sources; build_kernel ;;
     musl)     fetch_sources; build_musl ;;
-    busybox)  fetch_sources; build_musl; build_busybox ;;
-    deps)     fetch_sources; build_musl; build_deps ;;
-    wlroots)  fetch_sources; build_musl; build_deps; build_wlroots ;;
+    busybox)  fetch_sources; build_musl; build_kernel; build_busybox ;;
+    deps)     fetch_sources; build_musl; build_kernel; build_busybox; build_deps ;;
+    wlroots)  fetch_sources; build_musl; build_kernel; build_busybox; build_deps; build_wlroots ;;
     scene)    build_scene_store ;;
     iso)      build_initramfs; build_iso ;;
     all|"")
         msg "Starting full ISO build..."
         fetch_sources
         build_musl
-        build_busybox
         build_kernel
+        build_busybox
         build_deps
         build_wlroots
         build_scene_store
