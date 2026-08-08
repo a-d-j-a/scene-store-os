@@ -24,8 +24,8 @@ LIBDRMVER="2.4.122"
 LIBXKBCOMMONVER="1.5.0"
 UDEVVER="3.2.14"
 LIBSEATVER="0.1.0"
-LIBINPUTVER="1.25.0"
-MESAVER="23.3.3"
+LIBINPUTVER="1.26.0"
+MESAVER="23.1.5"
 
 # ---- helpers ---------------------------------------------------------------
 msg()  { printf '\033[1;32m>>> %s\033[0m\n' "$*"; }
@@ -92,7 +92,7 @@ fetch_sources() {
           "$SRC/eudev-${UDEVVER}.tar.gz"
     fetch "https://github.com/libinput/libinput/releases/download/${LIBINPUTVER}/libinput-${LIBINPUTVER}.tar.xz" \
           "$SRC/libinput-${LIBINPUTVER}.tar.xz"
-    fetch "https://mesa.freedesktop.org/archive/mesa-${MESAVER}/mesa-${MESAVER}.tar.xz" \
+    fetch "https://archive.mesa3d.org/mesa-${MESAVER}/mesa-${MESAVER}.tar.xz" \
           "$SRC/mesa-${MESAVER}.tar.xz"
 
     msg "All sources fetched."
