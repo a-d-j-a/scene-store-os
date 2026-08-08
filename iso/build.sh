@@ -32,6 +32,21 @@ msg()  { printf '\033[1;32m>>> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m!!! %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31mERR %s\033[0m\n' "$*" >&2; exit 1; }
 
+check_deps() {
+    local missing=""
+    for cmd in curl wget tar flex bison bc meson ninja grub-mkrescue pkg-config; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            if [ "$cmd" = "curl" ] || [ "$cmd" = "wget" ]; then
+                continue
+            fi
+            missing="$missing $cmd"
+        fi
+    done
+    if [ -n "$missing" ]; then
+        die "Missing required host tools:$missing"
+    fi
+}
+
 fetch() {
     local url="$1" dst="$2"
     [ -f "$dst" ] && return 0
@@ -63,10 +78,33 @@ setup_musl_gcc() {
     export PKG_CONFIG_PATH="$SYSROOT/lib/pkgconfig:$SYSROOT/lib64/pkgconfig"
     export PKG_CONFIG_LIBDIR="$SYSROOT/lib/pkgconfig"
     export PATH="$SYSROOT/bin:$PATH"
+
+    mkdir -p "$BUILD"
+    cat > "$BUILD/musl-cross.txt" <<CROSS
+[binaries]
+c = '$MUSL_GCC'
+cpp = '$MUSL_GCC'
+ar = 'ar'
+strip = 'strip'
+pkgconfig = 'pkg-config'
+
+[host_machine]
+system = 'linux'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+
+[properties]
+sys_root = '$SYSROOT'
+CFLAGS = ['--sysroot=$SYSROOT']
+LDFLAGS = ['--sysroot=$SYSROOT', '-static']
+pkg_config_path = ['$SYSROOT/lib/pkgconfig', '$SYSROOT/lib64/pkgconfig']
+CROSS
 }
 
 # ---- phase 1: download sources --------------------------------------------
 fetch_sources() {
+    check_deps
     msg "=== Phase 1: Fetching sources ==="
     mkdir -p "$SRC"
 
@@ -154,9 +192,7 @@ build_busybox() {
 # ---- phase 4: build kernel -------------------------------------------------
 build_kernel() {
     msg "=== Phase 4: Building kernel ==="
-    # Install build prerequisites
-    apt-get update -qq 2>/dev/null || true
-    apt-get install -y -qq flex bison libelf-dev bc 2>/dev/null || true
+    # Build prerequisites are checked by check_deps
     extract "$SRC/linux-${KVER}.tar.xz" "$BUILD/linux-${KVER}"
     cd "$BUILD/linux-${KVER}"
     make defconfig
@@ -196,34 +232,34 @@ build_deps() {
     msg "  Building pixman..."
     extract "$SRC/pixman-${PIXMANVER}.tar.gz" "$BUILD/pixman-${PIXMANVER}"
     cd "$BUILD/pixman-${PIXMANVER}"
-    ./configure --prefix=/usr --disable-shared --enable-static
-    make -j"$JOBS" && make install DESTDIR="$SYSROOT"
+    meson setup _build --cross-file "$BUILD/musl-cross.txt" --prefix=/usr --default-library=static
+    ninja -C _build -j"$JOBS" && DESTDIR="$SYSROOT" ninja -C _build install
     cd -
 
     # libdrm
     msg "  Building libdrm..."
     extract "$SRC/libdrm-${LIBDRMVER}.tar.xz" "$BUILD/libdrm-${LIBDRMVER}"
     cd "$BUILD/libdrm-${LIBDRMVER}"
-    ./configure --prefix=/usr --disable-shared --enable-static
-    make -j"$JOBS" && make install DESTDIR="$SYSROOT"
+    meson setup _build --cross-file "$BUILD/musl-cross.txt" --prefix=/usr --default-library=static
+    ninja -C _build -j"$JOBS" && DESTDIR="$SYSROOT" ninja -C _build install
     cd -
 
     # libxkbcommon
     msg "  Building libxkbcommon..."
     extract "$SRC/libxkbcommon-${LIBXKBCOMMONVER}.tar.xz" "$BUILD/libxkbcommon-${LIBXKBCOMMONVER}"
     cd "$BUILD/libxkbcommon-${LIBXKBCOMMONVER}"
-    ./configure --prefix=/usr --disable-shared --enable-static \
-        --enable-x11=no --disable-wayland
-    make -j"$JOBS" && make install DESTDIR="$SYSROOT"
+    meson setup _build --cross-file "$BUILD/musl-cross.txt" --prefix=/usr --default-library=static \
+        -Denable-x11=false -Denable-wayland=false -Denable-docs=false
+    ninja -C _build -j"$JOBS" && DESTDIR="$SYSROOT" ninja -C _build install
     cd -
 
-    # wayland (libs only — we hand-compile the protocol)
+    # wayland (libs only)
     msg "  Building wayland..."
     extract "$SRC/wayland-${WAYLANDVER}.tar.xz" "$BUILD/wayland-${WAYLANDVER}"
     cd "$BUILD/wayland-${WAYLANDVER}"
-    ./configure --prefix=/usr --disable-shared --enable-static \
-        --disable-scanner --disable-documentation
-    make -j"$JOBS" && make install DESTDIR="$SYSROOT"
+    meson setup _build --cross-file "$BUILD/musl-cross.txt" --prefix=/usr --default-library=static \
+        -Dscanner=false -Ddocumentation=false
+    ninja -C _build -j"$JOBS" && DESTDIR="$SYSROOT" ninja -C _build install
     cd -
 
     # eudev (device manager)
@@ -244,30 +280,6 @@ build_wlroots() {
     msg "=== Phase 6: Building wlroots ==="
     setup_musl_gcc
     extract "$SRC/wlroots-${WLRVER}.tar.gz" "$BUILD/wlroots-${WLRVER}"
-
-    # create meson cross file for musl
-    cat > "$BUILD/musl-cross.txt" <<CROSS
-[binaries]
-c = '$MUSL_GCC'
-cpp = '$MUSL_GCC'
-ar = 'ar'
-strip = 'strip'
-pkgconfig = 'pkg-config'
-
-[host_machine]
-system = 'linux'
-cpu_family = 'x86_64'
-cpu = 'x86_64'
-endian = 'little'
-
-[properties]
-sys_root = '$SYSROOT'
-CFLAGS = ['--sysroot=$SYSROOT']
-LDFLAGS = ['--sysroot=$SYSROOT', '-static']
-pkg_config_path = ['$SYSROOT/lib/pkgconfig', '$SYSROOT/lib64/pkgconfig']
-CROSS
-    # meson needs cpp in the cross file
-    sed -i "s|^cpp = .*|cpp = '$MUSL_GCC'|" "$BUILD/musl-cross.txt"
 
     cd "$BUILD/wlroots-${WLRVER}"
     # wlroots uses meson_options.txt / meson.options
@@ -433,23 +445,12 @@ SCENE
 # ---- phase 9: create initramfs ---------------------------------------------
 build_initramfs() {
     msg "=== Phase 9: Building initramfs ==="
-    local IRD="$SYSROOT/boot/initramfs-${KVER}.cpio.gz"
-    local TMP="$TOPDIR/initramfs_tmp"
-    rm -rf "$TMP"
-    mkdir -p "$TMP"/{bin,sbin,etc,proc,sys,dev,run,tmp,usr/bin,usr/sbin,lib}
-
-    # static busybox for early userspace
-    cp "$SYSROOT/bin/busybox" "$TMP/bin/busybox"
-    cd "$TMP/bin"
-    for cmd in sh mount umount mkdir mknod switch_root modprobe insmod \
-               sleep echo cat ls grep sed mkdir pivot_root; do
-        ln -sf busybox "$cmd"
-    done
-    cd -
-
-    cat > "$TMP/init" <<'INIT'
+    # Put initramfs in BUILD so it doesn't get packed inside itself
+    local IRD="$BUILD/initramfs-${KVER}.cpio.gz"
+    
+    cat > "$SYSROOT/init" <<'INIT'
 #!/bin/sh
-export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export PATH=/usr/bin:/bin:/sbin:/usr/sbin
 mount -t proc     proc     /proc
 mount -t sysfs    sysfs    /sys
 mount -t devtmpfs devtmpfs /dev
@@ -460,39 +461,14 @@ done
 for f in /lib/modules/*/kernel/drivers/ata/*.ko; do
     insmod "$f" 2>/dev/null || true
 done
-echo "ISO Linux booting..."
-echo "Waiting for root device..."
-ROOT=""
-for i in $(seq 1 30); do
-    for dev in /dev/sda /dev/sdb /dev/sda1 /dev/sdb1 /dev/sda2 /dev/sdb2; do
-        if mount -t ext4 "$dev" /mnt 2>/dev/null; then
-            if [ -d /mnt/usr ] || [ -f /mnt/etc/inittab ]; then
-                ROOT="$dev"
-                break 2
-            fi
-            umount /mnt 2>/dev/null
-        fi
-    done
-    sleep 1
-done
-if [ -z "$ROOT" ]; then
-    echo "Root not found. Dropping to shell."
-    exec /bin/sh
-fi
-mkdir -p /mnt/proc /mnt/sys /mnt/dev /mnt/run /mnt/tmp
-cp -a /lib/modules /mnt/lib/ 2>/dev/null || true
-exec switch_root /mnt /sbin/init
+echo "ISO Linux booting from RAM..."
+exec /sbin/init
 INIT
-    chmod +x "$TMP/init"
+    chmod +x "$SYSROOT/init"
 
-    mkdir -p "$TMP/lib"
-    cp -a "$SYSROOT/lib/modules" "$TMP/lib/" 2>/dev/null || true
-
-    cd "$TMP"
-    find . -print0 | cpio --null -ov --format=newc 2>/dev/null | \
-        gzip -9 > "$IRD"
+    cd "$SYSROOT"
+    find . -print0 | cpio --null -ov --format=newc 2>/dev/null | gzip -9 > "$IRD"
     cd -
-    rm -rf "$TMP"
     msg "initramfs done: $IRD"
 }
 
@@ -506,45 +482,28 @@ build_iso() {
     mkdir -p "$ISOROOT/boot/grub"
 
     cp "$SYSROOT/boot/vmlinuz-${KVER}" "$ISOROOT/boot/"
-    cp "$SYSROOT/boot/initramfs-${KVER}.cpio.gz" "$ISOROOT/boot/"
+    cp "$BUILD/initramfs-${KVER}.cpio.gz" "$ISOROOT/boot/"
 
     cat > "$ISOROOT/boot/grub/grub.cfg" <<GRUB
 set timeout=3
 set default=0
 
-menuentry "ISO Linux" {
-    linux /boot/vmlinuz-${KVER} root=/dev/sda1 rw quiet
+menuentry "ISO Linux (All-in-RAM)" {
+    linux /boot/vmlinuz-${KVER} rw quiet
     initrd /boot/initramfs-${KVER}.cpio.gz
 }
 
-menuentry "ISO Linux (RAM)" {
-    linux /boot/vmlinuz-${KVER} root=/dev/sda1 rw quiet toram
-    initrd /boot/initramfs-${KVER}.cpio.gz
-}
-
-menuentry "ISO Linux (safe mode)" {
-    linux /boot/vmlinuz-${KVER} root=/dev/sda1 rw nomodeset
+menuentry "ISO Linux (Safe Mode)" {
+    linux /boot/vmlinuz-${KVER} rw nomodeset
     initrd /boot/initramfs-${KVER}.cpio.gz
 }
 GRUB
 
-    if command -v xorrisofs >/dev/null 2>&1; then
-        xorrisofs -o "$ISO" \
-            -b boot/grub/grub.cfg \
-            -no-emul-boot \
-            -boot-load-size 4 \
-            -boot-info-table \
-            -eltorito-alt-boot \
-            -e "boot/vmlinuz-${KVER}" \
-            -no-emul-boot \
-            -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin 2>/dev/null || \
-        xorrisofs -o "$ISO" -R -J "$ISOROOT"
-    elif command -v genisoimage >/dev/null 2>&1; then
-        genisoimage -o "$ISO" -R -J -b boot/grub/grub.cfg \
-            -c boot/grub/boot.cat "$ISOROOT"
-    else
-        die "No ISO tool found. Install xorriso or genisoimage."
+    if ! command -v grub-mkrescue >/dev/null 2>&1; then
+        die "grub-mkrescue not found. Install grub-common / grub-pc-bin / mtools."
     fi
+    
+    grub-mkrescue -o "$ISO" "$ISOROOT" || die "grub-mkrescue failed"
 
     msg "ISO created: $ISO"
     ls -lh "$ISO"
