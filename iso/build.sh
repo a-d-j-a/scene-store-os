@@ -86,11 +86,11 @@ fetch_sources() {
           "$SRC/libdrm-${LIBDRMVER}.tar.xz"
     fetch "https://xkbcommon.org/download/libxkbcommon-${LIBXKBCOMMONVER}.tar.xz" \
           "$SRC/libxkbcommon-${LIBXKBCOMMONVER}.tar.xz"
-    fetch "https://git.sr.ht/~kennylevinsen/seat/refs/download/v${LIBSEATVER}/libseat-${LIBSEATVER}.tar.gz" \
+    fetch "https://github.com/kennylevinsen/seat/releases/download/v${LIBSEATVER}/libseat-${LIBSEATVER}.tar.gz" \
           "$SRC/libseat-${LIBSEATVER}.tar.gz"
     fetch "https://github.com/eudev-project/eudev/releases/download/v${UDEVVER}/eudev-${UDEVVER}.tar.gz" \
           "$SRC/eudev-${UDEVVER}.tar.gz"
-    fetch "https://github.com/libinput/libinput/releases/download/${LIBINPUTVER}/libinput-${LIBINPUTVER}.tar.xz" \
+    fetch "https://gitlab.freedesktop.org/libinput/libinput/-/releases/${LIBINPUTVER}/downloads/libinput-${LIBINPUTVER}.tar.xz" \
           "$SRC/libinput-${LIBINPUTVER}.tar.xz"
     fetch "https://archive.mesa3d.org/mesa-${MESAVER}/mesa-${MESAVER}.tar.xz" \
           "$SRC/mesa-${MESAVER}.tar.xz"
