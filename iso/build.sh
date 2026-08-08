@@ -92,7 +92,7 @@ fetch_sources() {
           "$SRC/eudev-${UDEVVER}.tar.gz"
     fetch "https://gitlab.freedesktop.org/libinput/libinput/-/releases/${LIBINPUTVER}/downloads/libinput-${LIBINPUTVER}.tar.xz" \
           "$SRC/libinput-${LIBINPUTVER}.tar.xz"
-    fetch "https://archive.mesa3d.org/mesa-${MESAVER}/mesa-${MESAVER}.tar.xz" \
+    fetch "https://mesa.freedesktop.org/archive/mesa-${MESAVER}/mesa-${MESAVER}.tar.xz" \
           "$SRC/mesa-${MESAVER}.tar.xz"
 
     msg "All sources fetched."
