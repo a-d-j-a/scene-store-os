@@ -114,7 +114,8 @@ build_musl() {
     make install DESTDIR="$SYSROOT" || die "musl install failed"
     # verify musl-gcc wrapper exists (installed to usr/bin by musl's make install)
     [ -x "$SYSROOT/usr/bin/musl-gcc" ] || die "musl-gcc wrapper not installed at $SYSROOT/usr/bin/musl-gcc"
-    # Also copy to bin for convenience
+    # Also copy to bin for convenience - create /bin if it doesn't exist
+    mkdir -p "$SYSROOT/bin" || die "failed to create $SYSROOT/bin"
     if [ -x "$SYSROOT/usr/bin/musl-gcc" ]; then
         cp "$SYSROOT/usr/bin/musl-gcc" "$SYSROOT/bin/musl-gcc"
         chmod +x "$SYSROOT/bin/musl-gcc" 2>/dev/null || true
