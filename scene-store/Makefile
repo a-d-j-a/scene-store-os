@@ -276,7 +276,7 @@ build/iso_drm$(EXE): src/iso_drm.c build/scene_fmt.o build/scene_store.o \
 		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
 		build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
 		build/scene_wallpaper.o build/scene_image.o \
-		-lpthread -o $@
+		-lm -lpthread -o $@
 
 iso-drm: build/iso_drm$(EXE)
 endif

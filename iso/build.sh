@@ -107,10 +107,14 @@ build_musl() {
     # musl-gcc wrapper: clean, idempotent, no specs dependency.
     # Kernel headers are installed by headers_install to $SYSROOT/include
     # (a later phase); the -I path just needs to exist at compile time.
+    # -L must cover $SYSROOT/usr/lib: musl --prefix=/usr installs libc.a
+    # there, and without it ld falls through to the HOST glibc libc.a
+    # (seen live: "Using 'getaddrinfo' in statically linked applications…").
+    # -Wl,--sysroot prefixes ld's own default dirs with the sysroot too.
     mkdir -p "$SYSROOT/bin"
     cat > "$SYSROOT/bin/musl-gcc" <<WRAPPER
 #!/bin/sh
-exec gcc --sysroot="$SYSROOT" -I"$SYSROOT/usr/include" -I"$SYSROOT/include" -L"$SYSROOT/lib" -static "\$@"
+exec gcc --sysroot="$SYSROOT" -I"$SYSROOT/usr/include" -I"$SYSROOT/include" -L"$SYSROOT/usr/lib" -L"$SYSROOT/lib" -Wl,--sysroot="$SYSROOT" -static "\$@"
 WRAPPER
     chmod +x "$SYSROOT/bin/musl-gcc"
 
@@ -120,6 +124,10 @@ WRAPPER
 
 # ---- phase 3: build kernel -------------------------------------------------
 build_kernel() {
+    if [ -f "$SYSROOT/boot/vmlinuz-${KVER}" ]; then
+        msg "kernel cached (vmlinuz-${KVER} present), skipping"
+        return 0
+    fi
     msg "=== Phase 3: Building kernel ==="
     extract "$SRC/linux-${KVER}.tar.xz" "$BUILDDIR/linux-${KVER}"
     cd "$BUILDDIR/linux-${KVER}"

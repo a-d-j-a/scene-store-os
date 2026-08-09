@@ -229,13 +229,13 @@ typedef struct evdev_set {
 
 static int evdev_open(evdev_set *ev)
 {
+    ev->n = 0;
     DIR *d = opendir("/dev/input");
     if (!d) return -1;
-    ev->n = 0;
     struct dirent *de;
     while ((de = readdir(d)) && ev->n < MAX_DEV) {
         if (strncmp(de->d_name, "event", 5) != 0) continue;
-        char path[64];
+        char path[300]; /* "/dev/input/" (11) + NAME_MAX (255) + NUL */
         snprintf(path, sizeof path, "/dev/input/%s", de->d_name);
         int fd = open(path, O_RDONLY | O_NONBLOCK);
         if (fd >= 0) ev->fds[ev->n++] = fd;
@@ -488,7 +488,7 @@ int main(int argc, char **argv)
     /* ---- present initial frame ---- */
     drm_set_crtc(fd, crtc_id, bufs[0].fb_id, conn_id, &mode);
 
-    evdev_set ev;
+    evdev_set ev = { {0}, 0 };
     int have_ev = evdev_open(&ev) == 0;
     int32_t cx = mode.hdisplay / 2, cy = mode.vdisplay / 2;
     uint8_t btns = 0;
