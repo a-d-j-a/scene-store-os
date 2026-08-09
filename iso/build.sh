@@ -199,15 +199,12 @@ build_busybox() {
     cd "$BUILDDIR/busybox-${BUSYBOXVER}"
     make mrproper 2>/dev/null || true
     make defconfig
-    sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
-    sed -i 's/CONFIG_FEATURE_SH_STANDALONE is not set/CONFIG_FEATURE_SH_STANDALONE=y/' .config
-    sed -i 's/# CONFIG_FEATURE_SH_STANDALONE is not set/CONFIG_FEATURE_SH_STANDALONE=y/' .config
-    sed -i 's/CONFIG_FEATURE_MOUNT_LOOP is not set/CONFIG_FEATURE_MOUNT_LOOP=y/' .config
-    sed -i 's/# CONFIG_FEATURE_MOUNT_LOOP is not set/CONFIG_FEATURE_MOUNT_LOOP=y/' .config
-    sed -i 's/CONFIG_FEATURE_MOUNT_LOOP_CREATE is not set/CONFIG_FEATURE_MOUNT_LOOP_CREATE=y/' .config
-    sed -i 's/# CONFIG_FEATURE_MOUNT_LOOP_CREATE is not set/CONFIG_FEATURE_MOUNT_LOOP_CREATE=y/' .config
-    sed -i "s|CONFIG_PREFIX=.*|CONFIG_PREFIX=\"$SYSROOT\"|" .config
-    make olddefconfig
+    scripts/config --enable CONFIG_STATIC
+    scripts/config --enable CONFIG_FEATURE_SH_STANDALONE
+    scripts/config --enable CONFIG_FEATURE_MOUNT_LOOP
+    scripts/config --enable CONFIG_FEATURE_MOUNT_LOOP_CREATE
+    scripts/config --set-str CONFIG_PREFIX "$SYSROOT"
+    yes "" | make oldconfig
     make -j"$JOBS" || die "busybox build failed"
     make install || die "busybox install failed"
     cd -
