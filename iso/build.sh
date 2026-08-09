@@ -148,10 +148,12 @@ build_musl() {
     # Ensure musl-gcc wrapper is accessible at $SYSROOT/bin
     mkdir -p "$SYSROOT/bin"
 
-    # Write a clean wrapper — no specs dependency, just --sysroot
+    # Write a clean wrapper — no specs dependency, just --sysroot.
+    # Kernel headers go to $SYSROOT/include (headers_install INSTALL_HDR_PATH).
+    # musl headers go to $SYSROOT/usr/include (--prefix=/usr + DESTDIR).
     cat > "$SYSROOT/bin/musl-gcc" <<WRAPPER
 #!/bin/sh
-exec gcc --sysroot="$SYSROOT" -I"$SYSROOT/usr/include" -L"$SYSROOT/lib" -static "\$@"
+exec gcc --sysroot="$SYSROOT" -I"$SYSROOT/usr/include" -I"$SYSROOT/include" -L"$SYSROOT/lib" -static "\$@"
 WRAPPER
     chmod +x "$SYSROOT/bin/musl-gcc"
 
