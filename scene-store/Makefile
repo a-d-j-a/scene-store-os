@@ -264,9 +264,24 @@ build/iso_compositor$(EXE): src/iso_compositor.c build/scene_fmt.o build/scene_s
 		-lwayland-server -lpthread -o $@
 
 iso-compositor: build/iso_compositor$(EXE)
+
+# DRM/KMS compositor (Linux only): pure kernel-UAPI, no external libs.
+build/iso_drm$(EXE): src/iso_drm.c build/scene_fmt.o build/scene_store.o \
+	build/scene_transport.o build/scene_client.o build/scene_server.o \
+	build/scene_fb.o build/scene_font.o build/scene_font_data.o \
+	build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
+	build/scene_wallpaper.o build/scene_image.o | build
+	$(CC) $(CFLAGS) src/iso_drm.c build/scene_fmt.o build/scene_store.o \
+		build/scene_transport.o build/scene_client.o build/scene_server.o \
+		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
+		build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
+		build/scene_wallpaper.o build/scene_image.o \
+		-lpthread -o $@
+
+iso-drm: build/iso_drm$(EXE)
 endif
 
 clean:
 	rm -rf build
 
-.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor clean
+.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm clean
