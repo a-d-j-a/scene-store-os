@@ -108,6 +108,18 @@ struct iso_server {
  * Shell: desktop background + panel
  * ====================================================================== */
 
+static void shell_resize(iso_server *srv, uint32_t w, uint32_t h)
+{
+    scene_client *c = srv->shell_client;
+    int32_t panel_h = 36;
+
+    scene_rect desktop_r = { 0, 0, (int32_t)w, (int32_t)h };
+    scene_client_set_rect(c, ISO_SHELL_DESKTOP, &desktop_r);
+
+    scene_rect panel_r = { 0, (int32_t)h - panel_h, (int32_t)w, panel_h };
+    scene_client_set_rect(c, ISO_SHELL_PANEL, &panel_r);
+}
+
 static void shell_create_desktop(iso_server *srv)
 {
     scene_client *c = srv->shell_client;
@@ -122,7 +134,7 @@ static void shell_create_desktop(iso_server *srv)
 static void shell_create_panel(iso_server *srv)
 {
     scene_client *c = srv->shell_client;
-    scene_rect r = { 0, 0, 1920, 36 };
+    scene_rect r = { 0, 1044, 1920, 36 };
 
     scene_client_create_node(c, ISO_SHELL_DESKTOP, ISO_SHELL_PANEL,
                              SCENE_ROLE_PANEL, &r, SCENE_FLAG_VISIBLE);
@@ -402,6 +414,12 @@ static void on_new_output(struct wl_listener *l, void *data)
     wlr_output_layout_add(srv->output_layout, output, 0, 0);
     wlr_output_commit_state(output, &(struct wlr_output_state){});
     srv->output = output;
+
+    /* Resize shell to match actual output. */
+    struct wlr_output_mode *mode = wlr_output_get_mode(output);
+    if (mode) {
+        shell_resize(srv, (uint32_t)mode->width, (uint32_t)mode->height);
+    }
 
     /* Attach the frame listener to this output. */
     static struct wl_listener frame_listener;

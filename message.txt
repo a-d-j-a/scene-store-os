@@ -1,0 +1,21 @@
+The build order is correct in the repository, but your codespace might have a stale build state. Let's clean everything and start fresh.
+
+**In your codespace terminal, run:**
+```bash
+cd iso
+sudo bash build.sh clean
+sudo bash build.sh
+```
+
+The `clean` command will remove the build directory, and then the full build will start from scratch with the correct order:
+1. musl
+2. kernel (with flex, bison, libelf-dev, bc)
+3. busybox (can now use kernel headers from sysroot)
+4. dependencies
+5. wlroots
+6. scene-store
+7. rootfs assembly
+8. initramfs
+9. ISO build
+
+This should resolve the `linux/kd.h` error because the kernel will be built before busybox.

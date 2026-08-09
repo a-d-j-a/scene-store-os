@@ -151,6 +151,8 @@ scene_node_id scene_app_create_window(scene_app *app,
     uint8_t vis = SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE;
     int32_t tb_h = 32;
 
+    /* All coords are absolute screen positions. Parent is for hierarchy only. */
+
     /* WINDOW: outer container */
     scene_client_create_node(app->cl, SCENE_NO_PARENT, win_id,
                              SCENE_ROLE_WINDOW,
@@ -159,25 +161,25 @@ scene_node_id scene_app_create_window(scene_app *app,
     /* TITLEBAR: top strip */
     scene_client_create_node(app->cl, win_id, tb_id,
                              SCENE_ROLE_TITLEBAR,
-         &(scene_rect){0, 0, w, tb_h}, vis);
+         &(scene_rect){x, y, w, tb_h}, vis);
 
     /* TITLE_LABEL: text inside titlebar */
     scene_client_create_node(app->cl, tb_id, label_id,
                              SCENE_ROLE_LABEL,
-         &(scene_rect){4, 4, w - 40, tb_h - 8}, vis);
+         &(scene_rect){x + 4, y + 4, w - 40, tb_h - 8}, vis);
     if (title && title[0])
         scene_client_set_text(app->cl, label_id, 0, title, (uint32_t)strlen(title));
 
     /* CLOSE_BUTTON: "X" at right of titlebar */
     scene_client_create_node(app->cl, tb_id, close_id,
                              SCENE_ROLE_BUTTON,
-         &(scene_rect){w - 28, 4, 24, 24}, vis);
+         &(scene_rect){x + w - 28, y + 4, 24, 24}, vis);
     scene_client_set_text(app->cl, close_id, 0, "X", 1);
 
     /* CONTENT: app draws here */
     scene_client_create_node(app->cl, win_id, content_id,
                              SCENE_ROLE_GENERIC,
-         &(scene_rect){0, tb_h, w, h - tb_h}, vis);
+         &(scene_rect){x, y + tb_h, w, h - tb_h}, vis);
 
     /* Track the window */
     app_window *win = &app->wins[app->win_count++];
@@ -253,20 +255,21 @@ int scene_app_resize_window(scene_app *app, scene_node_id content_id,
     app_window *win = find_window(app, content_id);
     if (!win) return -1;
     int32_t tb_h = 32;
+    int32_t wx = win->x, wy = win->y;
     /* Update WINDOW (preserves position) */
-    scene_rect wr = {win->x, win->y, w, h};
+    scene_rect wr = {wx, wy, w, h};
     scene_client_set_rect(app->cl, win->window_id, &wr);
     /* Update TITLEBAR */
-    scene_rect tbr = {0, 0, w, tb_h};
+    scene_rect tbr = {wx, wy, w, tb_h};
     scene_client_set_rect(app->cl, win->titlebar_id, &tbr);
     /* Update TITLE_LABEL */
-    scene_rect lr = {4, 4, w - 40, tb_h - 8};
+    scene_rect lr = {wx + 4, wy + 4, w - 40, tb_h - 8};
     scene_client_set_rect(app->cl, win->title_label_id, &lr);
     /* Update CLOSE_BUTTON */
-    scene_rect cr = {w - 28, 4, 24, 24};
+    scene_rect cr = {wx + w - 28, wy + 4, 24, 24};
     scene_client_set_rect(app->cl, win->close_btn_id, &cr);
     /* Update CONTENT */
-    scene_rect cor = {0, tb_h, w, h - tb_h};
+    scene_rect cor = {wx, wy + tb_h, w, h - tb_h};
     scene_client_set_rect(app->cl, win->content_id, &cor);
     return 0;
 }
@@ -291,6 +294,8 @@ int scene_app_maximize(scene_app *app, scene_node_id content_id,
     /* Move + resize WINDOW */
     scene_rect wr = {0, 0, win_w, win_h};
     scene_client_set_rect(app->cl, win->window_id, &wr);
+    win->x = 0;
+    win->y = 0;
     /* Update TITLEBAR */
     scene_rect tbr = {0, 0, win_w, tb_h};
     scene_client_set_rect(app->cl, win->titlebar_id, &tbr);
