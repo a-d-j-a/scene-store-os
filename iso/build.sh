@@ -206,8 +206,8 @@ build_busybox() {
     sed -i 's/CONFIG_FEATURE_MOUNT_LOOP_CREATE is not set/CONFIG_FEATURE_MOUNT_LOOP_CREATE=y/' .config
     sed -i "s|CONFIG_PREFIX=.*|CONFIG_PREFIX=\"$SYSROOT\"|" .config
     yes "" | make oldconfig
-    make -j"$JOBS" || die "busybox build failed"
-    make install || die "busybox install failed"
+    make CC="$MUSL_GCC" -j"$JOBS" || die "busybox build failed"
+    make CC="$MUSL_GCC" install || die "busybox install failed"
     cd -
     msg "busybox done."
 }
