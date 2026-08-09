@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 static char err_buf[256];
 
@@ -235,9 +236,9 @@ int scene_image_load(const char *path, int *w, int *h, uint32_t **pixels)
 
     /* Detect by extension */
     size_t len = strlen(path);
-    if (len >= 4 && _stricmp(&path[len - 4], ".bmp") == 0)
+    if (len >= 4 && strcasecmp(&path[len - 4], ".bmp") == 0)
         return load_bmp(path, w, h, pixels);
-    if (len >= 4 && _stricmp(&path[len - 4], ".tga") == 0)
+    if (len >= 4 && strcasecmp(&path[len - 4], ".tga") == 0)
         return load_tga(path, w, h, pixels);
 
     /* Try BMP magic first, then TGA */

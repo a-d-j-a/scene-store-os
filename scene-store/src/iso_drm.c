@@ -27,8 +27,18 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <time.h>
+/* The kernel asm-generic/ioctl.h (pulled by drm.h) redefines _IOC/_IO/...
+ * that musl's bits/ioctl.h already defined — drop musl's copies first so
+ * the DRM_IOCTL_* numbers come from the kernel definitions (identical on
+ * x86_64, no redefinition warnings). */
+#undef _IOC
+#undef _IO
+#undef _IOR
+#undef _IOW
+#undef _IOWR
 #include <drm/drm.h>
 #include <drm/drm_mode.h>
+#include <drm/drm_fourcc.h>
 #include <linux/input.h>
 
 #include "scene_compositor.h"
@@ -38,6 +48,11 @@
 #include "scene_server.h"
 #include "scene_fb.h"
 #include "scene_store.h"
+
+/* Kernel connector status (enum drm_connector_status): 1 = connected.
+ * Not exposed as a UAPI constant — this is the uapi-visible value the
+ * GETCONNECTOR ioctl fills into connection. */
+#define ISO_DRM_CONNECTED 1u
 
 /* ======================================================================
  * DRM plumbing (kernel UAPI, own wrappers)
@@ -386,7 +401,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "iso-drm: GETRESOURCES(2) failed\n"); return 1;
     }
 
-    uint32_t conn_id = 0, mode_cnt = 0, conn_enc = 0, conn_type = 0, conn_state = 0;
+    uint32_t conn_id = 0, mode_cnt = 0, conn_enc = 0, conn_type = 0;
     struct drm_mode_modeinfo *modes = NULL;
     uint32_t i;
     for (i = 0; i < res.count_connectors; i++) {
@@ -394,8 +409,8 @@ int main(int argc, char **argv)
         struct drm_mode_modeinfo *m;
         if (drm_get_connector(fd, conns[i], &t, &state, &enc, &m, &nmodes) < 0)
             continue;
-        if (state == DRM_MODE_CONNECTED && nmodes > 0) {
-            conn_id = conns[i]; conn_type = t; conn_state = state;
+        if (state == ISO_DRM_CONNECTED && nmodes > 0) {
+            conn_id = conns[i]; conn_type = t;
             conn_enc = enc; modes = m; mode_cnt = nmodes;
             break;
         }
@@ -500,9 +515,10 @@ int main(int argc, char **argv)
         }
         int pr = poll(pfds, npfds, 10);
         if (pr > 0) {
-            for (i = 0; i < npfds; i++) {
-                if (!(pfds[i].revents & POLLIN)) continue;
-                int devfd = pfds[i].fd;
+            nfds_t j;
+            for (j = 0; j < npfds; j++) {
+                if (!(pfds[j].revents & POLLIN)) continue;
+                int devfd = pfds[j].fd;
                 if (devfd == fd) {
                     drm_wait_flip(fd, 0);
                     continue;
