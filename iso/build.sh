@@ -200,10 +200,16 @@ build_busybox() {
     sed -i 's/# CONFIG_FEATURE_SH_STANDALONE is not set/CONFIG_FEATURE_SH_STANDALONE=y/' .config
     sed -i 's/# CONFIG_FEATURE_MOUNT_LOOP is not set/CONFIG_FEATURE_MOUNT_LOOP=y/' .config
     sed -i 's/# CONFIG_FEATURE_MOUNT_LOOP_CREATE is not set/CONFIG_FEATURE_MOUNT_LOOP_CREATE=y/' .config
+    # vi needs sigsetjmp, which musl only exposes as a macro under
+    # _GNU_SOURCE — disable it (not needed on the ISO) to kill the
+    # classic busybox-on-musl link failure for good.
+    sed -i 's/^CONFIG_VI=y$/# CONFIG_VI is not set/' .config
     sed -i "s|CONFIG_PREFIX=.*|CONFIG_PREFIX=\"$SYSROOT\"|" .config
     yes "" | make oldconfig
-    make CC="$MUSL_GCC" HOSTCC="gcc" -j"$JOBS" || die "busybox build failed"
-    make CC="$MUSL_GCC" HOSTCC="gcc" install || die "busybox install failed"
+    make CC="$MUSL_GCC" HOSTCC="gcc" EXTRA_CFLAGS="-D_GNU_SOURCE" \
+        -j"$JOBS" || die "busybox build failed"
+    make CC="$MUSL_GCC" HOSTCC="gcc" EXTRA_CFLAGS="-D_GNU_SOURCE" \
+        install || die "busybox install failed"
     cd -
     [ -x "$SYSROOT/bin/busybox" ] || die "busybox not installed"
     msg "busybox done."
