@@ -148,19 +148,13 @@ build_musl() {
 
     # Ensure musl-gcc wrapper is accessible at $SYSROOT/bin
     mkdir -p "$SYSROOT/bin"
-    if [ -x "$SYSROOT/usr/bin/musl-gcc" ] && [ ! -x "$SYSROOT/bin/musl-gcc" ]; then
-        cp "$SYSROOT/usr/bin/musl-gcc" "$SYSROOT/bin/musl-gcc"
-        chmod +x "$SYSROOT/bin/musl-gcc"
-    fi
 
-    # Fix the specs path in the musl-gcc wrapper — it hardcodes /usr/lib/musl-gcc.specs
-    # but we installed to $SYSROOT/usr/lib/
-    if [ -f "$SYSROOT/bin/musl-gcc" ]; then
-        sed -i "s|/usr/lib/musl-gcc.specs|$SYSROOT/usr/lib/musl-gcc.specs|g" "$SYSROOT/bin/musl-gcc"
-    fi
-    if [ -f "$SYSROOT/usr/bin/musl-gcc" ]; then
-        sed -i "s|/usr/lib/musl-gcc.specs|$SYSROOT/usr/lib/musl-gcc.specs|g" "$SYSROOT/usr/bin/musl-gcc"
-    fi
+    # Write a clean wrapper that uses the correct specs path — idempotent
+    cat > "$SYSROOT/bin/musl-gcc" <<WRAPPER
+#!/bin/sh
+exec gcc -specs "$SYSROOT/usr/lib/musl-gcc.specs" "\$@"
+WRAPPER
+    chmod +x "$SYSROOT/bin/musl-gcc"
 
     # Verify
     if [ -x "$SYSROOT/bin/musl-gcc" ] || [ -x "$SYSROOT/usr/bin/musl-gcc" ]; then
