@@ -151,6 +151,15 @@ build_musl() {
         chmod +x "$SYSROOT/bin/musl-gcc"
     fi
 
+    # Fix the specs path in the musl-gcc wrapper — it hardcodes /usr/lib/musl-gcc.specs
+    # but we installed to $SYSROOT/usr/lib/
+    if [ -f "$SYSROOT/bin/musl-gcc" ]; then
+        sed -i "s|/usr/lib/musl-gcc.specs|$SYSROOT/usr/lib/musl-gcc.specs|g" "$SYSROOT/bin/musl-gcc"
+    fi
+    if [ -f "$SYSROOT/usr/bin/musl-gcc" ]; then
+        sed -i "s|/usr/lib/musl-gcc.specs|$SYSROOT/usr/lib/musl-gcc.specs|g" "$SYSROOT/usr/bin/musl-gcc"
+    fi
+
     # Verify
     if [ -x "$SYSROOT/bin/musl-gcc" ] || [ -x "$SYSROOT/usr/bin/musl-gcc" ]; then
         msg "musl done."
@@ -206,8 +215,8 @@ build_busybox() {
     sed -i 's/CONFIG_FEATURE_MOUNT_LOOP_CREATE is not set/CONFIG_FEATURE_MOUNT_LOOP_CREATE=y/' .config
     sed -i "s|CONFIG_PREFIX=.*|CONFIG_PREFIX=\"$SYSROOT\"|" .config
     yes "" | make oldconfig
-    make CC="$MUSL_GCC" -j"$JOBS" || die "busybox build failed"
-    make CC="$MUSL_GCC" install || die "busybox install failed"
+    make CC="$MUSL_GCC" HOSTCC="gcc" -j"$JOBS" || die "busybox build failed"
+    make CC="$MUSL_GCC" HOSTCC="gcc" install || die "busybox install failed"
     cd -
     msg "busybox done."
 }
