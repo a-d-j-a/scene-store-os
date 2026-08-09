@@ -64,7 +64,6 @@ setup_musl_gcc() {
         die "musl-gcc not found in $SYSROOT"
     fi
 
-    export CC="$MUSL_GCC"
     MUSL_CFLAGS="--sysroot=$SYSROOT -I$SYSROOT/include"
     MUSL_LDFLAGS="--sysroot=$SYSROOT -L$SYSROOT/lib -static"
     export PKG_CONFIG_PATH="$SYSROOT/lib/pkgconfig:$SYSROOT/lib64/pkgconfig"
@@ -226,7 +225,7 @@ build_deps() {
     msg "  pixman..."
     extract "$SRC/pixman-${PIXMANVER}.tar.gz" "$BUILDDIR/pixman-${PIXMANVER}"
     cd "$BUILDDIR/pixman-${PIXMANVER}"
-    CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
+    CC="$MUSL_GCC" CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
     ./configure --prefix=/usr --host=x86_64-linux-musl \
         --disable-shared --enable-static
     make -j"$JOBS" && make install DESTDIR="$SYSROOT"
@@ -235,7 +234,7 @@ build_deps() {
     msg "  libdrm..."
     extract "$SRC/libdrm-${LIBDRMVER}.tar.xz" "$BUILDDIR/libdrm-${LIBDRMVER}"
     cd "$BUILDDIR/libdrm-${LIBDRMVER}"
-    CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
+    CC="$MUSL_GCC" CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
     ./configure --prefix=/usr --host=x86_64-linux-musl \
         --disable-shared --enable-static
     make -j"$JOBS" && make install DESTDIR="$SYSROOT"
@@ -244,7 +243,7 @@ build_deps() {
     msg "  libxkbcommon..."
     extract "$SRC/libxkbcommon-${LIBXKBCOMMONVER}.tar.xz" "$BUILDDIR/libxkbcommon-${LIBXKBCOMMONVER}"
     cd "$BUILDDIR/libxkbcommon-${LIBXKBCOMMONVER}"
-    CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
+    CC="$MUSL_GCC" CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
     ./configure --prefix=/usr --host=x86_64-linux-musl \
         --disable-shared --enable-static \
         --enable-x11=no --disable-wayland --disable-docs
@@ -254,7 +253,7 @@ build_deps() {
     msg "  wayland..."
     extract "$SRC/wayland-${WAYLANDVER}.tar.xz" "$BUILDDIR/wayland-${WAYLANDVER}"
     cd "$BUILDDIR/wayland-${WAYLANDVER}"
-    CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
+    CC="$MUSL_GCC" CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
     ./configure --prefix=/usr --host=x86_64-linux-musl \
         --disable-shared --enable-static \
         --disable-scanner --disable-documentation
@@ -264,7 +263,7 @@ build_deps() {
     msg "  eudev..."
     extract "$SRC/eudev-${UDEVVER}.tar.gz" "$BUILDDIR/eudev-${UDEVVER}"
     cd "$BUILDDIR/eudev-${UDEVVER}"
-    CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
+    CC="$MUSL_GCC" CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
     ./configure --prefix=/usr --host=x86_64-linux-musl \
         --disable-shared --enable-static \
         --disable-gudev --disable-introspection \
