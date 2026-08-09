@@ -52,6 +52,8 @@ extract() {
 }
 
 MUSL_GCC=""
+MUSL_CFLAGS=""
+MUSL_LDFLAGS=""
 setup_musl_gcc() {
     # musl-gcc can be at bin/ or usr/bin/ depending on install
     if [ -x "$SYSROOT/bin/musl-gcc" ]; then
@@ -63,8 +65,8 @@ setup_musl_gcc() {
     fi
 
     export CC="$MUSL_GCC"
-    export CFLAGS="--sysroot=$SYSROOT -I$SYSROOT/include"
-    export LDFLAGS="--sysroot=$SYSROOT -L$SYSROOT/lib -static"
+    MUSL_CFLAGS="--sysroot=$SYSROOT -I$SYSROOT/include"
+    MUSL_LDFLAGS="--sysroot=$SYSROOT -L$SYSROOT/lib -static"
     export PKG_CONFIG_PATH="$SYSROOT/lib/pkgconfig:$SYSROOT/lib64/pkgconfig"
     export PKG_CONFIG_LIBDIR="$SYSROOT/lib/pkgconfig"
     export PATH="$SYSROOT/bin:$SYSROOT/usr/bin:$PATH"
@@ -215,8 +217,8 @@ build_busybox() {
     sed -i 's/CONFIG_FEATURE_MOUNT_LOOP_CREATE is not set/CONFIG_FEATURE_MOUNT_LOOP_CREATE=y/' .config
     sed -i "s|CONFIG_PREFIX=.*|CONFIG_PREFIX=\"$SYSROOT\"|" .config
     yes "" | make oldconfig
-    make CC="$MUSL_GCC" HOSTCC="gcc" -j"$JOBS" || die "busybox build failed"
-    make CC="$MUSL_GCC" HOSTCC="gcc" install || die "busybox install failed"
+    make CC="$MUSL_GCC" CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" HOSTCC="gcc" -j"$JOBS" || die "busybox build failed"
+    make CC="$MUSL_GCC" CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" HOSTCC="gcc" install || die "busybox install failed"
     cd -
     msg "busybox done."
 }
@@ -230,6 +232,7 @@ build_deps() {
     msg "  pixman..."
     extract "$SRC/pixman-${PIXMANVER}.tar.gz" "$BUILDDIR/pixman-${PIXMANVER}"
     cd "$BUILDDIR/pixman-${PIXMANVER}"
+    CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
     ./configure --prefix=/usr --host=x86_64-linux-musl \
         --disable-shared --enable-static
     make -j"$JOBS" && make install DESTDIR="$SYSROOT"
@@ -238,6 +241,7 @@ build_deps() {
     msg "  libdrm..."
     extract "$SRC/libdrm-${LIBDRMVER}.tar.xz" "$BUILDDIR/libdrm-${LIBDRMVER}"
     cd "$BUILDDIR/libdrm-${LIBDRMVER}"
+    CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
     ./configure --prefix=/usr --host=x86_64-linux-musl \
         --disable-shared --enable-static
     make -j"$JOBS" && make install DESTDIR="$SYSROOT"
@@ -246,6 +250,7 @@ build_deps() {
     msg "  libxkbcommon..."
     extract "$SRC/libxkbcommon-${LIBXKBCOMMONVER}.tar.xz" "$BUILDDIR/libxkbcommon-${LIBXKBCOMMONVER}"
     cd "$BUILDDIR/libxkbcommon-${LIBXKBCOMMONVER}"
+    CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
     ./configure --prefix=/usr --host=x86_64-linux-musl \
         --disable-shared --enable-static \
         --enable-x11=no --disable-wayland --disable-docs
@@ -255,6 +260,7 @@ build_deps() {
     msg "  wayland..."
     extract "$SRC/wayland-${WAYLANDVER}.tar.xz" "$BUILDDIR/wayland-${WAYLANDVER}"
     cd "$BUILDDIR/wayland-${WAYLANDVER}"
+    CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
     ./configure --prefix=/usr --host=x86_64-linux-musl \
         --disable-shared --enable-static \
         --disable-scanner --disable-documentation
@@ -264,6 +270,7 @@ build_deps() {
     msg "  eudev..."
     extract "$SRC/eudev-${UDEVVER}.tar.gz" "$BUILDDIR/eudev-${UDEVVER}"
     cd "$BUILDDIR/eudev-${UDEVVER}"
+    CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" \
     ./configure --prefix=/usr --host=x86_64-linux-musl \
         --disable-shared --enable-static \
         --disable-gudev --disable-introspection \
