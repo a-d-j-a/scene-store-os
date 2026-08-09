@@ -148,10 +148,10 @@ build_musl() {
     # Ensure musl-gcc wrapper is accessible at $SYSROOT/bin
     mkdir -p "$SYSROOT/bin"
 
-    # Write a clean wrapper that uses the correct specs path — idempotent
+    # Write a clean wrapper — no specs dependency, just --sysroot
     cat > "$SYSROOT/bin/musl-gcc" <<WRAPPER
 #!/bin/sh
-exec gcc -specs "$SYSROOT/usr/lib/musl-gcc.specs" "\$@"
+exec gcc --sysroot="$SYSROOT" -I"$SYSROOT/usr/include" -L"$SYSROOT/lib" -static "\$@"
 WRAPPER
     chmod +x "$SYSROOT/bin/musl-gcc"
 
@@ -210,8 +210,8 @@ build_busybox() {
     sed -i 's/CONFIG_FEATURE_MOUNT_LOOP_CREATE is not set/CONFIG_FEATURE_MOUNT_LOOP_CREATE=y/' .config
     sed -i "s|CONFIG_PREFIX=.*|CONFIG_PREFIX=\"$SYSROOT\"|" .config
     yes "" | make oldconfig
-    make CC="$MUSL_GCC" CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" HOSTCC="gcc" -j"$JOBS" || die "busybox build failed"
-    make CC="$MUSL_GCC" CFLAGS="$MUSL_CFLAGS" LDFLAGS="$MUSL_LDFLAGS" HOSTCC="gcc" install || die "busybox install failed"
+    make CC="$MUSL_GCC" HOSTCC="gcc" -j"$JOBS" || die "busybox build failed"
+    make CC="$MUSL_GCC" HOSTCC="gcc" install || die "busybox install failed"
     cd -
     msg "busybox done."
 }
