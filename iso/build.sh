@@ -184,6 +184,7 @@ build_kernel() {
     scripts/config --enable SQUASHFS_ZSTD
     make olddefconfig
     make -j"$JOBS" || die "kernel build failed"
+    make headers_install INSTALL_HDR_PATH="$SYSROOT"
     make modules_install INSTALL_MOD_PATH="$SYSROOT"
     mkdir -p "$SYSROOT/boot"
     cp arch/x86/boot/bzImage "$SYSROOT/boot/vmlinuz-${KVER}"
