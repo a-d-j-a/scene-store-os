@@ -400,6 +400,8 @@ int main(int argc, char **argv)
     if (drm_ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, &res) < 0) {
         fprintf(stderr, "iso-drm: GETRESOURCES(2) failed\n"); return 1;
     }
+    fprintf(stderr, "iso-drm: %u connectors, %u crtcs\n",
+            res.count_connectors, res.count_crtcs);
 
     uint32_t conn_id = 0, mode_cnt = 0, conn_enc = 0, conn_type = 0;
     struct drm_mode_modeinfo *modes = NULL;
@@ -407,8 +409,13 @@ int main(int argc, char **argv)
     for (i = 0; i < res.count_connectors; i++) {
         uint32_t t, state, enc, nmodes;
         struct drm_mode_modeinfo *m;
-        if (drm_get_connector(fd, conns[i], &t, &state, &enc, &m, &nmodes) < 0)
+        if (drm_get_connector(fd, conns[i], &t, &state, &enc, &m, &nmodes) < 0) {
+            fprintf(stderr, "iso-drm: GETCONNECTOR %u failed: %s\n",
+                    conns[i], strerror(errno));
             continue;
+        }
+        fprintf(stderr, "iso-drm: conn %u state=%u enc=%u nmodes=%u\n",
+                conns[i], state, enc, nmodes);
         if (state == ISO_DRM_CONNECTED && nmodes > 0) {
             conn_id = conns[i]; conn_type = t;
             conn_enc = enc; modes = m; mode_cnt = nmodes;
