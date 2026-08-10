@@ -343,6 +343,11 @@ CONF
 
     # Overlay (hand-written boot scripts, may override the above)
     cp -a "$(dirname "$0")/overlay/"* "$R/" 2>/dev/null || true
+    # cp -a overwrites the heredoc-written scripts above and carries the
+    # overlay files' modes — re-assert exec bits here (git filemode can
+    # lose +x on Windows checkouts, seen live: "can't run rcS: Permission
+    # denied").
+    chmod +x "$R/etc/init.d/rcS" "$R/etc/init.d/scene-desktop"
     msg "Rootfs assembled."
 }
 
