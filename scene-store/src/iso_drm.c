@@ -508,6 +508,31 @@ int main(int argc, char **argv)
     fprintf(stderr, "iso-drm: scene nodes=%u\n",
             scene_store_node_count(scene_compositor_store(c.cp)));
 
+    /* ---- dbg: ground truth of the first composited frame ---- */
+    {
+        const scene_fb *fb = scene_compositor_fb(c.cp);
+        scene_node_vis vv;
+        scene_node_id ids[5] = { 10000, 10001, 10002, 10003, 10004 };
+        const char *nm[5] = { "bg", "panel", "start", "clock", "menu" };
+        uint32_t k;
+        for (k = 0; k < 5; k++) {
+            if (scene_store_node_vis(scene_compositor_store(c.cp), ids[k],
+                                     &vv) == 0)
+                fprintf(stderr, "iso-drm: dbg %s rect=[%d,%d,%d,%d] style=%u opacity=%u blend=%u tex=%u flags=%u\n",
+                        nm[k], vv.rect[0], vv.rect[1], vv.rect[2], vv.rect[3],
+                        vv.style, vv.opacity, vv.blend, vv.tex, vv.flags);
+        }
+        fprintf(stderr, "iso-drm: dbg cfg bg=%08X panel=%08X pborder=%08X pbw=%u prad=%u btn=%08X bborder=%08X btext=%08X ltext=%08X menu=%08X wp_mode=%u\n",
+                cfg.bg_color, cfg.panel_color, cfg.panel_border,
+                cfg.panel_border_w, cfg.panel_radius, cfg.button_color,
+                cfg.button_border, cfg.button_text, cfg.label_text,
+                cfg.menu_color, cfg.wallpaper_mode);
+        fprintf(stderr, "iso-drm: dbg px bg(400,300)=%08X panel(640,790)=%08X border(640,768)=%08X button(16,784)=%08X clock(1220,784)=%08X pxA(0,0)=%08X\n",
+                scene_fb_get(fb, 400, 300), scene_fb_get(fb, 640, 790),
+                scene_fb_get(fb, 640, 768), scene_fb_get(fb, 16, 784),
+                scene_fb_get(fb, 1220, 784), scene_fb_get(fb, 0, 0));
+    }
+
     /* ---- present initial frame ---- */
     drm_set_crtc(fd, crtc_id, bufs[0].fb_id, conn_id, &mode);
 

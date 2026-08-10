@@ -335,6 +335,16 @@ static void apply_theme(scene_shell *sh)
     uint32_t i;
     for (i = 0; i < sh->cfg.launcher_app_count && i < SCENE_SHELL_MAX_APPS; i++)
         scene_client_set_style(sh->client, ID_MENU_BASE + i, SHELL_STYLE_MENU);
+
+    fprintf(stderr, "iso-shell: dbg styles bg=%08X/%08X/%08X panel=%08X/%08X/%08X r=%u btn=%08X/%08X/%08X r=%u label=%08X menu=%08X/%08X/%08X r=%u\n",
+            sh->cfg.bg_color, sh->cfg.label_text, 0u,
+            sh->cfg.panel_color, sh->cfg.panel_border, sh->cfg.label_text,
+            sh->cfg.panel_radius,
+            sh->cfg.button_color, sh->cfg.button_border, sh->cfg.button_text,
+            4u,
+            sh->cfg.label_text,
+            sh->cfg.menu_color, sh->cfg.menu_border, sh->cfg.menu_item_text,
+            4u);
 }
 
 int scene_shell_build(scene_shell *sh, int32_t width, int32_t height)
