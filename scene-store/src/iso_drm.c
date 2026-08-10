@@ -394,9 +394,18 @@ int main(int argc, char **argv)
     uint32_t *conns = xmalloc((res.count_connectors ? res.count_connectors : 1)
                               * 4);
     uint32_t *crtcs = xmalloc((res.count_crtcs ? res.count_crtcs : 1) * 4);
+    /* Kernel GETRESOURCES only fills the id arrays when the request's
+     * count fields are nonzero and >= the available counts (libdrm
+     * reuses the counts returned by the first call). Zeroing them here
+     * made the kernel skip the writes and leave malloc garbage (0) in
+     * the arrays — the "GETCONNECTOR 0 failed" symptom. */
+    uint32_t want_conns = res.count_connectors;
+    uint32_t want_crtcs = res.count_crtcs;
     memset(&res, 0, sizeof res);
     res.connector_id_ptr = (uint64_t)(uintptr_t)conns;
     res.crtc_id_ptr      = (uint64_t)(uintptr_t)crtcs;
+    res.count_connectors = want_conns;
+    res.count_crtcs      = want_crtcs;
     if (drm_ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, &res) < 0) {
         fprintf(stderr, "iso-drm: GETRESOURCES(2) failed\n"); return 1;
     }
