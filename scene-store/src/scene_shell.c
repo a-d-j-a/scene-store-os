@@ -21,6 +21,17 @@
 #define ID_MENU_BASE   20000u   /* menu items: ID_MENU_BASE + i */
 #define ID_TASK_BASE   30000u   /* task buttons: ID_TASK_BASE + seq */
 
+/* Compositor style slots owned by the shell theme. Slots 1 (hover) and
+ * 2 (active) belong to iso_drm (scene_compositor_setup_hover_style /
+ * setup_active_style); the shell uses 3..7 and grows the table to 8.
+ * Style 0 = role default, so themed nodes must never be reset to 0. */
+#define SHELL_STYLE_BG      3u
+#define SHELL_STYLE_PANEL   4u
+#define SHELL_STYLE_BUTTON  5u
+#define SHELL_STYLE_LABEL   6u
+#define SHELL_STYLE_MENU    7u
+#define SHELL_STYLE_SLOTS   8u
+
 /* ---- internal state -------------------------------------------------- */
 #define MAX_TASKS 256
 
@@ -152,7 +163,8 @@ int scene_shell_config_load(scene_shell_config *cfg, const char *path)
         char *nl = strchr(val, '\n');
         if (nl) *nl = '\0';
 
-        if (strcmp(key, "background_color") == 0)
+        if (strcmp(key, "background_color") == 0 ||
+            strcmp(key, "bg_color") == 0)
             cfg->bg_color = parse_hex(val);
         else if (strcmp(key, "panel_height") == 0)
             cfg->panel_height = (uint32_t)strtoul(val, NULL, 10);
@@ -259,6 +271,72 @@ void scene_shell_set_active_style(scene_shell *sh, scene_style_ref ref)
 
 /* ---- tree construction ----------------------------------------------- */
 
+/* The style a node reverts to when its hover/active style is removed.
+ * Menu and menu items use the menu theme, everything else the button
+ * theme. Never 0 (role default) — that would lose the shell theme. */
+static scene_style_ref base_style_for(scene_node_id id)
+{
+    if (id == ID_MENU || (id >= ID_MENU_BASE &&
+                          id < ID_MENU_BASE + SCENE_SHELL_MAX_APPS))
+        return SHELL_STYLE_MENU;
+    return SHELL_STYLE_BUTTON;
+}
+
+/* Push the config colors into the compositor style table and pin the
+ * shell nodes to those slots. Re-running this with a changed config
+ * re-themes live: scene_compositor_set_style dirties every visible node
+ * referencing the slot, so the next frame repaints with the new colors. */
+static void apply_theme(scene_shell *sh)
+{
+    if (!sh || !sh->cp) return;
+    scene_compositor_set_style_count(sh->cp, SHELL_STYLE_SLOTS);
+
+    scene_style st;
+
+    memset(&st, 0, sizeof st);
+    st.fill = sh->cfg.bg_color;
+    st.text = sh->cfg.label_text;
+    scene_compositor_set_style(sh->cp, SHELL_STYLE_BG, &st);
+
+    memset(&st, 0, sizeof st);
+    st.fill     = sh->cfg.panel_color;
+    st.border   = sh->cfg.panel_border;
+    st.border_w = sh->cfg.panel_border_w;
+    st.text     = sh->cfg.label_text;
+    st.radius   = sh->cfg.panel_radius;
+    scene_compositor_set_style(sh->cp, SHELL_STYLE_PANEL, &st);
+
+    memset(&st, 0, sizeof st);
+    st.fill     = sh->cfg.button_color;
+    st.border   = sh->cfg.button_border;
+    st.border_w = 1;
+    st.text     = sh->cfg.button_text;
+    st.radius   = 4;
+    scene_compositor_set_style(sh->cp, SHELL_STYLE_BUTTON, &st);
+
+    memset(&st, 0, sizeof st);
+    st.text = sh->cfg.label_text;
+    scene_compositor_set_style(sh->cp, SHELL_STYLE_LABEL, &st);
+
+    memset(&st, 0, sizeof st);
+    st.fill     = sh->cfg.menu_color;
+    st.border   = sh->cfg.menu_border;
+    st.border_w = 1;
+    st.text     = sh->cfg.menu_item_text;
+    st.radius   = 4;
+    scene_compositor_set_style(sh->cp, SHELL_STYLE_MENU, &st);
+
+    if (!sh->client) return;
+    scene_client_set_style(sh->client, ID_BACKGROUND, SHELL_STYLE_BG);
+    scene_client_set_style(sh->client, ID_PANEL, SHELL_STYLE_PANEL);
+    scene_client_set_style(sh->client, ID_START_BTN, SHELL_STYLE_BUTTON);
+    scene_client_set_style(sh->client, ID_CLOCK, SHELL_STYLE_LABEL);
+    scene_client_set_style(sh->client, ID_MENU, SHELL_STYLE_MENU);
+    uint32_t i;
+    for (i = 0; i < sh->cfg.launcher_app_count && i < SCENE_SHELL_MAX_APPS; i++)
+        scene_client_set_style(sh->client, ID_MENU_BASE + i, SHELL_STYLE_MENU);
+}
+
 int scene_shell_build(scene_shell *sh, int32_t width, int32_t height)
 {
     if (!sh || sh->built) return -1;
@@ -354,6 +432,7 @@ int scene_shell_build(scene_shell *sh, int32_t width, int32_t height)
     }
 
     sh->built = 1;
+    apply_theme(sh);
     return 0;
 }
 
@@ -456,6 +535,7 @@ int scene_shell_tick(scene_shell *sh)
                         SCENE_ROLE_BUTTON, bx, panel_y + 2, bw,
                         (int32_t)ph - 4,
                         SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
+            scene_client_set_style(sh->client, btn_id, SHELL_STYLE_BUTTON);
             sh->tasks[i].button_id = btn_id;
         }
         /* Refresh button text from window title */
@@ -484,7 +564,8 @@ int scene_shell_tick(scene_shell *sh)
         if (new_active_btn != sh->active_task_id) {
             /* Revert old active button */
             if (sh->active_task_id != 0)
-                scene_client_set_style(sh->client, sh->active_task_id, 0);
+                scene_client_set_style(sh->client, sh->active_task_id,
+                                       SHELL_STYLE_BUTTON);
             /* Apply active style to new focused button */
             if (new_active_btn != 0)
                 scene_client_set_style(sh->client, new_active_btn,
@@ -676,7 +757,8 @@ scene_node_id scene_shell_handle_pointer(scene_shell *sh, int32_t x, int32_t y,
     /* Update hover state */
     if (hit != sh->hovered_id) {
         if (sh->hovered_id != 0 && sh->hover_style != 0)
-            scene_client_set_style(sh->client, sh->hovered_id, 0);
+            scene_client_set_style(sh->client, sh->hovered_id,
+                                   base_style_for(sh->hovered_id));
         if (hit != 0 && sh->hover_style != 0)
             scene_client_set_style(sh->client, hit, sh->hover_style);
         sh->hovered_id = hit;
