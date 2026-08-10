@@ -17,6 +17,7 @@ set -e
 
 # ---- configuration --------------------------------------------------------
 JOBS="$(nproc 2>/dev/null || echo 4)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TOPDIR="$(pwd)/build"
 SYSROOT="$TOPDIR/sysroot"
 SRC="$TOPDIR/src"
@@ -391,20 +392,10 @@ build_iso() {
     cp "$SYSROOT/boot/vmlinuz-${KVER}" "$ISOROOT/boot/"
     cp "$INITRD" "$ISOROOT/boot/"
 
-    cat > "$ISOROOT/boot/grub/grub.cfg" <<GRUB
-set timeout=3
-set default=0
-
-menuentry "ISO Linux (All-in-RAM)" {
-    linux /boot/vmlinuz-${KVER} rw quiet console=tty1
-    initrd /boot/initramfs-${KVER}.cpio.gz
-}
-
-menuentry "ISO Linux (Safe Mode)" {
-    linux /boot/vmlinuz-${KVER} rw nomodeset console=tty1
-    initrd /boot/initramfs-${KVER}.cpio.gz
-}
-GRUB
+    # grub.cfg: single source of truth is iso/grub.cfg (tracked in repo).
+    cp "$SCRIPT_DIR/grub.cfg" "$ISOROOT/boot/grub/grub.cfg"
+    sed -i "s/vmlinuz-[0-9.]*/vmlinuz-${KVER}/g; s/initramfs-[0-9.]*/initramfs-${KVER}/g" \
+        "$ISOROOT/boot/grub/grub.cfg"
 
     if command -v grub-mkrescue >/dev/null 2>&1; then
         grub-mkrescue -o "$ISO" "$ISOROOT" || die "grub-mkrescue failed"
