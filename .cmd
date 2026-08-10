@@ -3,11 +3,12 @@ set -x
 cd /workspaces/scene-store-os
 git pull --rebase origin master || exit 1
 echo "=== pulling done ==="
-rm -f ../scene-store/build/*.o
-sudo bash iso/build.sh scene || exit 1
-sudo bash iso/build.sh rootfs || exit 1
-sudo bash iso/build.sh initramfs || exit 1
-sudo bash iso/build.sh iso || exit 1
+rm -f scene-store/build/*.o
+cd iso
+sudo bash build.sh scene || exit 1
+sudo bash build.sh rootfs || exit 1
+sudo bash build.sh initramfs || exit 1
+sudo bash build.sh iso || exit 1
 echo "=== build done ==="
 pkill -f qemu-system; sleep 2
 rm -f /tmp/serial.log /tmp/scr4.png
