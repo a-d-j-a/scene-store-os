@@ -484,6 +484,11 @@ int main(int argc, char **argv)
                              &shell_cbs, &c) != 0) {
         fprintf(stderr, "iso-drm: shell client connect failed\n"); return 1;
     }
+    /* Without attach the server never sends WELCOME, the client's emit
+     * guard stays shut, and the scene stays empty (clear color only). */
+    if (scene_server_attach(scene_compositor_server(c.cp)) != 0) {
+        fprintf(stderr, "iso-drm: server attach failed\n"); return 1;
+    }
     pump_shell(&c);   /* WELCOME */
 
     scene_shell_config cfg;
@@ -500,6 +505,8 @@ int main(int argc, char **argv)
         c.cp, 0xFF2E4E6E, 0xFFE8E8E8);
     if (act) scene_shell_set_active_style(c.sh, act);
     pump_shell(&c);
+    fprintf(stderr, "iso-drm: scene nodes=%u\n",
+            scene_store_node_count(scene_compositor_store(c.cp)));
 
     /* ---- present initial frame ---- */
     drm_set_crtc(fd, crtc_id, bufs[0].fb_id, conn_id, &mode);
