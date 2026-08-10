@@ -19,7 +19,11 @@ done
 # DRM/KMS compositor (own code, kernel UAPI — the boot path)
 if [ -x /usr/bin/iso-drm ]; then
     echo "Starting iso-drm compositor..."
-    exec /usr/bin/iso-drm
+    if [ -e /dev/ttyS0 ]; then
+        exec /usr/bin/iso-drm 2>&1 | busybox tee /dev/ttyS0
+    else
+        exec /usr/bin/iso-drm
+    fi
 fi
 
 # wlroots compositor (alternative backend, if built)
