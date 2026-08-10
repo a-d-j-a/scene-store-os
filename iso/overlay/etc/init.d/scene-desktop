@@ -17,13 +17,11 @@ for i in $(seq 1 10); do
 done
 
 # DRM/KMS compositor (own code, kernel UAPI — the boot path)
+# /dev/console maps to ttyS0 (last console= param), so iso-drm's
+# stdout/stderr land on the serial log automatically.
 if [ -x /usr/bin/iso-drm ]; then
     echo "Starting iso-drm compositor..."
-    if [ -e /dev/ttyS0 ]; then
-        exec /usr/bin/iso-drm 2>&1 | busybox tee /dev/ttyS0
-    else
-        exec /usr/bin/iso-drm
-    fi
+    exec /usr/bin/iso-drm
 fi
 
 # wlroots compositor (alternative backend, if built)
