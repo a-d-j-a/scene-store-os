@@ -1,15 +1,18 @@
 /* scene_compositor.c — compositor core: first consumer of the store.
  *
- * Owns one session (scene_server seam). Each scene_compositor_frame():
- * the store's committed seq is diffed against the compositor's render
- * model (an id-keyed map of last-painted visual state per node) and the
- * deltas become damage rects; each damaged rect is repainted by clearing
- * it to the desktop color and redrawing every visible node intersecting
- * it, in document order (children over parents). No change -> no frame.
+ * Composes the shell session (layer 0) plus any number of app sessions
+ * (layers 1..n, scene_compositor_add_session). Each scene_compositor_frame():
+ * every layer's view seq is diffed against its own render model (an
+ * id-keyed map of last-painted visual state per node) and the deltas
+ * become damage rects; each damaged rect is repainted by clearing it to
+ * the desktop color and redrawing every visible node of every layer
+ * intersecting it, in layer order (layer 0 first = desktop below apps),
+ * then document order within a layer (children over parents). No change
+ * -> no frame.
  *
  * Styles are server-owned: style 0 means "role default" from an internal
- * table; changing a style entry dirties every node referencing it, which
- * is the OS-side re-theme of a running app (spec §7).
+ * table; changing a style entry dirties every node referencing it in
+ * every layer, which is the OS-side re-theme of a running app (spec §7).
  *
  * Effects (v1): scene_compositor_set_effects() enables deterministic,
  * tick-driven enter/exit transitions — new nodes fade in while sliding
@@ -18,13 +21,14 @@
  * every frame()), integer math only, never wall-clock, so the pipeline
  * stays deterministic. Replay seeks and ghost re-connects never animate.
  * When effects are off the paint is identity. Rounded corners are style-
- * driven (scene_style.radius).
+ * driven (scene_style.radius). Transitions are per-layer (ids collide
+ * across sessions).
  *
  * Textures are registered by the compositor (server side) and validated
- * by the store's registry. Input is forwarded to the store, fully
- * flow-controlled (§8).
+ * by the store's registry. Input is forwarded to the hit-tested layer's
+ * store, fully flow-controlled (§8).
  *
- * One compositor, one session, one thread. Deterministic: same op log
+ * One compositor, many sessions, one thread. Deterministic: same op log
  * in, same framebuffer out.
  */
 #include "scene_compositor.h"
@@ -37,6 +41,7 @@
 #define SCENE_COMPOSITOR_ANIM_TICKS   8u
 #define SCENE_COMPOSITOR_ANIM_SLIDE   6
 #define SCENE_COMPOSITOR_ANIM_CAP     64u
+#define SCENE_COMPOSITOR_LAYER_CAP0   4u
 
 #define SCENE_ANIM_ENTER 1u
 #define SCENE_ANIM_EXIT  2u
@@ -87,15 +92,12 @@ typedef struct anim_ent {
     char         *tbuf;     /* owned text blob (phantom)                   */
 } anim_ent;
 
-struct scene_compositor {
+/* One session's contribution to the composition: its wire seam, its
+ * store, its render model and its transition table. Node ids are
+ * per-session (locked v0), so every session keeps its own map. */
+typedef struct scene_layer {
     scene_server *sv;
     scene_store  *store;
-
-    scene_fb      fb;
-    uint32_t      clear;
-    int           force;
-    uint64_t      tick;
-    int           effects_on;
 
     scene_rnode  *map;      /* open-addressing model, power-of-two cap      */
     uint32_t      map_cap;
@@ -104,6 +106,24 @@ struct scene_compositor {
 
     anim_ent      anims[SCENE_COMPOSITOR_ANIM_CAP];
     uint32_t      anim_used;
+
+    uint64_t      rendered_seq;
+    int           dead;     /* session in fatal state: skip render/input   */
+} scene_layer;
+
+struct scene_compositor {
+    scene_layer  *ly;       /* array; ly[0] = shell session (never empty)  */
+    uint32_t      ly_count;
+    uint32_t      ly_cap;
+    uint32_t      focus_layer;  /* keyboard focus (0 = shell)              */
+
+    scene_fb      fb;
+    uint32_t      clear;
+    int           force;
+    uint64_t      tick;
+    int           effects_on;
+
+    scene_layer  *walk_ly;  /* scratch: the layer of the current walk      */
 
     scene_style  *styles;
     uint32_t      style_count;
@@ -117,7 +137,6 @@ struct scene_compositor {
     uint32_t      damage_count;
 
     scene_rect    paint_clip;    /* scratch for the paint walk             */
-    uint64_t      rendered_seq;
 };
 
 /* ---- Role default styles (the OS's dark look seed; server-owned) ----- */
@@ -222,42 +241,42 @@ static void pending_rect(scene_compositor *cp, const int32_t r[4])
 
 /* ---- Render model (open addressing, power-of-two, multiplicative) ---- */
 
-static uint32_t map_slot(const scene_compositor *cp, scene_node_id id)
+static uint32_t map_slot(const scene_layer *ly, scene_node_id id)
 {
     return (uint32_t)((uint64_t)id * UINT32_C(2654435761))
-           >> (32u - cp->map_shift);
+           >> (32u - ly->map_shift);
 }
 
-static scene_rnode *map_find(const scene_compositor *cp, scene_node_id id)
+static scene_rnode *map_find(const scene_layer *ly, scene_node_id id)
 {
     uint32_t i, n;
 
-    n = cp->map_cap;
+    n = ly->map_cap;
     for (i = 0; i < n; i++) {
-        scene_rnode *rn = &cp->map[(map_slot(cp, id) + i) & (n - 1u)];
+        scene_rnode *rn = &ly->map[(map_slot(ly, id) + i) & (n - 1u)];
         if (!rn->used) return NULL;
         if (rn->id == id) return rn;
     }
     return NULL;
 }
 
-static int map_grow(scene_compositor *cp)
+static int map_grow(scene_layer *ly)
 {
-    uint32_t ncap = cp->map_cap * 2u;
+    uint32_t ncap = ly->map_cap * 2u;
     scene_rnode *nmap;
     uint32_t i;
 
     nmap = calloc(ncap, sizeof(*nmap));
     if (!nmap) return -1;
-    for (i = 0; i < cp->map_cap; i++) {
-        const scene_rnode *rn = &cp->map[i];
+    for (i = 0; i < ly->map_cap; i++) {
+        const scene_rnode *rn = &ly->map[i];
         uint32_t j;
 
         if (!rn->used) continue;
         for (j = 0; j < ncap; j++) {
             uint32_t slot = (uint32_t)((uint64_t)rn->id
                                        * UINT32_C(2654435761))
-                            >> (32u - (cp->map_shift + 1u));
+                            >> (32u - (ly->map_shift + 1u));
             scene_rnode *dst = &nmap[(slot + j) & (ncap - 1u)];
             if (!dst->used) {
                 *dst = *rn;
@@ -265,27 +284,28 @@ static int map_grow(scene_compositor *cp)
             }
         }
     }
-    free(cp->map);
-    cp->map = nmap;
-    cp->map_cap = ncap;
-    cp->map_shift += 1u;
+    free(ly->map);
+    ly->map = nmap;
+    ly->map_cap = ncap;
+    ly->map_shift += 1u;
     return 0;
 }
 
-static scene_rnode *map_insert(scene_compositor *cp, scene_node_id id)
+static scene_rnode *map_insert(scene_layer *ly, scene_node_id id)
 {
     uint32_t i;
 
-    if (cp->map_used * 10u >= cp->map_cap * 7u) {
-        if (map_grow(cp) != 0) return NULL;
+    if (ly->map_used * 10u >= ly->map_cap * 7u) {
+        if (map_grow(ly) != 0) return NULL;
     }
-    for (i = 0; i < cp->map_cap; i++) {
-        scene_rnode *rn = &cp->map[(map_slot(cp, id) + i) & (cp->map_cap - 1u)];
+    for (i = 0; i < ly->map_cap; i++) {
+        scene_rnode *rn = &ly->map[(map_slot(ly, id) + i)
+                                   & (ly->map_cap - 1u)];
         if (!rn->used) {
             memset(rn, 0, sizeof(*rn));
             rn->id = id;
             rn->used = 1;
-            cp->map_used++;
+            ly->map_used++;
             return rn;
         }
         if (rn->id == id) return rn;
@@ -295,34 +315,35 @@ static scene_rnode *map_insert(scene_compositor *cp, scene_node_id id)
 
 /* ---- Transitions (enter/exit) ─────────────────────────────────────── */
 
-static int anim_replaying(const scene_compositor *cp)
+static int anim_replaying(const scene_layer *ly)
 {
-    return scene_store_in_replay(cp->store);
+    return scene_store_in_replay(ly->store);
 }
 
-static anim_ent *anim_find(const scene_compositor *cp, scene_node_id id)
+static anim_ent *anim_find(const scene_layer *ly, scene_node_id id)
 {
     uint32_t i;
 
     for (i = 0; i < SCENE_COMPOSITOR_ANIM_CAP; i++)
-        if (cp->anims[i].active && cp->anims[i].id == id)
-            return (anim_ent *)&cp->anims[i];
+        if (ly->anims[i].active && ly->anims[i].id == id)
+            return (anim_ent *)&ly->anims[i];
     return NULL;
 }
 
-static void anim_free(scene_compositor *cp, anim_ent *an)
+static void anim_free(scene_layer *ly, anim_ent *an)
 {
     if (an->tbuf) {
         free(an->tbuf);
         an->tbuf = NULL;
     }
-    if (an->active) cp->anim_used--;
+    if (an->active) ly->anim_used--;
     memset(an, 0, sizeof(*an));
 }
 
-static anim_ent *anim_alloc(scene_compositor *cp, scene_node_id id, int kind)
+static anim_ent *anim_alloc(scene_compositor *cp, scene_layer *ly,
+                            scene_node_id id, int kind)
 {
-    anim_ent *an = anim_find(cp, id);
+    anim_ent *an = anim_find(ly, id);
     uint32_t i;
 
     if (an) {
@@ -334,32 +355,32 @@ static anim_ent *anim_alloc(scene_compositor *cp, scene_node_id id, int kind)
                              an->base[3] + SCENE_COMPOSITOR_ANIM_SLIDE };
             damage_rect(cp, r);
         }
-        anim_free(cp, an);
+        anim_free(ly, an);
     }
     for (i = 0; i < SCENE_COMPOSITOR_ANIM_CAP; i++)
-        if (!cp->anims[i].active) break;
+        if (!ly->anims[i].active) break;
     if (i == SCENE_COMPOSITOR_ANIM_CAP) return NULL;  /* full: no effect */
-    an = &cp->anims[i];
+    an = &ly->anims[i];
     memset(an, 0, sizeof(*an));
     an->id = id;
     an->kind = (uint8_t)kind;
     an->active = 1;
-    cp->anim_used++;
+    ly->anim_used++;
     return an;
 }
 
-/* Clear all active transitions and damage their footprints so the next
- * repaint re-establishes the correct post-fade state (phantom → live
- * scene or desktop). Used when effects are turned off and when replay
- * mode begins.                                                         */
-static void anim_clear_all(scene_compositor *cp)
+/* Clear all active transitions of a layer and damage their footprints so
+ * the next repaint re-establishes the correct post-fade state (phantom →
+ * live scene or desktop). Used when effects are turned off and when
+ * replay mode begins.                                                 */
+static void anim_clear_all(scene_compositor *cp, scene_layer *ly)
 {
     uint32_t i;
 
     for (i = 0; i < SCENE_COMPOSITOR_ANIM_CAP; i++) {
-        if (cp->anims[i].active) {
-            damage_rect(cp, cp->anims[i].base);
-            anim_free(cp, &cp->anims[i]);
+        if (ly->anims[i].active) {
+            damage_rect(cp, ly->anims[i].base);
+            anim_free(ly, &ly->anims[i]);
         }
     }
 }
@@ -367,13 +388,13 @@ static void anim_clear_all(scene_compositor *cp)
 /* Copy the node's committed texts into the render entry. The store lets
  * a destroyed node's texts die with it, so the model keeps its own copy
  * to feed the exit fade. Copy only when the signature actually moved.  */
-static void rn_text_capture(scene_compositor *cp, scene_rnode *rn,
-                            scene_node_id id)
+static void rn_text_capture(scene_compositor *cp, scene_layer *ly,
+                            scene_rnode *rn, scene_node_id id)
 {
     scene_node_text_vis t[SCENE_COMPOSITOR_TEXT_CAP];
     char *p;
     uint32_t i, total = 0;
-    int n = scene_store_node_texts(cp->store, id, t,
+    int n = scene_store_node_texts(ly->store, id, t,
                                    SCENE_COMPOSITOR_TEXT_CAP);
 
     if (n < 0) n = 0;
@@ -422,7 +443,7 @@ static void anim_snapshot_from_rn(anim_ent *an, const scene_rnode *rn)
     }
 }
 
-/* Advance all transitions one tick and collect their damage.
+/* Advance all transitions of a layer one tick and collect their damage.
  *
  * ENTER: frames 1..6 (off>0) damage base + sweep (2 rects); frame 7
  * (off==0) damages base only; the free frame (t==TICKS) damages the
@@ -433,12 +454,12 @@ static void anim_snapshot_from_rn(anim_ent *an, const scene_rnode *rn)
  *
  * EXIT: every frame damages base; the free frame's base damage
  * repaints the cleared area (phantom gone).                             */
-static void anim_advance(scene_compositor *cp)
+static void anim_advance(scene_compositor *cp, scene_layer *ly)
 {
     uint32_t i;
 
     for (i = 0; i < SCENE_COMPOSITOR_ANIM_CAP; i++) {
-        anim_ent *an = &cp->anims[i];
+        anim_ent *an = &ly->anims[i];
         int32_t off;
 
         if (!an->active) continue;
@@ -465,19 +486,19 @@ static void anim_advance(scene_compositor *cp)
             damage_rect(cp, an->base);
         }
         if (an->t >= SCENE_COMPOSITOR_ANIM_TICKS)
-            anim_free(cp, an);
+            anim_free(ly, an);
     }
 }
 
 /* ---- Text content signature (repaint on SetText without geometry) ---- */
 
-static uint32_t text_sig(const scene_store *s, scene_node_id id)
+static uint32_t text_sig(const scene_layer *ly, scene_node_id id)
 {
     scene_node_text_vis t[SCENE_COMPOSITOR_TEXT_CAP];
     uint32_t h = UINT32_C(0x811C9DC5);
     int n, i;
 
-    n = scene_store_node_texts(s, id, t, SCENE_COMPOSITOR_TEXT_CAP);
+    n = scene_store_node_texts(ly->store, id, t, SCENE_COMPOSITOR_TEXT_CAP);
     if (n < 0) return h;
     for (i = 0; i < n; i++) {
         const scene_node_text_vis *tv = &t[i];
@@ -557,7 +578,8 @@ static scene_tex_ent *tex_find(scene_compositor *cp, scene_texture_ref ref)
  * paint rect and `eff` with the effect alpha factor (255 = settled).
  * The node's own opacity only ever scales the texture (engine v1 rule);
  * fills/strokes/text render at the effect factor only.                 */
-static void anim_live_geom(const scene_compositor *cp, scene_node_id id,
+static void anim_live_geom(const scene_compositor *cp, const scene_layer *ly,
+                           scene_node_id id,
                            const int32_t base[4], int32_t out[4],
                            uint32_t *eff)
 {
@@ -567,7 +589,7 @@ static void anim_live_geom(const scene_compositor *cp, scene_node_id id,
     memcpy(out, base, sizeof(int32_t[4]));
     *eff = 255u;
     if (!cp->effects_on) return;
-    an = anim_find(cp, id);
+    an = anim_find(ly, id);
     if (!an || an->kind != SCENE_ANIM_ENTER) return;
     off = ((int32_t)SCENE_COMPOSITOR_ANIM_TICKS - (int32_t)an->t)
           * (int32_t)SCENE_COMPOSITOR_ANIM_SLIDE
@@ -604,8 +626,8 @@ static void style_chrome(scene_fb *fb, const scene_rect *rc,
     }
 }
 
-static void paint_node(scene_compositor *cp, const scene_node_vis *v,
-                       const scene_rect *clip)
+static void paint_node(scene_compositor *cp, const scene_layer *ly,
+                       const scene_node_vis *v, const scene_rect *clip)
 {
     scene_rect rc, c;
     const scene_style *st;
@@ -617,7 +639,7 @@ static void paint_node(scene_compositor *cp, const scene_node_vis *v,
     if (!(v->flags & SCENE_FLAG_VISIBLE) || v->opacity == 0) return;
     if (v->rect[2] <= 0 || v->rect[3] <= 0) return;
 
-    anim_live_geom(cp, v->id, v->rect, r, &eff);
+    anim_live_geom(cp, ly, v->id, v->rect, r, &eff);
     if (eff == 0) return;
 
     rc.x = r[0];
@@ -643,7 +665,8 @@ static void paint_node(scene_compositor *cp, const scene_node_vis *v,
                           &c);
         }
     }
-    n = scene_store_node_texts(cp->store, v->id, t, SCENE_COMPOSITOR_TEXT_CAP);
+    n = scene_store_node_texts(ly->store, v->id, t,
+                               SCENE_COMPOSITOR_TEXT_CAP);
     if (n < 0) n = 0;
     if ((uint32_t)n > SCENE_COMPOSITOR_TEXT_CAP) n = (int)SCENE_COMPOSITOR_TEXT_CAP;
     for (i = 0; i < n; i++) {
@@ -657,14 +680,15 @@ static void paint_node(scene_compositor *cp, const scene_node_vis *v,
 static int paint_cb(scene_node_id id, void *out)
 {
     scene_compositor *cp = out;
+    scene_layer *ly = cp->walk_ly;
     scene_node_vis v;
     int32_t r[4];
     uint32_t a;
 
-    if (scene_store_node_vis(cp->store, id, &v) != 0) return 0;
+    if (scene_store_node_vis(ly->store, id, &v) != 0) return 0;
     if (!(v.flags & SCENE_FLAG_VISIBLE) || v.opacity == 0) return 0;
     if (v.rect[2] <= 0 || v.rect[3] <= 0) return 0;
-    anim_live_geom(cp, id, v.rect, r, &a);
+    anim_live_geom(cp, ly, id, v.rect, r, &a);
     if (a == 0) return 0;
     {
         scene_rect rc;
@@ -674,7 +698,7 @@ static int paint_cb(scene_node_id id, void *out)
         rc.h = r[3];
         if (!rects_intersect(&rc, &cp->paint_clip)) return 0;
     }
-    paint_node(cp, &v, &cp->paint_clip);
+    paint_node(cp, ly, &v, &cp->paint_clip);
     return 0;
 }
 
@@ -733,28 +757,39 @@ static void paint_phantom(scene_compositor *cp, const anim_ent *an,
     }
 }
 
-/* Fade the last visible state of deleted nodes over the live scene.    */
-static void anim_paint_exits(scene_compositor *cp, const scene_rect *clip)
+/* Fade the last visible state of deleted nodes of a layer over the
+ * live scene.                                                          */
+static void anim_paint_exits(scene_compositor *cp, const scene_layer *ly,
+                             const scene_rect *clip)
 {
     uint32_t i;
 
     if (!cp->effects_on) return;
     for (i = 0; i < SCENE_COMPOSITOR_ANIM_CAP; i++)
-        if (cp->anims[i].active && cp->anims[i].kind == SCENE_ANIM_EXIT)
-            paint_phantom(cp, &cp->anims[i], clip);
+        if (ly->anims[i].active && ly->anims[i].kind == SCENE_ANIM_EXIT)
+            paint_phantom(cp, &ly->anims[i], clip);
 }
 
 static void repaint_rect(scene_compositor *cp, const scene_rect *r)
 {
+    uint32_t i;
+
     scene_fb_fill(&cp->fb, r, cp->clear, NULL);
     cp->paint_clip = *r;
-    scene_store_walk(cp->store, paint_cb, cp);
-    anim_paint_exits(cp, r);
+    for (i = 0; i < cp->ly_count; i++) {
+        scene_layer *ly = &cp->ly[i];
+
+        if (ly->dead) continue;
+        cp->walk_ly = ly;
+        scene_store_walk(ly->store, paint_cb, cp);
+        anim_paint_exits(cp, ly, r);
+    }
 }
 
 static void repaint_all(scene_compositor *cp)
 {
     scene_rect full;
+    uint32_t i;
 
     scene_fb_clear(&cp->fb, cp->clear);
     full.x = 0;
@@ -762,25 +797,32 @@ static void repaint_all(scene_compositor *cp)
     full.w = (int32_t)cp->fb.w;
     full.h = (int32_t)cp->fb.h;
     cp->paint_clip = full;
-    scene_store_walk(cp->store, paint_cb, cp);
-    anim_paint_exits(cp, &full);
+    for (i = 0; i < cp->ly_count; i++) {
+        scene_layer *ly = &cp->ly[i];
+
+        if (ly->dead) continue;
+        cp->walk_ly = ly;
+        scene_store_walk(ly->store, paint_cb, cp);
+        anim_paint_exits(cp, ly, &full);
+    }
 }
 
-/* ---- Diff walk ------------------------------------------------------- */
+/* ---- Diff walk (per layer) ------------------------------------------- */
 
 static int diff_cb(scene_node_id id, void *out)
 {
     scene_compositor *cp = out;
+    scene_layer *ly = cp->walk_ly;
     scene_node_vis v;
     scene_rnode *rn;
     anim_ent *an;
     uint32_t sig;
     int changed;
 
-    if (scene_store_node_vis(cp->store, id, &v) != 0) return 0;
-    rn = map_find(cp, id);
+    if (scene_store_node_vis(ly->store, id, &v) != 0) return 0;
+    rn = map_find(ly, id);
     if (!rn) {
-        rn = map_insert(cp, id);
+        rn = map_insert(ly, id);
         if (!rn) return 0;
         rn->seen = 1;
         rn->role = v.role;
@@ -789,14 +831,14 @@ static int diff_cb(scene_node_id id, void *out)
         rn->tex = v.tex;
         rn->blend = v.blend;
         rn->opacity = v.opacity;
-        rn->sig = text_sig(cp->store, id);
+        rn->sig = text_sig(ly, id);
         memcpy(rn->rect, v.rect, sizeof(rn->rect));
-        rn_text_capture(cp, rn, id);
-        if (cp->effects_on && !anim_replaying(cp)
+        rn_text_capture(cp, ly, rn, id);
+        if (cp->effects_on && !anim_replaying(ly)
             && (v.flags & SCENE_FLAG_VISIBLE)
             && v.rect[2] > 0 && v.rect[3] > 0) {
             /* fade+slide in; anim_advance adds the swept rects */
-            an = anim_alloc(cp, id, SCENE_ANIM_ENTER);
+            an = anim_alloc(cp, ly, id, SCENE_ANIM_ENTER);
             if (an) memcpy(an->base, v.rect, sizeof(an->base));
         } else if (v.flags & SCENE_FLAG_VISIBLE) {
             damage_rect(cp, v.rect);
@@ -804,7 +846,7 @@ static int diff_cb(scene_node_id id, void *out)
         return 0;
     }
     rn->seen = 1;
-    sig = text_sig(cp->store, id);
+    sig = text_sig(ly, id);
     changed = (rn->role != v.role || rn->style != v.style || rn->tex != v.tex
                || rn->flags != v.flags || rn->sig != sig
                || memcmp(rn->rect, v.rect, sizeof(rn->rect)) != 0);
@@ -814,13 +856,13 @@ static int diff_cb(scene_node_id id, void *out)
 
     /* If a node resurfaces during its exit fade, revive it as an enter. */
     if (cp->effects_on) {
-        an = anim_find(cp, id);
+        an = anim_find(ly, id);
         if (an) {
             if (an->kind == SCENE_ANIM_EXIT) {
-                anim_free(cp, an);
-                if (!anim_replaying(cp) && (v.flags & SCENE_FLAG_VISIBLE)
+                anim_free(ly, an);
+                if (!anim_replaying(ly) && (v.flags & SCENE_FLAG_VISIBLE)
                     && v.rect[2] > 0 && v.rect[3] > 0) {
-                    an = anim_alloc(cp, id, SCENE_ANIM_ENTER);
+                    an = anim_alloc(cp, ly, id, SCENE_ANIM_ENTER);
                     if (an) memcpy(an->base, v.rect, sizeof(an->base));
                 }
             } else {
@@ -829,7 +871,7 @@ static int diff_cb(scene_node_id id, void *out)
         }
     }
     if (rn->sig != sig)
-        rn_text_capture(cp, rn, id);
+        rn_text_capture(cp, ly, rn, id);
 
     /* Damage the old and/or new rect exactly as needed: a content-only
      * change (same rect) damages once; a move damages old+new.        */
@@ -859,16 +901,16 @@ static int diff_cb(scene_node_id id, void *out)
     return 0;
 }
 
-/* Nodes gone from the store: damage their last rect. With effects on and
- * not replaying, a visible gone node becomes an exit fade (its visuals
- * were snapshotted in the model).                                      */
-static void map_sweep(scene_compositor *cp)
+/* Nodes gone from a layer's store: damage their last rect. With effects
+ * on and not replaying, a visible gone node becomes an exit fade (its
+ * visuals were snapshotted in the model).                              */
+static void map_sweep(scene_compositor *cp, scene_layer *ly)
 {
     uint32_t i;
-    int replaying = anim_replaying(cp);
+    int replaying = anim_replaying(ly);
 
-    for (i = 0; i < cp->map_cap; i++) {
-        scene_rnode *rn = &cp->map[i];
+    for (i = 0; i < ly->map_cap; i++) {
+        scene_rnode *rn = &ly->map[i];
         if (!rn->used) continue;
         if (!rn->seen) {
             int was_vis = (rn->flags & SCENE_FLAG_VISIBLE)
@@ -876,7 +918,7 @@ static void map_sweep(scene_compositor *cp)
             if (was_vis && cp->effects_on && !replaying) {
                 scene_node_vis v;
                 const scene_style *st;
-                anim_ent *an = anim_alloc(cp, rn->id, SCENE_ANIM_EXIT);
+                anim_ent *an = anim_alloc(cp, ly, rn->id, SCENE_ANIM_EXIT);
 
                 if (an) {
                     memset(&v, 0, sizeof(v));
@@ -906,11 +948,44 @@ static void map_sweep(scene_compositor *cp)
             rn->tx_count = 0;
             rn->tx_len = 0;
             rn->used = 0;
-            cp->map_used--;
+            ly->map_used--;
         } else {
             rn->seen = 0;
         }
     }
+}
+
+/* ---- Layer lifecycle -------------------------------------------------- */
+
+static void layer_free(scene_layer *ly)
+{
+    uint32_t i;
+
+    for (i = 0; i < ly->map_cap; i++)
+        free(ly->map[i].tx_data);
+    free(ly->map);
+    ly->map = NULL;
+    ly->map_cap = 0;
+    for (i = 0; i < SCENE_COMPOSITOR_ANIM_CAP; i++)
+        free(ly->anims[i].tbuf);
+    if (ly->sv) scene_server_free(ly->sv);
+    ly->sv = NULL;
+    ly->store = NULL;
+}
+
+static int layer_init(scene_layer *ly, scene_server *sv)
+{
+    memset(ly, 0, sizeof(*ly));
+    ly->sv = sv;
+    ly->store = sv ? scene_server_store(sv) : NULL;
+    ly->map_cap = 64u;
+    ly->map_shift = 6u;
+    ly->map = calloc(ly->map_cap, sizeof(*ly->map));
+    if (!ly->map) {
+        ly->map_cap = 0;
+        return -1;
+    }
+    return 0;
 }
 
 /* ---- Public API ------------------------------------------------------ */
@@ -922,24 +997,29 @@ scene_compositor *scene_compositor_new(const scene_limits *limits,
 
     cp = calloc(1, sizeof(*cp));
     if (!cp) return NULL;
-    cp->map_cap = 64u;
-    cp->map_shift = 6u;
-    cp->map = calloc(cp->map_cap, sizeof(*cp->map));
-    if (!cp->map) {
+    cp->ly_cap = SCENE_COMPOSITOR_LAYER_CAP0;
+    cp->ly = calloc(cp->ly_cap, sizeof(*cp->ly));
+    if (!cp->ly) {
         free(cp);
         return NULL;
     }
-    cp->sv = scene_server_new(limits);
-    if (!cp->sv) {
-        free(cp->map);
+    cp->ly[0].sv = scene_server_new(limits);
+    if (!cp->ly[0].sv) {
+        free(cp->ly);
         free(cp);
         return NULL;
     }
-    cp->store = scene_server_store(cp->sv);
+    if (layer_init(&cp->ly[0], cp->ly[0].sv) != 0) {
+        scene_server_free(cp->ly[0].sv);
+        free(cp->ly);
+        free(cp);
+        return NULL;
+    }
+    cp->ly_count = 1;
     cp->clear = UINT32_C(0xFF101010);
     if (scene_fb_init(&cp->fb, fb_w, fb_h) != 0) {
-        scene_server_free(cp->sv);
-        free(cp->map);
+        layer_free(&cp->ly[0]);
+        free(cp->ly);
         free(cp);
         return NULL;
     }
@@ -955,24 +1035,59 @@ void scene_compositor_free(scene_compositor *cp)
         free(cp->tex_ents[i].px);
     free(cp->tex_ents);
     free(cp->styles);
-    for (i = 0; i < cp->map_cap; i++)
-        free(cp->map[i].tx_data);
-    free(cp->map);
-    for (i = 0; i < SCENE_COMPOSITOR_ANIM_CAP; i++)
-        free(cp->anims[i].tbuf);
-    scene_server_free(cp->sv);
+    for (i = 0; i < cp->ly_count; i++)
+        layer_free(&cp->ly[i]);
+    free(cp->ly);
     scene_fb_free(&cp->fb);
     free(cp);
 }
 
 scene_store *scene_compositor_store(scene_compositor *cp)
 {
-    return cp ? cp->store : NULL;
+    return cp ? cp->ly[0].store : NULL;
 }
 
 scene_server *scene_compositor_server(scene_compositor *cp)
 {
-    return cp ? cp->sv : NULL;
+    return cp ? cp->ly[0].sv : NULL;
+}
+
+int scene_compositor_add_session(scene_compositor *cp, scene_server *sv)
+{
+    scene_layer *nl;
+
+    if (!cp || !sv) return 0;
+    if (cp->ly_count == cp->ly_cap) {
+        uint32_t ncap = cp->ly_cap * 2u;
+        nl = realloc(cp->ly, ncap * sizeof(*cp->ly));
+        if (!nl) return 0;
+        memset(&nl[cp->ly_cap], 0, (ncap - cp->ly_cap) * sizeof(*cp->ly));
+        cp->ly = nl;
+        cp->ly_cap = ncap;
+    }
+    if (layer_init(&cp->ly[cp->ly_count], sv) != 0) return 0;
+    cp->ly_count++;
+    return (int)cp->ly_count - 1;
+}
+
+int scene_compositor_remove_session(scene_compositor *cp, int layer)
+{
+    uint32_t i;
+
+    if (!cp || layer <= 0 || (uint32_t)layer >= cp->ly_count) return -1;
+    layer_free(&cp->ly[layer]);
+    for (i = (uint32_t)layer + 1u; i < cp->ly_count; i++)
+        cp->ly[i - 1u] = cp->ly[i];
+    cp->ly_count--;
+    memset(&cp->ly[cp->ly_count], 0, sizeof(*cp->ly));
+    if (cp->focus_layer >= cp->ly_count) cp->focus_layer = 0;
+    cp->force = 1;   /* the removed layer's area repaints as the desktop */
+    return 0;
+}
+
+int scene_compositor_focus_is_shell(scene_compositor *cp)
+{
+    return cp ? (cp->focus_layer == 0) : 1;
 }
 
 void scene_compositor_resize(scene_compositor *cp, uint32_t w, uint32_t h)
@@ -998,7 +1113,7 @@ int scene_compositor_register_texture(scene_compositor *cp,
                                       uint8_t opaque, const uint32_t *pixels)
 {
     scene_tex_ent *te;
-    uint32_t n, i;
+    uint32_t n, i, li;
 
     if (!cp || !pixels || w == 0 || h == 0) return -1;
     if (fmt != SCENE_TEX_FMT_XRGB && fmt != SCENE_TEX_FMT_ARGB) return -1;
@@ -1047,20 +1162,23 @@ int scene_compositor_register_texture(scene_compositor *cp,
     te->opaque = opaque;
     te->used = 1;
     if (!te->store_registered) {
-        if (scene_store_register_texture(cp->store, ref, w, h, fmt, opaque)
-            != 0)
+        if (scene_store_register_texture(cp->ly[0].store, ref, w, h, fmt,
+                                         opaque) != 0)
             return -1;
         te->store_registered = 1;
     }
 
     /* New pixels may change what the scene shows: dirty referencing
-     * model entries (server-owned texture update).                      */
-    for (i = 0; i < cp->map_cap; i++) {
-        scene_rnode *rn = &cp->map[i];
-        if (rn->used && rn->tex == ref
-            && (rn->flags & SCENE_FLAG_VISIBLE)
-            && rn->rect[2] > 0 && rn->rect[3] > 0)
-            pending_rect(cp, rn->rect);
+     * model entries in every layer (server-owned texture update).       */
+    for (li = 0; li < cp->ly_count; li++) {
+        scene_layer *ly = &cp->ly[li];
+        for (i = 0; i < ly->map_cap; i++) {
+            scene_rnode *rn = &ly->map[i];
+            if (rn->used && rn->tex == ref
+                && (rn->flags & SCENE_FLAG_VISIBLE)
+                && rn->rect[2] > 0 && rn->rect[3] > 0)
+                pending_rect(cp, rn->rect);
+        }
     }
     return 0;
 }
@@ -1069,20 +1187,23 @@ int scene_compositor_release_texture(scene_compositor *cp,
                                      scene_texture_ref ref)
 {
     scene_tex_ent *te;
-    uint32_t i;
+    uint32_t i, li;
 
     if (!cp) return -1;
     te = tex_find(cp, ref);
     if (!te) return -1;
-    for (i = 0; i < cp->map_cap; i++) {
-        scene_rnode *rn = &cp->map[i];
-        if (rn->used && rn->tex == ref
-            && (rn->flags & SCENE_FLAG_VISIBLE)
-            && rn->rect[2] > 0 && rn->rect[3] > 0)
-            pending_rect(cp, rn->rect);
+    for (li = 0; li < cp->ly_count; li++) {
+        scene_layer *ly = &cp->ly[li];
+        for (i = 0; i < ly->map_cap; i++) {
+            scene_rnode *rn = &ly->map[i];
+            if (rn->used && rn->tex == ref
+                && (rn->flags & SCENE_FLAG_VISIBLE)
+                && rn->rect[2] > 0 && rn->rect[3] > 0)
+                pending_rect(cp, rn->rect);
+        }
     }
     if (te->store_registered)
-        scene_store_release_texture(cp->store, ref);
+        scene_store_release_texture(cp->ly[0].store, ref);
     free(te->px);
     memset(te, 0, sizeof(*te));
     return 0;
@@ -1093,7 +1214,7 @@ void scene_compositor_set_style_count(scene_compositor *cp, uint32_t n)
     scene_style *ns;
 
     if (!cp) return;
-    scene_store_set_style_count(cp->store, n);
+    scene_store_set_style_count(cp->ly[0].store, n);
     if (n == cp->style_count) return;
     if (n == 0) {
         free(cp->styles);
@@ -1113,19 +1234,22 @@ int scene_compositor_set_style(scene_compositor *cp, scene_style_ref ref,
                                const scene_style *st)
 {
     scene_style *old;
-    uint32_t i;
+    uint32_t i, li;
 
     if (!cp || !st) return -1;
     if (ref == 0 || ref >= cp->style_count) return -1;
     old = &cp->styles[ref];
     if (memcmp(old, st, sizeof(*st)) == 0) return 0;
     *old = *st;
-    for (i = 0; i < cp->map_cap; i++) {
-        scene_rnode *rn = &cp->map[i];
-        if (rn->used && rn->style == ref
-            && (rn->flags & SCENE_FLAG_VISIBLE)
-            && rn->rect[2] > 0 && rn->rect[3] > 0)
-            pending_rect(cp, rn->rect);
+    for (li = 0; li < cp->ly_count; li++) {
+        scene_layer *ly = &cp->ly[li];
+        for (i = 0; i < ly->map_cap; i++) {
+            scene_rnode *rn = &ly->map[i];
+            if (rn->used && rn->style == ref
+                && (rn->flags & SCENE_FLAG_VISIBLE)
+                && rn->rect[2] > 0 && rn->rect[3] > 0)
+                pending_rect(cp, rn->rect);
+        }
     }
     return 0;
 }
@@ -1133,26 +1257,59 @@ int scene_compositor_set_style(scene_compositor *cp, scene_style_ref ref,
 int scene_compositor_input_pointer(scene_compositor *cp, uint8_t device,
                                    int32_t x, int32_t y, uint8_t buttons)
 {
+    uint32_t i;
+
     if (!cp) return -1;
-    return scene_server_input_pointer(cp->sv, device, x, y, buttons);
+    /* Hit-test app layers topmost first; the first session owning the
+     * point receives the event and becomes the keyboard focus.       */
+    for (i = cp->ly_count; i > 1; i--) {
+        scene_layer *ly = &cp->ly[i - 1u];
+
+        if (ly->dead || scene_server_dead(ly->sv)) continue;
+        if (scene_store_region_at(ly->store, x, y) != SCENE_NO_PARENT) {
+            cp->focus_layer = i - 1u;
+            return scene_server_input_pointer(ly->sv, device, x, y, buttons);
+        }
+    }
+    cp->focus_layer = 0;
+    return scene_server_input_pointer(cp->ly[0].sv, device, x, y, buttons);
 }
 
 int scene_compositor_input_key(scene_compositor *cp, uint32_t key_code,
                                uint8_t state, uint8_t modifiers)
 {
+    scene_layer *ly;
+
     if (!cp) return -1;
-    return scene_server_input_key(cp->sv, key_code, state, modifiers);
+    ly = &cp->ly[0];
+    if (cp->focus_layer < cp->ly_count && !cp->ly[cp->focus_layer].dead
+        && !scene_server_dead(cp->ly[cp->focus_layer].sv))
+        ly = &cp->ly[cp->focus_layer];
+    return scene_server_input_key(ly->sv, key_code, state, modifiers);
 }
 
 int scene_compositor_frame(scene_compositor *cp)
 {
     uint64_t seq;
-    uint32_t d, p;
-    int anim_active;
+    uint32_t d, p, i;
+    int anim_active = 0, any_change = 0;
 
     if (!cp) return -1;
-    if (scene_server_dead(cp->sv)) return -1;
+    if (scene_server_dead(cp->ly[0].sv)) return -1;
     cp->tick++;
+
+    /* Session death: a dead app layer freezes nothing — the next frame
+     * repaints its area as the desktop (its layer is skipped). The
+     * shell session's death is fatal to the whole desktop.            */
+    for (i = 1; i < cp->ly_count; i++) {
+        scene_layer *ly = &cp->ly[i];
+
+        if (!ly->dead && scene_server_dead(ly->sv)) {
+            ly->dead = 1;
+            cp->force = 1;
+        }
+    }
+
     if (cp->force) {
         cp->force = 0;
         cp->damage_count = 0;
@@ -1163,44 +1320,73 @@ int scene_compositor_frame(scene_compositor *cp)
         cp->damage[0].w = (int32_t)cp->fb.w;
         cp->damage[0].h = (int32_t)cp->fb.h;
         cp->damage_count = 1;
-        cp->rendered_seq = scene_store_committed_seq(cp->store);
+        for (i = 0; i < cp->ly_count; i++)
+            cp->ly[i].rendered_seq =
+                scene_store_view_seq(cp->ly[i].store);
         return 0;
     }
-    seq = scene_store_view_seq(cp->store);
-    anim_active = cp->effects_on && cp->anim_used > 0;
-    if (seq == cp->rendered_seq && cp->pending_count == 0 && !anim_active) {
+
+    for (i = 0; i < cp->ly_count; i++) {
+        scene_layer *ly = &cp->ly[i];
+
+        if (ly->dead) continue;
+        if (scene_store_view_seq(ly->store) != ly->rendered_seq)
+            any_change = 1;
+        if (cp->effects_on && ly->anim_used > 0)
+            anim_active = 1;
+    }
+    if (!any_change && cp->pending_count == 0 && !anim_active) {
         cp->damage_count = 0;   /* nothing new this frame */
         return 0;
     }
     cp->damage_count = 0;       /* fresh report list for this frame */
-    if (seq != cp->rendered_seq) {
-        scene_store_walk(cp->store, diff_cb, cp);
-        map_sweep(cp);
+    for (i = 0; i < cp->ly_count; i++) {
+        scene_layer *ly = &cp->ly[i];
+
+        if (ly->dead) continue;
+        seq = scene_store_view_seq(ly->store);
+        if (seq != ly->rendered_seq) {
+            cp->walk_ly = ly;
+            scene_store_walk(ly->store, diff_cb, cp);
+            map_sweep(cp, ly);
+        }
     }
     if (cp->effects_on) {
-        if (anim_replaying(cp))
-            anim_clear_all(cp);  /* playback: no transients */
-        else
-            anim_advance(cp);
+        for (i = 0; i < cp->ly_count; i++) {
+            scene_layer *ly = &cp->ly[i];
+
+            if (ly->dead) continue;
+            if (anim_replaying(ly))
+                anim_clear_all(cp, ly);   /* playback: no transients */
+            else
+                anim_advance(cp, ly);
+        }
     }
     for (p = 0; p < cp->pending_count; p++)
         damage_add(cp, &cp->pending[p]);
     cp->pending_count = 0;
-    /* First frame with content: establish the desktop background once.  */
-    if (seq > 0 && cp->rendered_seq == 0)
+    /* First content frame of the shell session: establish the desktop
+     * background once. App layers damage in over it.                   */
+    if (scene_store_view_seq(cp->ly[0].store) > 0
+        && cp->ly[0].rendered_seq == 0)
         scene_fb_clear(&cp->fb, cp->clear);
     for (d = 0; d < cp->damage_count; d++)
         repaint_rect(cp, &cp->damage[d]);
-    cp->rendered_seq = seq;
+    for (i = 0; i < cp->ly_count; i++)
+        cp->ly[i].rendered_seq = scene_store_view_seq(cp->ly[i].store);
     return 0;
 }
 
 void scene_compositor_set_effects(scene_compositor *cp, int on)
 {
+    uint32_t i;
+
     if (!cp) return;
     on = on ? 1 : 0;
-    if (cp->effects_on && !on)
-        anim_clear_all(cp);           /* returning to identity paint */
+    if (cp->effects_on && !on) {
+        for (i = 0; i < cp->ly_count; i++)
+            anim_clear_all(cp, &cp->ly[i]);  /* returning to identity */
+    }
     cp->effects_on = on;
 }
 
@@ -1211,7 +1397,12 @@ uint64_t scene_compositor_tick(scene_compositor *cp)
 
 uint32_t scene_compositor_anim_count(scene_compositor *cp)
 {
-    return cp ? cp->anim_used : 0;
+    uint32_t i, n = 0;
+
+    if (!cp) return 0;
+    for (i = 0; i < cp->ly_count; i++)
+        n += cp->ly[i].anim_used;
+    return n;
 }
 
 const scene_fb *scene_compositor_fb(scene_compositor *cp)
@@ -1232,7 +1423,7 @@ uint32_t scene_compositor_damage(scene_compositor *cp, scene_rect *out,
 
 uint64_t scene_compositor_rendered_seq(scene_compositor *cp)
 {
-    return cp ? cp->rendered_seq : 0;
+    return cp ? cp->ly[0].rendered_seq : 0;
 }
 
 void scene_compositor_force_repaint(scene_compositor *cp)

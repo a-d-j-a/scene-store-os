@@ -348,9 +348,11 @@ static void key_event(ctx *c, uint16_t code, int32_t value)
     default:
         break;
     }
-    if (c->sh && mods == 0 && (code == KEY_TAB || code == KEY_ENTER ||
-                               code == KEY_ESC)) {
-        /* shell hotkeys when no modifier is held */
+    if (c->sh && scene_compositor_focus_is_shell(c->cp)
+        && mods == 0 && (code == KEY_TAB || code == KEY_ENTER ||
+                         code == KEY_ESC)) {
+        /* shell hotkeys when no modifier is held and the shell has
+         * keyboard focus (an app session's typing must reach the app) */
         if (scene_shell_handle_key(c->sh, code, state, 0))
             return;
     }

@@ -14,7 +14,7 @@ else
   SOCKLIB =
 endif
 
-all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/iso_preview$(EXE)
+all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/iso_preview$(EXE)
 
 build:
 	mkdir -p build
@@ -142,6 +142,16 @@ build/test_terminal$(EXE): tests/test_terminal.c build/scene_fmt.o build/scene_s
 		build/scene_compositor.o build/scene_app.o build/scene_terminal.o \
 		$(SOCKLIB) -o $@
 
+build/test_sessions$(EXE): tests/test_sessions.c build/scene_fmt.o \
+	build/scene_store.o build/scene_transport.o build/scene_client.o \
+	build/scene_server.o build/scene_fb.o build/scene_font.o \
+	build/scene_font_data.o build/scene_compositor.o build/scene_app.o | build
+	$(CC) $(CFLAGS) tests/test_sessions.c build/scene_fmt.o build/scene_store.o \
+		build/scene_transport.o build/scene_client.o build/scene_server.o \
+		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
+		build/scene_compositor.o build/scene_app.o \
+		$(SOCKLIB) -o $@
+
 build/test_settings$(EXE): tests/test_settings.c build/scene_fmt.o build/scene_store.o \
 	build/scene_transport.o build/scene_client.o build/scene_server.o \
 	build/scene_fb.o build/scene_font.o build/scene_font_data.o \
@@ -228,6 +238,9 @@ test-app: build/test_app$(EXE)
 test-terminal: build/test_terminal$(EXE)
 	./build/test_terminal$(EXE)
 
+test-sessions: build/test_sessions$(EXE)
+	./build/test_sessions$(EXE)
+
 test-settings: build/test_settings$(EXE)
 	./build/test_settings$(EXE)
 
@@ -286,4 +299,4 @@ endif
 clean:
 	rm -rf build
 
-.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm clean
+.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-sessions test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm clean

@@ -153,7 +153,7 @@ static void init_stack(void)
         char *slash = strrchr(exe_path, '\\');
         if (slash) { slash[1] = '\0'; strcat(exe_path, "wallpaper.bmp"); }
     }
-    strncpy(cfg.wallpaper_path, exe_path, sizeof(cfg.wallpaper_path) - 1);
+    snprintf(cfg.wallpaper_path, sizeof(cfg.wallpaper_path), "%s", exe_path);
     cfg.panel_height = 32;
     cfg.clock_12h = 0;
 

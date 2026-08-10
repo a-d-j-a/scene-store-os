@@ -39,7 +39,20 @@
  * goes to the app, not the compositor). The compositor renders no
  * cursor in v1.
  *
- * Threading: one compositor, one session, one thread (as the store).
+ * Multi-session composition: the compositor merges the shell session
+ * (layer 0, created by scene_compositor_new) with any number of foreign
+ * app sessions added via scene_compositor_add_session. Each layer is one
+ * scene_server+store pair with its own render model and transition
+ * table; layers paint bottom-up into the shared framebuffer (app windows
+ * over the desktop) and input is routed by hit-test across layers,
+ * topmost first (scene_store_region_at on each app layer). Keyboard
+ * input goes to the layer that last received a pointer event (click-to-
+ * focus; the shell is the default). Layer 0 cannot be removed; its death
+ * kills the compositor. An app layer's death freezes nothing: the layer
+ * stops diffing and painting (its area repaints as desktop) until the
+ * host removes or replaces it.
+ *
+ * Threading: one compositor, many sessions, one thread (as the store).
  */
 #ifndef SCENE_COMPOSITOR_H
 #define SCENE_COMPOSITOR_H
@@ -61,9 +74,24 @@ scene_compositor *scene_compositor_new(const scene_limits *limits,
                                        uint32_t fb_w, uint32_t fb_h);
 void scene_compositor_free(scene_compositor *cp);
 
-/* The session store (read-only queries) and the wire seam (feed apps).  */
+/* The session store (read-only queries) and the wire seam (feed apps).
+ * These are the shell session (layer 0).                               */
 scene_store  *scene_compositor_store(scene_compositor *cp);
 scene_server *scene_compositor_server(scene_compositor *cp);
+
+/* ---- multi-session composition -------------------------------------- */
+/* Attach a foreign session (an app's server) as a new layer above the
+ * shell session. The compositor takes ownership of `sv` (freed on
+ * remove_session/compositor_free). Returns the layer index (> 0) on
+ * success, 0 on failure. The app's store content starts rendering on
+ * the next frame (all pre-existing nodes damage in).                  */
+int  scene_compositor_add_session(scene_compositor *cp, scene_server *sv);
+/* Detach and free a session layer (an index from add_session). Layer 0
+ * cannot be removed. The layer's area repaints as the desktop.         */
+int  scene_compositor_remove_session(scene_compositor *cp, int layer);
+/* 1 = keyboard focus is on the shell session (layer 0). The host uses
+ * this to keep OS-level key grabs (shell hotkeys) away from apps.      */
+int  scene_compositor_focus_is_shell(scene_compositor *cp);
 
 void scene_compositor_resize(scene_compositor *cp, uint32_t w, uint32_t h);
 void scene_compositor_set_clear(scene_compositor *cp, uint32_t color);

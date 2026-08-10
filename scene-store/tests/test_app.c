@@ -129,7 +129,7 @@ static void test_present(void)
     struct harness h;
     harness_init(&h);
 
-    scene_node_id content = scene_app_create_window(h.app, 10, 10, 200, 100, "W");
+    (void)scene_app_create_window(h.app, 10, 10, 200, 100, "W");
     CHECK(scene_app_present(h.app) == 0);
     tickf(&h);
 
