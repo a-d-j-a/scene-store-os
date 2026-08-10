@@ -248,19 +248,21 @@ test-dbg: build/test_store_dbg$(EXE)
 
 # wlroots compositor (Linux only)
 ifneq ($(UNAME_S),Windows)
-build/iso_compositor.o: src/iso_compositor.c include/iso_compositor.h include/scene_compositor.h include/scene_fb.h include/scene_client.h include/scene_store.h | build
+build/iso_compositor.o: src/iso_compositor.c include/iso_compositor.h include/scene_compositor.h include/scene_fb.h include/scene_client.h include/scene_store.h include/scene_shell.h | build
 	$(CC) $(CFLAGS) $(shell pkg-config --cflags wlroots wayland-server) -c src/iso_compositor.c -o $@
 
 build/iso_compositor$(EXE): src/iso_compositor.c build/scene_fmt.o build/scene_store.o \
 	build/scene_transport.o build/scene_client.o build/scene_server.o \
 	build/scene_fb.o build/scene_font.o build/scene_font_data.o \
 	build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
+	build/scene_wallpaper.o build/scene_image.o \
 	build/iso_compositor.o | build
 	$(CC) $(CFLAGS) $(shell pkg-config --cflags --libs wlroots wayland-server) \
 		src/iso_compositor.c build/scene_fmt.o build/scene_store.o \
 		build/scene_transport.o build/scene_client.o build/scene_server.o \
 		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
 		build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
+		build/scene_wallpaper.o build/scene_image.o \
 		-lwayland-server -lpthread -o $@
 
 iso-compositor: build/iso_compositor$(EXE)

@@ -12,6 +12,7 @@
 
 #include "scene_store.h"
 #include "scene_compositor.h"
+#include "scene_shell.h"
 
 typedef struct iso_server iso_server;
 
@@ -25,5 +26,6 @@ void iso_server_destroy(iso_server *srv);
 /* Access the underlying scene store (for tests / tooling).                  */
 scene_store     *iso_server_store(iso_server *srv);
 scene_compositor *iso_server_scene_comp(iso_server *srv);
+scene_shell     *iso_server_shell(iso_server *srv);
 
 #endif /* ISO_COMPOSITOR_H */

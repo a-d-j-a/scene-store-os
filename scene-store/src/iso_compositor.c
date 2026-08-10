@@ -1,10 +1,10 @@
 /* iso_compositor.c — custom wlroots compositor integrating the scene engine.
  *
  * Architecture:
- *   wlroots          →  Wayland protocol, output, input, GPU
- *   iso_compositor   →  maps wlroots surfaces ↔ scene-store ops
- *   scene_compositor →  software-renders the semantic scene to a framebuffer
- *   wlroots output   ←  presents the framebuffer
+ *   wlroots          ->  Wayland protocol, output, input, GPU
+ *   iso_compositor   ->  maps wlroots surfaces to scene-store ops
+ *   scene_compositor ->  software-renders the semantic scene to a framebuffer
+ *   wlroots output   <-  presents the framebuffer
  *
  * The scene_compositor owns both the store and the server seam.
  * wlroots client frames are fed into scene_server_feed().
@@ -15,6 +15,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 #include "iso_compositor.h"
+#include "scene_shell.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -42,12 +43,13 @@
  * ====================================================================== */
 
 /* Per-client-surface state: maps a wlroots surface to a scene-store node.
- * The scene-store node is created by the shell client (iso_compositor) and
+ * The scene-store node is created by the shell (iso_compositor) and
  * populated by the actual Wayland client's frame data fed through
  * scene_server_feed().                                                     */
 typedef struct iso_surface {
     struct wlr_surface    *wlr_surf;
     scene_node_id          node_id;
+    struct iso_server     *server;     /* back-pointer for client/comp access */
     struct wl_listener     on_map;
     struct wl_listener     on_unmap;
     struct wl_listener     on_commit;
@@ -78,11 +80,18 @@ struct iso_server {
     scene_transport         *server_ts;      /* server end (fed into server) */
     scene_client            *shell_client;
 
+    /* desktop shell (optional, for themed shell) */
+    scene_shell             *shell;
+    scene_shell_config       shell_cfg;
+
     /* tracked surfaces */
     struct wl_list           surfaces;  /* iso_surface.link */
 
     /* next node ID for wlroots-mapped surfaces */
     uint32_t                 next_node_id;
+
+    /* output dimensions */
+    uint32_t                 width, height;
 
     /* listeners */
     struct wl_listener      on_new_output;
@@ -92,11 +101,14 @@ struct iso_server {
     struct wl_listener      on_cursor_button;
     struct wl_listener      on_keyboard_key;
     struct wl_listener      on_request_set_cursor;
+
+    /* per-output frame listener (dynamic, attached on output creation) */
+    struct wl_listener      on_frame;
 };
 
 /* Shell node IDs (owned by the compositor, not by clients). */
-#define ISO_SHELL_DESKTOP   ((scene_node_id){ .id = 1 })
-#define ISO_SHELL_PANEL     ((scene_node_id){ .id = 2 })
+#define ISO_SHELL_DESKTOP   1u
+#define ISO_SHELL_PANEL     2u
 
 /* wlroots-surface node IDs start here. */
 #define ISO_NODE_BASE  1000u
@@ -105,54 +117,82 @@ struct iso_server {
 #define ISO_DESKTOP_COLOR  0xFF1A1A1Au
 
 /* ======================================================================
- * Shell: desktop background + panel
+ * Server pump: flush shell client, drain server responses
  * ====================================================================== */
 
-static void shell_resize(iso_server *srv, uint32_t w, uint32_t h)
+static void server_pump(iso_server *srv)
 {
-    scene_client *c = srv->shell_client;
-    int32_t panel_h = 36;
+    scene_client *sc = srv->shell_client;
+    scene_server *ss = scene_compositor_server(srv->scene_comp);
 
-    scene_rect desktop_r = { 0, 0, (int32_t)w, (int32_t)h };
-    scene_client_set_rect(c, ISO_SHELL_DESKTOP, &desktop_r);
+    scene_client_flush(sc);
 
-    scene_rect panel_r = { 0, (int32_t)h - panel_h, (int32_t)w, panel_h };
-    scene_client_set_rect(c, ISO_SHELL_PANEL, &panel_r);
+    uint8_t buf[8192];
+    uint32_t got;
+    while (scene_transport_recv(srv->server_ts, buf, sizeof(buf), &got) == 0
+           && got) {
+        scene_server_feed(ss, buf, got);
+    }
+
+    const uint8_t *f;
+    uint32_t flen;
+    while (scene_server_out_next_frame(ss, &f, &flen) == 1)
+        scene_transport_send(srv->server_ts, f, flen);
+
+    scene_client_pump(sc);
 }
+
+/* ======================================================================
+ * Shell: desktop background + panel (fallback without scene_shell)
+ * ====================================================================== */
 
 static void shell_create_desktop(iso_server *srv)
 {
     scene_client *c = srv->shell_client;
-    scene_rect r = { 0, 0, 1920, 1080 };
+    scene_rect r = { 0, 0, (int32_t)srv->width, (int32_t)srv->height };
 
     scene_client_create_node(c, SCENE_NO_PARENT, ISO_SHELL_DESKTOP,
                              SCENE_ROLE_WINDOW, &r, SCENE_FLAG_VISIBLE);
-    /* Style: solid dark fill, no border. */
     scene_client_set_style(c, ISO_SHELL_DESKTOP, 0);
 }
 
 static void shell_create_panel(iso_server *srv)
 {
     scene_client *c = srv->shell_client;
-    scene_rect r = { 0, 1044, 1920, 36 };
+    int32_t ph = 36;
+    scene_rect r = { 0, (int32_t)srv->height - ph,
+                     (int32_t)srv->width, ph };
 
     scene_client_create_node(c, ISO_SHELL_DESKTOP, ISO_SHELL_PANEL,
                              SCENE_ROLE_PANEL, &r, SCENE_FLAG_VISIBLE);
 }
 
+static void shell_resize(iso_server *srv, uint32_t w, uint32_t h)
+{
+    scene_client *c = srv->shell_client;
+    int32_t ph = 36;
+
+    scene_rect desktop_r = { 0, 0, (int32_t)w, (int32_t)h };
+    scene_client_set_rect(c, ISO_SHELL_DESKTOP, &desktop_r);
+
+    scene_rect panel_r = { 0, (int32_t)h - ph, (int32_t)w, ph };
+    scene_client_set_rect(c, ISO_SHELL_PANEL, &panel_r);
+}
+
 /* ======================================================================
- * Surface ↔ scene-store mapping
+ * Surface to scene-store mapping
  * ====================================================================== */
 
 static void surface_update_rect(iso_surface *surf)
 {
+    struct wlr_surface *ws = surf->wlr_surf;
     scene_rect r = {
-        surf->wlr_surf->current.x,
-        surf->wlr_surf->current.y,
-        surf->wlr_surf->current.width,
-        surf->wlr_surf->current.height
+        ws->current.x,
+        ws->current.y,
+        ws->current.width,
+        ws->current.height
     };
-    scene_client_set_rect(surf->shell_client, surf->node_id, &r);
+    scene_client_set_rect(surf->server->shell_client, surf->node_id, &r);
 }
 
 static void surface_update_texture(iso_surface *surf)
@@ -168,22 +208,20 @@ static void surface_update_texture(iso_surface *surf)
     uint32_t ph = ws->current.height;
     if (pw == 0 || ph == 0) return;
 
-    /* Read pixels from the GPU texture into CPU memory. */
     void *pixels = calloc((size_t)pw * (size_t)ph, 4);
     if (!pixels) return;
 
     wlr_texture_read_pixels(tex, WL_OUTPUT_FORMAT_ARGB8888,
                             0, 0, pw, ph, pixels);
 
-    /* Register as a texture in the scene compositor. */
-    scene_texture_ref tex_ref = surf->node_id.id;
-    scene_compositor_register_texture(surf->scene_comp, tex_ref,
+    scene_texture_ref tex_ref = surf->node_id;
+    scene_compositor_register_texture(surf->server->scene_comp, tex_ref,
                                       pw, ph,
                                       1, /* SCENE_TEX_FMT_ARGB */
                                       0, /* not opaque */
                                       (const uint32_t *)pixels);
-    scene_client_set_texture(surf->shell_client, surf->node_id,
-                             tex_ref, NULL, 0xFF, 255);
+    scene_client_set_texture(surf->server->shell_client, surf->node_id,
+                             tex_ref, NULL, 1, 255);
 
     free(pixels);
 }
@@ -195,8 +233,8 @@ static void on_surface_map(struct wl_listener *l, void *data)
     iso_surface *surf = wl_container_of(l, surf, on_map);
     (void)data;
     surface_update_rect(surf);
-    scene_client_set_flags(surf->shell_client, surf->node_id,
-                           SCENE_FLAG_VISIBLE);
+    scene_client_set_flags(surf->server->shell_client, surf->node_id,
+                           SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
     surface_update_texture(surf);
 }
 
@@ -204,7 +242,7 @@ static void on_surface_unmap(struct wl_listener *l, void *data)
 {
     iso_surface *surf = wl_container_of(l, surf, on_unmap);
     (void)data;
-    scene_client_set_flags(surf->shell_client, surf->node_id, 0);
+    scene_client_set_flags(surf->server->shell_client, surf->node_id, 0);
 }
 
 static void on_surface_commit(struct wl_listener *l, void *data)
@@ -226,7 +264,7 @@ static void on_surface_destroy(struct wl_listener *l, void *data)
     wl_list_remove(&surf->on_destroy.link);
     wl_list_remove(&surf->link);
 
-    scene_client_destroy_node(surf->shell_client, surf->node_id);
+    scene_client_destroy_node(surf->server->shell_client, surf->node_id);
     free(surf);
 }
 
@@ -236,18 +274,15 @@ static iso_surface *iso_surface_create(iso_server *srv,
     iso_surface *surf = calloc(1, sizeof(*surf));
     if (!surf) return NULL;
 
-    surf->wlr_surf     = ws;
-    surf->shell_client = srv->shell_client;
-    surf->scene_comp   = srv->scene_comp;
-    surf->node_id      = (scene_node_id){ .id = srv->next_node_id++ };
+    surf->wlr_surf  = ws;
+    surf->server    = srv;
+    surf->node_id   = srv->next_node_id++;
 
-    /* Create a scene-store node for this surface.
-     * Parent = desktop background. Role = WINDOW.                          */
     scene_rect r = {
         ws->current.x, ws->current.y,
         ws->current.width, ws->current.height
     };
-    scene_client_create_node(surf->shell_client,
+    scene_client_create_node(srv->shell_client,
                              ISO_SHELL_DESKTOP, surf->node_id,
                              SCENE_ROLE_WINDOW, &r, 0);
 
@@ -268,43 +303,28 @@ static iso_surface *iso_surface_create(iso_server *srv,
  * Output: present our framebuffer
  * ====================================================================== */
 
-static struct wl_listener on_frame_listener;
-
 static void on_output_frame(struct wl_listener *l, void *data)
 {
-    iso_server *srv = wl_container_of(l, srv, on_new_output);
+    iso_server *srv = wl_container_of(l, srv, on_frame);
     struct wlr_output *output = data;
+    (void)output;
 
-    /* Flush shell client ops (desktop/panel creation, updates). */
-    scene_client_flush(srv->shell_client);
+    /* Update shell (clock, task list, wallpaper). */
+    if (srv->shell)
+        scene_shell_tick(srv->shell);
 
-    /* Pump any pending server responses (WELCOME, etc.). */
-    uint8_t buf[8192];
-    uint32_t got;
-    while (scene_transport_recv(srv->server_ts, buf, sizeof(buf), &got) == 0
-           && got) {
-        scene_server_feed(scene_compositor_server(srv->scene_comp), buf, got);
-    }
-
-    /* Drain outbound frames from the server (if any). */
-    const uint8_t *f;
-    uint32_t flen;
-    while (scene_server_out_next_frame(scene_compositor_server(srv->scene_comp),
-                                       &f, &flen) == 1)
-        scene_transport_send(srv->server_ts, f, flen);
-
-    /* Pump the shell client to process any server replies. */
-    scene_client_pump(srv->shell_client);
+    /* Flush shell client ops and drain server responses. */
+    server_pump(srv);
 
     /* Compose one frame: diff, effects, repaint. */
     scene_compositor_frame(srv->scene_comp);
 
     /* Read back the framebuffer and present to the output. */
     const scene_fb *fb = scene_compositor_fb(srv->scene_comp);
+    if (!fb || !fb->px || fb->w == 0 || fb->h == 0) return;
+
     uint32_t fb_w = fb->w;
     uint32_t fb_h = fb->h;
-    const void *pixels = fb->px;
-    if (!pixels || fb_w == 0 || fb_h == 0) return;
 
     struct wlr_render_pass *pass =
         wlr_output_begin_render_pass(output, NULL);
@@ -315,7 +335,7 @@ static void on_output_frame(struct wl_listener *l, void *data)
         WL_OUTPUT_FORMAT_ARGB8888,
         fb_w * 4,
         fb_w, fb_h,
-        pixels);
+        fb->px);
     if (!tex) {
         wlr_render_pass_submit(pass);
         return;
@@ -333,7 +353,7 @@ static void on_output_frame(struct wl_listener *l, void *data)
 }
 
 /* ======================================================================
- * Input: cursor + keyboard → scene store
+ * Input: cursor + keyboard to scene store
  * ====================================================================== */
 
 static void on_cursor_motion(struct wl_listener *l, void *data)
@@ -344,11 +364,15 @@ static void on_cursor_motion(struct wl_listener *l, void *data)
     wlr_cursor_move(srv->cursor, &evt->pointer->base,
                     evt->delta_x, evt->delta_y);
 
-    scene_compositor_input_pointer(srv->scene_comp,
-                                   0,
+    /* Forward to shell for hover tracking. */
+    if (srv->shell)
+        scene_shell_handle_pointer(srv->shell,
                                    (int32_t)srv->cursor->x,
-                                   (int32_t)srv->cursor->y,
-                                   0);
+                                   (int32_t)srv->cursor->y, 0);
+
+    scene_compositor_input_pointer(srv->scene_comp, 0,
+                                   (int32_t)srv->cursor->x,
+                                   (int32_t)srv->cursor->y, 0);
 }
 
 static void on_cursor_button(struct wl_listener *l, void *data)
@@ -356,13 +380,22 @@ static void on_cursor_button(struct wl_listener *l, void *data)
     iso_server *srv = wl_container_of(l, srv, on_cursor_button);
     struct wlr_pointer_button_event *evt = data;
 
-    if (evt->state == WL_POINTER_BUTTON_STATE_PRESSED) {
-        scene_compositor_input_pointer(srv->scene_comp,
-                                       0,
-                                       (int32_t)srv->cursor->x,
-                                       (int32_t)srv->cursor->y,
-                                       0x01);
+    uint8_t btns = (evt->state == WL_POINTER_BUTTON_STATE_PRESSED) ? 0x01 : 0;
+
+    /* Forward to shell for click handling. */
+    if (srv->shell) {
+        scene_node_id hit = scene_shell_handle_pointer(
+            srv->shell,
+            (int32_t)srv->cursor->x,
+            (int32_t)srv->cursor->y, btns);
+        if (hit != 0 && btns) {
+            scene_shell_handle_activate(srv->shell, hit);
+        }
     }
+
+    scene_compositor_input_pointer(srv->scene_comp, 0,
+                                   (int32_t)srv->cursor->x,
+                                   (int32_t)srv->cursor->y, btns);
 }
 
 static void on_keyboard_key(struct wl_listener *l, void *data)
@@ -390,6 +423,12 @@ static void on_keyboard_key(struct wl_listener *l, void *data)
     uint32_t key_code = evt->keycode - 8;
     uint8_t state = (evt->state == WL_KEYBOARD_KEY_STATE_PRESSED) ? 1 : 0;
 
+    /* Forward to shell for Alt+Tab, Escape, etc. */
+    if (srv->shell && state) {
+        if (scene_shell_handle_key(srv->shell, key_code, state, mod))
+            return;
+    }
+
     scene_compositor_input_key(srv->scene_comp, key_code, state, mod);
 }
 
@@ -412,19 +451,38 @@ static void on_new_output(struct wl_listener *l, void *data)
     struct wlr_output *output = data;
 
     wlr_output_layout_add(srv->output_layout, output, 0, 0);
-    wlr_output_commit_state(output, &(struct wlr_output_state){});
+
+    struct wlr_output_state state = { 0 };
+    wlr_output_state_set_enabled(&state, true);
+    struct wlr_output_mode *mode = wlr_output_get_preferred_mode(output);
+    if (mode)
+        wlr_output_state_set_mode(&state, mode);
+    wlr_output_commit_state(output, &state);
     srv->output = output;
 
-    /* Resize shell to match actual output. */
-    struct wlr_output_mode *mode = wlr_output_get_mode(output);
+    /* Get output dimensions. */
     if (mode) {
-        shell_resize(srv, (uint32_t)mode->width, (uint32_t)mode->height);
+        srv->width  = (uint32_t)mode->width;
+        srv->height = (uint32_t)mode->height;
+    } else {
+        srv->width  = 1920;
+        srv->height = 1080;
+    }
+
+    /* Resize scene engine to match output. */
+    scene_compositor_resize(srv->scene_comp, srv->width, srv->height);
+
+    /* Resize shell. */
+    if (srv->shell) {
+        scene_shell_resize(srv->shell, (int32_t)srv->width,
+                           (int32_t)srv->height);
+    } else {
+        shell_resize(srv, srv->width, srv->height);
     }
 
     /* Attach the frame listener to this output. */
-    static struct wl_listener frame_listener;
-    frame_listener.notify = on_output_frame;
-    wl_signal_add(&output->events.frame, &frame_listener);
+    srv->on_frame.notify = on_output_frame;
+    wl_signal_add(&output->events.frame, &srv->on_frame);
 }
 
 static void on_new_xdg_surface(struct wl_listener *l, void *data)
@@ -448,7 +506,7 @@ static void on_new_input(struct wl_listener *l, void *data)
         wlr_cursor_set_xcursor(srv->cursor, srv->cursor_mgr, "default");
         break;
     case WLR_INPUT_DEVICE_KEYBOARD:
-        /* TODO: set up keyboard keymap, repeat rate, etc. */
+        wlr_seat_set_keyboard(srv->seat, dev);
         break;
     default:
         break;
@@ -527,38 +585,32 @@ iso_server *iso_server_create(void)
     srv->shell_client = scene_client_new();
     if (!srv->shell_client) goto fail;
 
-    /* Connect the shell client to the server through the loopback. */
     if (scene_client_connect(srv->shell_client, srv->shell_ts,
                              "iso-shell", &(scene_client_cbs){0}, srv) != 0)
         goto fail;
 
     /* Pump the WELCOME response. */
-    {
-        uint8_t buf[8192];
-        uint32_t got;
-        scene_client_flush(srv->shell_client);
-        while (scene_transport_recv(srv->server_ts, buf, sizeof(buf), &got) == 0
-               && got) {
-            scene_server_feed(scene_compositor_server(srv->scene_comp),
-                              buf, got);
-        }
-        const uint8_t *f;
-        uint32_t flen;
-        while (scene_server_out_next_frame(
-                   scene_compositor_server(srv->scene_comp),
-                   &f, &flen) == 1)
-            scene_transport_send(srv->server_ts, f, flen);
-        scene_client_pump(srv->shell_client);
-    }
+    server_pump(srv);
 
     /* ---- Create desktop shell nodes ---- */
 
-    shell_create_desktop(srv);
-    shell_create_panel(srv);
+    /* Use themed shell if available, otherwise fallback. */
+    scene_shell_config_defaults(&srv->shell_cfg);
+    (void)scene_shell_config_load(&srv->shell_cfg, "/etc/shell.conf");
 
-    /* ---- Set desktop background color ---- */
+    srv->shell = scene_shell_new(srv->shell_client,
+                                 scene_compositor_store(srv->scene_comp),
+                                 srv->scene_comp,
+                                 &srv->shell_cfg);
+    if (srv->shell) {
+        /* Shell build creates its own nodes and calls apply_theme. */
+        scene_shell_build(srv->shell, 1920, 1080);
+        scene_compositor_set_effects(srv->scene_comp, 1);
+    } else {
+        /* Fallback: bare desktop + panel. */
+        shell_create_desktop(srv);
+        shell_create_panel(srv);
 
-    {
         scene_style bg_style = {
             .fill     = ISO_DESKTOP_COLOR,
             .border   = 0,
@@ -589,11 +641,13 @@ iso_server *iso_server_create(void)
     wl_signal_add(&srv->cursor->events.button, &srv->on_cursor_button);
 
     srv->on_keyboard_key.notify   = on_keyboard_key;
+    wl_signal_add(&srv->seat->events.key, &srv->on_keyboard_key);
 
     srv->on_request_set_cursor.notify = on_request_set_cursor;
     wl_signal_add(&srv->seat->events.request_set_cursor,
                   &srv->on_request_set_cursor);
 
+    wlr_log(WLR_INFO, "iso-compositor: server created");
     return srv;
 
 fail:
@@ -605,21 +659,20 @@ void iso_server_destroy(iso_server *srv)
 {
     if (!srv) return;
 
-    /* Destroy tracked surfaces. */
+    if (srv->shell) scene_shell_free(srv->shell);
+
     iso_surface *surf, *tmp;
     wl_list_for_each_safe(surf, tmp, &srv->surfaces, link) {
-        scene_client_destroy_node(surf->shell_client, surf->node_id);
+        scene_client_destroy_node(surf->server->shell_client, surf->node_id);
         free(surf);
     }
 
-    /* Destroy scene engine + shell client. */
     if (srv->shell_client) scene_client_free(srv->shell_client);
     if (srv->shell_ts)     scene_transport_close(srv->shell_ts);
     if (srv->server_ts)    scene_transport_close(srv->server_ts);
     if (srv->loopback)     scene_loopback_free(srv->loopback);
     if (srv->scene_comp)   scene_compositor_free(srv->scene_comp);
 
-    /* Destroy wlroots objects. */
     if (srv->cursor_mgr) wlr_xcursor_manager_destroy(srv->cursor_mgr);
     if (srv->cursor)     wlr_cursor_destroy(srv->cursor);
     if (srv->wl_display) wl_display_destroy(srv->wl_display);
@@ -635,6 +688,11 @@ scene_store *iso_server_store(iso_server *srv)
 scene_compositor *iso_server_scene_comp(iso_server *srv)
 {
     return srv ? srv->scene_comp : NULL;
+}
+
+scene_shell *iso_server_shell(iso_server *srv)
+{
+    return srv ? srv->shell : NULL;
 }
 
 /* ======================================================================

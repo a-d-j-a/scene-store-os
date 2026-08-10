@@ -231,6 +231,9 @@ build_scene_store() {
     local SSRC="$(cd "$(dirname "$0")/.." && pwd)/scene-store"
     [ -d "$SSRC" ] || die "scene-store source not found at $SSRC"
     cd "$SSRC"
+    # Force full rebuild: stale .o files from previous commits cause
+    # subtle alpha/rendering bugs (seen live: 87% opacity on themed elements).
+    rm -f build/*.o
     make build/iso_drm CC="$MUSL_GCC" \
         CFLAGS="-std=c11 -Wall -Wextra -O2 -Iinclude" || die "iso_drm build failed"
     mkdir -p "$SYSROOT/usr/bin"
