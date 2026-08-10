@@ -22,3 +22,4 @@ sleep 120
 echo "screendump /tmp/scr4.png" | socat - unix-connect:/tmp/qmon.sock
 cp /tmp/serial.log /tmp/scr4.png /workspaces/scene-store-os/
 echo CMD_CYCLE_12_DONE
+# cycle-12 re-push nudge
