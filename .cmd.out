@@ -1,4 +1,5 @@
 [1;32m>>> === Phase 5: Building scene-store ===[0m
+/workspaces/scene-store-os/iso/build/sysroot/bin/musl-gcc -std=c11 -Wall -Wextra -O2 -Iinclude -c src/scene_shell.c -o build/scene_shell.o
 /workspaces/scene-store-os/iso/build/sysroot/bin/musl-gcc -std=c11 -Wall -Wextra -O2 -Iinclude src/iso_drm.c build/scene_fmt.o build/scene_store.o \
 	build/scene_transport.o build/scene_client.o build/scene_server.o \
 	build/scene_fb.o build/scene_font.o build/scene_font_data.o \
@@ -19,18 +20,18 @@ Drive current: -outdev 'stdio:/workspaces/scene-store-os/iso/output/iso-custom-6
 Media current: stdio file, overwriteable
 Media status : is blank
 Media summary: 0 sessions, 0 data blocks, 0 data, 16.8g free
-Added to ISO image: directory '/'='/tmp/grub.v73OUB'
+Added to ISO image: directory '/'='/tmp/grub.ow03Ni'
 xorriso : UPDATE :     295 files added in 1 seconds
 Added to ISO image: directory '/'='/workspaces/scene-store-os/iso/build/iso_root'
 xorriso : UPDATE :     300 files added in 1 seconds
 xorriso : NOTE : Copying to System Area: 512 bytes from file '/usr/lib/grub/i386-pc/boot_hybrid.img'
-xorriso : UPDATE :  93.00% done
-ISO image produced: 12490 sectors
-Written to medium : 12490 sectors at LBA 0
+xorriso : UPDATE : Thank you for being patient. Working since 0 seconds.
+ISO image produced: 12491 sectors
+Written to medium : 12491 sectors at LBA 0
 Writing to 'stdio:/workspaces/scene-store-os/iso/output/iso-custom-6.6.52.iso' completed successfully.
 
 [1;32m>>> ISO created: /workspaces/scene-store-os/iso/output/iso-custom-6.6.52.iso[0m
--rw-rw-rw- 1 root root 25M Aug 10 11:42 /workspaces/scene-store-os/iso/output/iso-custom-6.6.52.iso
+-rw-rw-rw- 1 root root 25M Aug 10 12:01 /workspaces/scene-store-os/iso/output/iso-custom-6.6.52.iso
 QEMU 8.2.2 monitor - type 'help' for more information
 (qemu) s[K[Dsc[K[D[Dscr[K[D[D[Dscre[K[D[D[D[Dscree[K[D[D[D[D[Dscreen[K[D[D[D[D[D[Dscreend[K[D[D[D[D[D[D[Dscreendu[K[D[D[D[D[D[D[D[Dscreendum[K[D[D[D[D[D[D[D[D[Dscreendump[K[D[D[D[D[D[D[D[D[D[Dscreendump [K[D[D[D[D[D[D[D[D[D[D[Dscreendump /[K[D[D[D[D[D[D[D[D[D[D[D[Dscreendump /t[K[D[D[D[D[D[D[D[D[D[D[D[D[Dscreendump /tm[K[D[D[D[D[D[D[D[D[D[D[D[D[D[Dscreendump /tmp[K[D[D[D[D[D[D[D[D[D[D[D[D[D[D[Dscreendump /tmp/[K[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[Dscreendump /tmp/s[K[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[Dscreendump /tmp/sc[K[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[Dscreendump /tmp/scr[K[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[Dscreendump /tmp/scr4[K[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[Dscreendump /tmp/scr4.[K[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[Dscreendump /tmp/scr4.p[K[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[Dscreendump /tmp/scr4.pn[K[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[D[Dscreendump /tmp/scr4.png[K
-(qemu) CMD_CYCLE_10_DONE
+(qemu) CMD_CYCLE_11_DONE
