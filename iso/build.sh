@@ -393,8 +393,10 @@ build_iso() {
     cp "$INITRD" "$ISOROOT/boot/"
 
     # grub.cfg: single source of truth is iso/grub.cfg (tracked in repo).
+    # Regex notes: [0-9.]* would swallow the trailing dot of "6.6.52." —
+    # use version-then-(.digits)+ so "initramfs-6.6.52.cpio.gz" keeps the dot.
     cp "$SCRIPT_DIR/grub.cfg" "$ISOROOT/boot/grub/grub.cfg"
-    sed -i "s/vmlinuz-[0-9.]*/vmlinuz-${KVER}/g; s/initramfs-[0-9.]*/initramfs-${KVER}/g" \
+    sed -i "s/vmlinuz-[0-9]\+\(\.[0-9]\+\)\+/vmlinuz-${KVER}/g; s/initramfs-[0-9]\+\(\.[0-9]\+\)\+/initramfs-${KVER}/g" \
         "$ISOROOT/boot/grub/grub.cfg"
 
     if command -v grub-mkrescue >/dev/null 2>&1; then
