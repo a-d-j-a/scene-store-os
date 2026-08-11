@@ -310,6 +310,20 @@ static void cb_launch(void *ud, uint32_t idx, const char *name)
         fprintf(stderr, "iso-drm: spawned '%s' pid=%u\n", name, pid);
 }
 
+/* Autostart: apps listed with --autolaunch=NAME on the command line are
+ * spawned once the launcher is up (kernel cmdline autolaunch=NAME tokens
+ * are forwarded by the init script). */
+#define MAX_AUTOLAUNCH 4
+static const char *g_autolaunch[MAX_AUTOLAUNCH];
+static int g_autolaunch_n;
+
+static void autolaunch_each(ctx *c)
+{
+    int i;
+    for (i = 0; i < g_autolaunch_n; i++)
+        cb_launch(c, (uint32_t)i, g_autolaunch[i]);
+}
+
 /* ======================================================================
  * Main loop plumbing: pump the shell client + compose + present
  * ====================================================================== */
@@ -410,8 +424,15 @@ static void on_signal(int s) { (void)s; g_run = 0; }
 int main(int argc, char **argv)
 {
     const char *card = "/dev/dri/card0";
-    (void)argc;
-    if (argc > 2 && strcmp(argv[1], "--drm") == 0) card = argv[2];
+    int i;
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--drm") == 0 && i + 1 < argc) {
+            card = argv[++i];
+        } else if (strncmp(argv[i], "--autolaunch=", 13) == 0) {
+            if (g_autolaunch_n < MAX_AUTOLAUNCH)
+                g_autolaunch[g_autolaunch_n++] = argv[i] + 13;
+        }
+    }
 
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
@@ -547,6 +568,7 @@ int main(int argc, char **argv)
     c.launcher = scene_launcher_new(c.cp, NULL, &launcher_cbs, &c);
     if (!c.launcher) return 1;
     scene_shell_set_launch_cb(c.sh, cb_launch, &c);
+    autolaunch_each(&c);
     pump_shell(&c);
     fprintf(stderr, "iso-drm: scene nodes=%u\n",
             scene_store_node_count(scene_compositor_store(c.cp)));

@@ -320,7 +320,15 @@ export TERM=xterm-256color
 chvt 7 2>/dev/null || chvt 1 2>/dev/null || true
 if [ -x /usr/bin/iso-drm ]; then
     echo "Starting iso-drm compositor..."
-    exec /usr/bin/iso-drm
+    # Forward autolaunch=NAME kernel cmdline tokens to iso-drm so apps
+    # can be started at login (headless test path: no input needed).
+    AUTOLAUNCH=""
+    for tok in $(cat /proc/cmdline); do
+        case "$tok" in
+            autolaunch=*) AUTOLAUNCH="$AUTOLAUNCH --autolaunch=${tok#autolaunch=}" ;;
+        esac
+    done
+    exec /usr/bin/iso-drm $AUTOLAUNCH
 fi
 echo "No compositor found. Dropping to shell."
 exec /bin/sh
