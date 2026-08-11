@@ -4,6 +4,9 @@
  * Runs a child shell via bidirectional pipe, maintains a text buffer,
  * renders into a scene content node.
  */
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "scene_terminal.h"
 #include <stdlib.h>
 #include <string.h>
