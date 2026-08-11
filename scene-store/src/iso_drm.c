@@ -342,16 +342,20 @@ static void dbg_line(ctx *c, const fb_buf *bufs, int cur,
     uint32_t nd = scene_compositor_damage(c->cp, dr, 8);
     uint32_t fb_w = scene_fb_get(fb, 150, 150) & 0xFFFFFFu;
     uint32_t fb_b = scene_fb_get(fb, 170, 175) & 0xFFFFFFu;
-    uint32_t db_w = 0xFFFFFFu;
-    if (bufs[cur].map && mode->hdisplay > 150 && mode->vdisplay > 175)
+    uint32_t db_w = 0xFFFFFFu, db_o = 0xFFFFFFu;
+    if (bufs[cur].map && mode->hdisplay > 150 && mode->vdisplay > 175) {
         db_w = *(uint32_t *)((uint8_t *)bufs[cur].map +
                              (size_t)150 * bufs[cur].pitch + (size_t)150 * 4)
                & 0xFFFFFFu;
+        db_o = *(uint32_t *)((uint8_t *)bufs[1 - cur].map +
+                             (size_t)150 * bufs[1 - cur].pitch + (size_t)150 * 4)
+               & 0xFFFFFFu;
+    }
     fprintf(stderr,
             "iso-drm: D frames=%llu anims=%u damage=%u pxFb=0x%06X/0x%06X "
-            "pxDumb=0x%06X flips=%llu/%llu cur=%d\n",
+            "pxDumb=0x%06X/0x%06X flips=%llu/%llu cur=%d\n",
             g_frames, scene_compositor_anim_count(c->cp), nd, fb_w, fb_b,
-            db_w, g_flips_ok, g_flips_fail, cur);
+            db_w, db_o, g_flips_ok, g_flips_fail, cur);
 }
 
 /* ======================================================================
@@ -374,30 +378,19 @@ static void pump_shell(ctx *c)
     scene_client_pump(c->cli);
 }
 
-/* Copy damage rects from the scene framebuffer into the dumb buffer.
- * fb pixels: premult ARGB uint32; XRGB8888: same byte order, alpha = X. */
-static void blit_damage(const scene_fb *fb, fb_buf *b,
-                        const scene_rect *rects, uint32_t n)
+/* Present the whole framebuffer. The double-buffer scheme MUST NOT patch
+ * damage rects into the back buffer: the back buffer holds the content
+ * from two flips ago (each buffer alternates), so patching only the new
+ * damage resurrects stale pixels from the older state — observed on the
+ * ISO as the app window frozen at the enter animation's t=7 alpha after
+ * a later shell repaint re-presented the stale buffer. A full copy per
+ * damaged frame is cheap at desktop sizes (4 MB @ 60 Hz) and correct by
+ * construction; damage-based present can return with a proper
+ * per-buffer accumulation scheme. */
+static void present_full(const scene_fb *fb, fb_buf *bufs, int back,
+                         size_t fb_bytes)
 {
-    uint32_t fb_pitch = fb->w * 4;
-    uint32_t dst_pitch = b->pitch;
-    uint32_t i, r;
-    for (r = 0; r < n; r++) {
-        int32_t x0 = rects[r].x, y0 = rects[r].y;
-        int32_t x1 = x0 + rects[r].w, y1 = y0 + rects[r].h;
-        if (x0 < 0) x0 = 0;
-        if (y0 < 0) y0 = 0;
-        if (x1 > (int32_t)fb->w) x1 = fb->w;
-        if (y1 > (int32_t)fb->h) y1 = fb->h;
-        if (x0 >= x1 || y0 >= y1) continue;
-        for (i = (uint32_t)y0; i < (uint32_t)y1; i++) {
-            memcpy((uint8_t *)b->map + (size_t)i * dst_pitch +
-                   (size_t)x0 * 4,
-                   (const uint8_t *)fb->px + (size_t)i * fb_pitch +
-                   (size_t)x0 * 4,
-                   (size_t)(x1 - x0) * 4);
-        }
-    }
+    memcpy(bufs[back].map, fb->px, fb_bytes);
 }
 
 /* ======================================================================
@@ -698,14 +691,15 @@ int main(int argc, char **argv)
         if (nd > 0 || scene_compositor_anim_count(c.cp) > 0) {
             int back = 1 - cur;
             const scene_fb *fb = scene_compositor_fb(c.cp);
-            blit_damage(fb, &bufs[back], drects, nd);
+            present_full(fb, bufs, back,
+                         (size_t)mode.hdisplay * 4 * mode.vdisplay);
             if (drm_page_flip(fd, crtc_id, bufs[back].fb_id) == 0) {
                 g_flips_ok++;
                 cur = back;
             } else {
                 g_flips_fail++;
                 /* no flip possible: refresh the current buffer in place,
-                 * and the back buffer too so its next patch starts from
+                 * and the back buffer too so its next present starts from
                  * this state (otherwise it holds stale pixels) */
                 memcpy(bufs[cur].map, fb->px,
                        (size_t)mode.hdisplay * 4 * mode.vdisplay);
