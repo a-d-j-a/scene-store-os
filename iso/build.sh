@@ -80,6 +80,7 @@ install_prereqs() {
         cpio gzip xz-utils \
         xorriso grub-pc-bin grub-common mtools \
         autoconf automake libtool ca-certificates \
+        scdoc \
         2>/dev/null || true
     msg "Host prerequisites installed."
 }
@@ -315,7 +316,9 @@ build_apk() {
     # No autotools: apk-tools 2.14 is plain make + bundled libfetch; the
     # src/Makefile pulls openssl/zlib flags via pkg-config, so pin them
     # to the sysroot explicitly (command-line vars beat := in-make).
-    make -C src install DESTDIR="$SYSROOT" \
+    # The root make must drive the build (obj is set per-subdir); the
+    # docs need scdoc (installed in install_prereqs), LUA is optional.
+    make -j"$JOBS" \
         CC="$MUSL_GCC_SHARED" LUA=no \
         CFLAGS="-O2 -I$SYSROOT/usr/include" \
         LDFLAGS="-L$SYSROOT/usr/lib" \
@@ -324,6 +327,15 @@ build_apk() {
         ZLIB_CFLAGS="-I$SYSROOT/usr/include" \
         ZLIB_LIBS="-L$SYSROOT/usr/lib -lz" \
         || die "apk build failed"
+    make install DESTDIR="$SYSROOT" \
+        CC="$MUSL_GCC_SHARED" LUA=no \
+        CFLAGS="-O2 -I$SYSROOT/usr/include" \
+        LDFLAGS="-L$SYSROOT/usr/lib" \
+        OPENSSL_CFLAGS="-I$SYSROOT/usr/include" \
+        OPENSSL_LIBS="-L$SYSROOT/usr/lib -lssl -lcrypto" \
+        ZLIB_CFLAGS="-I$SYSROOT/usr/include" \
+        ZLIB_LIBS="-L$SYSROOT/usr/lib -lz" \
+        || die "apk install failed"
     # Alpine's signing key from the official alpine-keys package, so apk
     # verifies repository signatures out of the box (no --allow-untrusted).
     local IDXURL="https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/APKINDEX.tar.gz"
