@@ -388,8 +388,8 @@ static void anim_clear_all(scene_compositor *cp, scene_layer *ly)
 /* Copy the node's committed texts into the render entry. The store lets
  * a destroyed node's texts die with it, so the model keeps its own copy
  * to feed the exit fade. Copy only when the signature actually moved.  */
-static void rn_text_capture(scene_compositor *cp, scene_layer *ly,
-                            scene_rnode *rn, scene_node_id id)
+static void rn_text_capture(scene_layer *ly, scene_rnode *rn,
+                            scene_node_id id)
 {
     scene_node_text_vis t[SCENE_COMPOSITOR_TEXT_CAP];
     char *p;
@@ -833,7 +833,7 @@ static int diff_cb(scene_node_id id, void *out)
         rn->opacity = v.opacity;
         rn->sig = text_sig(ly, id);
         memcpy(rn->rect, v.rect, sizeof(rn->rect));
-        rn_text_capture(cp, ly, rn, id);
+        rn_text_capture(ly, rn, id);
         if (cp->effects_on && !anim_replaying(ly)
             && (v.flags & SCENE_FLAG_VISIBLE)
             && v.rect[2] > 0 && v.rect[3] > 0) {
@@ -871,7 +871,7 @@ static int diff_cb(scene_node_id id, void *out)
         }
     }
     if (rn->sig != sig)
-        rn_text_capture(cp, ly, rn, id);
+        rn_text_capture(ly, rn, id);
 
     /* Damage the old and/or new rect exactly as needed: a content-only
      * change (same rect) damages once; a move damages old+new.        */
@@ -1070,11 +1070,16 @@ int scene_compositor_add_session(scene_compositor *cp, scene_server *sv)
     return (int)cp->ly_count - 1;
 }
 
-int scene_compositor_remove_session(scene_compositor *cp, int layer)
+int scene_compositor_remove_session(scene_compositor *cp, scene_server *sv)
 {
     uint32_t i;
+    uint32_t layer;
 
-    if (!cp || layer <= 0 || (uint32_t)layer >= cp->ly_count) return -1;
+    if (!cp || !sv) return -1;
+    for (i = 1; i < cp->ly_count; i++)
+        if (cp->ly[i].sv == sv) break;
+    if (i == cp->ly_count) return -1;
+    layer = i;
     layer_free(&cp->ly[layer]);
     for (i = (uint32_t)layer + 1u; i < cp->ly_count; i++)
         cp->ly[i - 1u] = cp->ly[i];
@@ -1082,7 +1087,7 @@ int scene_compositor_remove_session(scene_compositor *cp, int layer)
     memset(&cp->ly[cp->ly_count], 0, sizeof(*cp->ly));
     if (cp->focus_layer >= cp->ly_count) cp->focus_layer = 0;
     cp->force = 1;   /* the removed layer's area repaints as the desktop */
-    return 0;
+    return (int)layer;
 }
 
 int scene_compositor_focus_is_shell(scene_compositor *cp)

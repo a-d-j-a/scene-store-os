@@ -86,9 +86,12 @@ scene_server *scene_compositor_server(scene_compositor *cp);
  * success, 0 on failure. The app's store content starts rendering on
  * the next frame (all pre-existing nodes damage in).                  */
 int  scene_compositor_add_session(scene_compositor *cp, scene_server *sv);
-/* Detach and free a session layer (an index from add_session). Layer 0
- * cannot be removed. The layer's area repaints as the desktop.         */
-int  scene_compositor_remove_session(scene_compositor *cp, int layer);
+/* Detach and free the layer hosting `sv`. Layer 0 cannot be removed.
+ * Removal is by server identity, not by layer number: earlier removals
+ * shift the layer array, so stale indices must never be replayed.
+ * Returns the removed layer index, or -1 when no layer hosts `sv`.
+ * The layer's area repaints as the desktop.                              */
+int  scene_compositor_remove_session(scene_compositor *cp, scene_server *sv);
 /* 1 = keyboard focus is on the shell session (layer 0). The host uses
  * this to keep OS-level key grabs (shell hotkeys) away from apps.      */
 int  scene_compositor_focus_is_shell(scene_compositor *cp);

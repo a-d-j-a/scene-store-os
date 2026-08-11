@@ -14,7 +14,7 @@ else
   SOCKLIB =
 endif
 
-all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/iso_preview$(EXE)
+all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE)
 
 build:
 	mkdir -p build
@@ -57,6 +57,9 @@ build/scene_shell.o: src/scene_shell.c include/scene_shell.h include/scene_clien
 
 build/scene_app.o: src/scene_app.c include/scene_app.h include/scene_client.h include/scene_transport.h include/scene_store.h include/scene_fmt.h | build
 	$(CC) $(CFLAGS) -c src/scene_app.c -o $@
+
+build/scene_launcher.o: src/scene_launcher.c include/scene_launcher.h include/scene_compositor.h include/scene_transport.h | build
+	$(CC) $(CFLAGS) -c src/scene_launcher.c -o $@
 
 build/scene_terminal.o: src/scene_terminal.c include/scene_terminal.h include/scene_app.h | build
 	$(CC) $(CFLAGS) -c src/scene_terminal.c -o $@
@@ -152,6 +155,23 @@ build/test_sessions$(EXE): tests/test_sessions.c build/scene_fmt.o \
 		build/scene_compositor.o build/scene_app.o \
 		$(SOCKLIB) -o $@
 
+build/test_launcher$(EXE): tests/test_launcher.c build/scene_fmt.o \
+	build/scene_store.o build/scene_transport.o build/scene_client.o \
+	build/scene_server.o build/scene_fb.o build/scene_font.o \
+	build/scene_font_data.o build/scene_compositor.o build/scene_app.o \
+	build/scene_launcher.o | build
+	$(CC) $(CFLAGS) tests/test_launcher.c build/scene_fmt.o build/scene_store.o \
+		build/scene_transport.o build/scene_client.o build/scene_server.o \
+		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
+		build/scene_compositor.o build/scene_app.o build/scene_launcher.o \
+		$(SOCKLIB) -o $@
+
+build/test_launcher_app$(EXE): tests/test_launcher_app.c build/scene_fmt.o \
+	build/scene_transport.o build/scene_client.o build/scene_app.o | build
+	$(CC) $(CFLAGS) tests/test_launcher_app.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_app.o $(SOCKLIB) -o $@
+
 build/test_settings$(EXE): tests/test_settings.c build/scene_fmt.o build/scene_store.o \
 	build/scene_transport.o build/scene_client.o build/scene_server.o \
 	build/scene_fb.o build/scene_font.o build/scene_font_data.o \
@@ -241,6 +261,9 @@ test-terminal: build/test_terminal$(EXE)
 test-sessions: build/test_sessions$(EXE)
 	./build/test_sessions$(EXE)
 
+test-launcher: build/test_launcher$(EXE)
+	./build/test_launcher$(EXE)
+
 test-settings: build/test_settings$(EXE)
 	./build/test_settings$(EXE)
 
@@ -299,4 +322,4 @@ endif
 clean:
 	rm -rf build
 
-.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-sessions test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm clean
+.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-sessions test-launcher test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm clean

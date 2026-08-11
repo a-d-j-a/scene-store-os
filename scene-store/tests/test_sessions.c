@@ -431,7 +431,7 @@ static void test_remove_session(void)
     tickf(&h);
     CHECK_EQ(PX(h.cp, 250, 150), 0xFF262626u);
 
-    CHECK_EQ(scene_compositor_remove_session(h.cp, 1), 0);
+    CHECK_EQ(scene_compositor_remove_session(h.cp, h.sv1), 1);
     h.app_active = 0;   /* the session is gone: stop feeding it */
     h.sv1 = NULL;
     tickf(&h);

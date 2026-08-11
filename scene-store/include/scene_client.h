@@ -151,6 +151,9 @@ int scene_client_seek(scene_client *c, uint64_t target_seq);
 uint32_t scene_client_scene_id(const scene_client *c);
 uint64_t scene_client_next_seq(const scene_client *c);
 uint64_t scene_client_last_present_seq(const scene_client *c);
+/* 1 = the server's WELCOME has been dispatched on this connection (ops
+ * may be emitted); 0 = not yet (emits are silently refused).           */
+int  scene_client_welcomed(const scene_client *c);
 
 /* ---- §6 snapshot/capture decode ------------------------------------------ */
 

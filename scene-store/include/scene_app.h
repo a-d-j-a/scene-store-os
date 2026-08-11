@@ -34,9 +34,15 @@ typedef struct scene_app_cbs {
 /* ---- lifecycle -------------------------------------------------------- */
 
 /* Create an app connected via the given transport. Takes ownership of t.
- * cbs/ud are called for input events; may be NULL.                       */
+ * cbs/ud are called for input events; may be NULL. Opens the transport
+ * on the loopback target ("local"); use scene_app_new_on for TCP.       */
 scene_app *scene_app_new(scene_transport *t,
                          const scene_app_cbs *cbs, void *ud);
+
+/* Like scene_app_new, but opens the transport on `target` explicitly
+ * (TCP: "127.0.0.1:port"). */
+scene_app *scene_app_new_on(scene_transport *t, const char *target,
+                            const scene_app_cbs *cbs, void *ud);
 
 /* Free the app and its internal state. Does NOT close the transport.     */
 void scene_app_free(scene_app *app);

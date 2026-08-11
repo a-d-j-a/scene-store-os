@@ -106,8 +106,8 @@ static const scene_client_cbs app_cbs = {
 
 /* ---- lifecycle -------------------------------------------------------- */
 
-scene_app *scene_app_new(scene_transport *t,
-                         const scene_app_cbs *cbs, void *ud)
+scene_app *scene_app_new_on(scene_transport *t, const char *target,
+                            const scene_app_cbs *cbs, void *ud)
 {
     scene_app *app = calloc(1, sizeof(*app));
     if (!app) return NULL;
@@ -116,12 +116,18 @@ scene_app *scene_app_new(scene_transport *t,
     app->cbs = cbs;
     app->ud = ud;
     app->next_id = APP_ID_BASE;
-    if (scene_client_connect(app->cl, t, "local", &app_cbs, app) != 0) {
+    if (scene_client_connect(app->cl, t, target, &app_cbs, app) != 0) {
         scene_client_free(app->cl);
         free(app);
         return NULL;
     }
     return app;
+}
+
+scene_app *scene_app_new(scene_transport *t,
+                         const scene_app_cbs *cbs, void *ud)
+{
+    return scene_app_new_on(t, "local", cbs, ud);
 }
 
 void scene_app_free(scene_app *app)

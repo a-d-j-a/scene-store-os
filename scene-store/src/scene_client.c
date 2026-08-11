@@ -700,6 +700,8 @@ uint32_t scene_client_scene_id(const scene_client *c) { return c->scene_id; }
 uint64_t scene_client_next_seq(const scene_client *c) { return c->next_seq; }
 uint64_t scene_client_last_present_seq(const scene_client *c)
 { return c->last_present_seq; }
+int scene_client_welcomed(const scene_client *c)
+{ return c && c->conn_open && c->welcomed && !c->fatal; }
 
 /* ---- §6 snapshot/capture decode --------------------------------------------- */
 

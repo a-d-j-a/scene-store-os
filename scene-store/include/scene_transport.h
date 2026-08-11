@@ -95,4 +95,22 @@ int  scene_tcp_listen(uint16_t port, uint16_t *out_port,
 /* Unblock a running scene_tcp_listen loop from another thread. */
 void scene_tcp_listen_close(void);
 
+/* ---- TCP, non-blocking listener --------------------------------------- */
+
+typedef struct scene_tcp_listener scene_tcp_listener;
+
+/* Bind + listen on `port` (0 = ephemeral; actual port written to
+ * *out_port). The listen socket is non-blocking: scene_tcp_listen_accept
+ * returns NULL when no connection is pending. */
+scene_tcp_listener *scene_tcp_listen_new(uint16_t port, uint16_t *out_port);
+/* Accept a pending connection (NULL = none pending). The returned peer
+ * is a heap transport owned by the caller. */
+scene_transport *scene_tcp_listen_accept(scene_tcp_listener *l);
+void scene_tcp_listen_destroy(scene_tcp_listener *l);
+
+/* Switch a TCP transport to/from non-blocking mode. In non-blocking
+ * mode recv returns 1 (would-block) instead of blocking; the accept
+ * socket of scene_tcp_listen_new is already non-blocking. */
+int scene_tcp_set_nonblock(scene_transport *t, int nb);
+
 #endif /* SCENE_TRANSPORT_H */

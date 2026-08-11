@@ -28,6 +28,7 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 #endif
 
 /* ==================================================================== */
@@ -252,17 +253,40 @@ static int tcp_recv(scene_transport *t, uint8_t *buf, uint32_t cap,
     if (tc->s == SC_SOCK_INVALID) return -1;
 #if defined(_WIN32)
     int n = recv(tc->s, (char *)buf, (int)cap, 0);
-#else
-    ssize_t n = recv(tc->s, buf, cap, 0);
-#endif
     if (n > 0) { *got = (uint32_t)n; return 0; }
     if (n == 0) return -1;        /* peer closed                            */
-    return -1;                    /* error (blocking: no would-block)       */
+    int err = WSAGetLastError();
+    if (err == WSAEWOULDBLOCK || err == WSAEINTR) return 1;  /* would-block */
+    return -1;
+#else
+    ssize_t n = recv(tc->s, buf, cap, 0);
+    if (n > 0) { *got = (uint32_t)n; return 0; }
+    if (n == 0) return -1;        /* peer closed                            */
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+        return 1;                 /* would-block                            */
+    return -1;
+#endif
 }
 
 static const scene_transport_ops tcp_ops = {
     tcp_open, tcp_close, tcp_send, tcp_recv
 };
+
+int scene_tcp_set_nonblock(scene_transport *t, int nb)
+{
+    if (!t || t->ops != &tcp_ops) return -1;
+    tcp_transport *tc = (tcp_transport *)t;
+    if (tc->s == SC_SOCK_INVALID) return -1;
+#if defined(_WIN32)
+    u_long mode = nb ? 1 : 0;
+    return ioctlsocket(tc->s, FIONBIO, &mode) == 0 ? 0 : -1;
+#else
+    int fl = fcntl(tc->s, F_GETFL, 0);
+    if (fl < 0) return -1;
+    fl = nb ? (fl | O_NONBLOCK) : (fl & ~O_NONBLOCK);
+    return fcntl(tc->s, F_SETFL, fl) == 0 ? 0 : -1;
+#endif
+}
 
 scene_transport *scene_tcp_client(const char *target)
 {
@@ -333,4 +357,72 @@ void scene_tcp_listen_close(void)
         g_listen = SC_SOCK_INVALID;
         sc_sock_close(ls);        /* unblocks accept on Windows            */
     }
+}
+
+/* ---- non-blocking listener --------------------------------------------- */
+
+struct scene_tcp_listener {
+    sc_sock s;
+};
+
+scene_tcp_listener *scene_tcp_listen_new(uint16_t port, uint16_t *out_port)
+{
+    if (sc_net_init() != 0) return NULL;
+    struct addrinfo hints, *res = NULL;
+    char portstr[8];
+    snprintf(portstr, sizeof(portstr), "%u", (unsigned)port);
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+    if (getaddrinfo(NULL, portstr, &hints, &res) != 0) return NULL;
+    sc_sock ls = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (ls == SC_SOCK_INVALID) { freeaddrinfo(res); return NULL; }
+    int one = 1;
+#if defined(_WIN32)
+    setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
+#else
+    setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#endif
+    if (bind(ls, res->ai_addr, (int)res->ai_addrlen) != 0) {
+        freeaddrinfo(res);
+        sc_sock_close(ls);
+        return NULL;
+    }
+    struct sockaddr_in sa;
+    socklen_t salen = sizeof(sa);
+    if (getsockname(ls, (struct sockaddr *)&sa, &salen) == 0 && out_port)
+        *out_port = ntohs(sa.sin_port);
+    freeaddrinfo(res);
+    if (listen(ls, 4) != 0) { sc_sock_close(ls); return NULL; }
+#if defined(_WIN32)
+    u_long mode = 1;
+    ioctlsocket(ls, FIONBIO, &mode);
+#else
+    int fl = fcntl(ls, F_GETFL, 0);
+    if (fl >= 0) fcntl(ls, F_SETFL, fl | O_NONBLOCK);
+#endif
+    scene_tcp_listener *l = (scene_tcp_listener *)calloc(1, sizeof(*l));
+    if (!l) { sc_sock_close(ls); return NULL; }
+    l->s = ls;
+    return l;
+}
+
+scene_transport *scene_tcp_listen_accept(scene_tcp_listener *l)
+{
+    if (!l || l->s == SC_SOCK_INVALID) return NULL;
+    sc_sock cs = accept(l->s, NULL, NULL);
+    if (cs == SC_SOCK_INVALID) return NULL;   /* none pending (non-blocking) */
+    tcp_transport *peer = (tcp_transport *)calloc(1, sizeof(*peer));
+    if (!peer) { sc_sock_close(cs); return NULL; }
+    peer->base.ops = &tcp_ops;
+    peer->s = cs;
+    return (scene_transport *)peer;
+}
+
+void scene_tcp_listen_destroy(scene_tcp_listener *l)
+{
+    if (!l) return;
+    if (l->s != SC_SOCK_INVALID) sc_sock_close(l->s);
+    free(l);
 }
