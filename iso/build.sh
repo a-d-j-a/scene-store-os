@@ -295,7 +295,8 @@ build_openssl() {
     local VER="3.0.13"
     extract "$SRC/openssl-${VER}.tar.gz" "$BUILDDIR/openssl-${VER}"
     cd "$BUILDDIR/openssl-${VER}"
-    ./Configure linux-x86_64 --prefix=/usr --openssldir=/etc/ssl shared \
+    ./Configure linux-x86_64 --prefix=/usr --libdir=/usr/lib \
+        --openssldir=/etc/ssl shared \
         -I"$SYSROOT/usr/include" -L"$SYSROOT/usr/lib"
     make -j"$JOBS" CC="$MUSL_GCC_SHARED" || die "openssl build failed"
     make install_sw DESTDIR="$SYSROOT" CC="$MUSL_GCC_SHARED" \
@@ -311,19 +312,32 @@ build_apk() {
     local VER="2.14.4"
     extract "$SRC/apk-tools-v${VER}.tar.gz" "$BUILDDIR/apk-tools-v${VER}"
     cd "$BUILDDIR/apk-tools-v${VER}"
-    autoreconf -fi >/dev/null 2>&1 || die "apk autoreconf failed"
-    ./configure --prefix=/usr --sysconfdir=/etc \
+    # No autotools: apk-tools 2.14 is plain make + bundled libfetch; the
+    # src/Makefile pulls openssl/zlib flags via pkg-config, so pin them
+    # to the sysroot explicitly (command-line vars beat := in-make).
+    make -C src install DESTDIR="$SYSROOT" \
         CC="$MUSL_GCC_SHARED" \
         CFLAGS="-O2 -I$SYSROOT/usr/include" \
         LDFLAGS="-L$SYSROOT/usr/lib" \
-        || die "apk configure failed"
-    make -j"$JOBS" CC="$MUSL_GCC_SHARED" || die "apk build failed"
-    make install DESTDIR="$SYSROOT" CC="$MUSL_GCC_SHARED" \
-        || die "apk install failed"
-    # Alpine's signing key (ships in the apk-tools source) so package
-    # signatures verify against the official repositories.
+        OPENSSL_CFLAGS="-I$SYSROOT/usr/include" \
+        OPENSSL_LIBS="-L$SYSROOT/usr/lib -lssl -lcrypto" \
+        ZLIB_CFLAGS="-I$SYSROOT/usr/include" \
+        ZLIB_LIBS="-L$SYSROOT/usr/lib -lz" \
+        || die "apk build failed"
+    # Alpine's signing key from the official alpine-keys package, so apk
+    # verifies repository signatures out of the box (no --allow-untrusted).
+    local IDXURL="https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/APKINDEX.tar.gz"
+    curl -fsSL "$IDXURL" -o /tmp/apkindex.tar.gz
+    mkdir -p /tmp/apkidx
+    tar -xzf /tmp/apkindex.tar.gz -C /tmp/apkidx
+    local KVER=$(awk '/^P:alpine-keys$/{f=1} f&&/^V:/{print substr($0,3); exit}' /tmp/apkidx/APKINDEX)
+    curl -fsSL "https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/alpine-keys-${KVER}.apk" \
+        -o /tmp/alpine-keys.apk
+    mkdir -p /tmp/alpine-keys
+    tar -xzf /tmp/alpine-keys.apk -C /tmp/alpine-keys
     mkdir -p "$SYSROOT/etc/apk/keys"
-    cp keys/*.rsa.pub "$SYSROOT/etc/apk/keys/" 2>/dev/null || true
+    cp /tmp/alpine-keys/*.rsa.pub "$SYSROOT/etc/apk/keys/"
+    rm -rf /tmp/apkidx /tmp/alpine-keys /tmp/apkindex.tar.gz /tmp/alpine-keys.apk
     cd -
     msg "apk done."
 }
