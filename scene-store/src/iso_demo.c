@@ -12,6 +12,7 @@
  * Flow control: every input event is acked (the gate reopens), so the
  * app keeps receiving at interactive rates.
  */
+#define _POSIX_C_SOURCE 200809L
 #include "scene_app.h"
 
 #include <stdio.h>
