@@ -172,7 +172,9 @@ typedef struct tcp_transport {
     sc_sock s;
 } tcp_transport;
 
+#if defined(_WIN32)
 static int ws_ready;          /* Winsock initialized (Windows)            */
+#endif
 
 static int sc_net_init(void)
 {
