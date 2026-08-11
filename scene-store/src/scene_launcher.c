@@ -65,6 +65,40 @@ struct scene_launcher {
 /* Process spawn (platform)                                              */
 /* ==================================================================== */
 
+#if !defined(_WIN32)
+/* Resolve a command name to an executable path. Paths containing '/'
+ * are used as-is; bare names (menu entries like "iso-demo") are searched
+ * on PATH like the shell does. Returns 0 with the path in out when found.
+ * execl/execv do NOT search PATH — the shell menu hands us bare names. */
+static int resolve_exe(const char *exe, char *out, size_t cap)
+{
+    if (strchr(exe, '/')) {
+        snprintf(out, cap, "%s", exe);
+        return access(out, X_OK) == 0 ? 0 : -1;
+    }
+    const char *path = getenv("PATH");
+    if (!path || !path[0]) {
+        snprintf(out, cap, "%s", exe);
+        return access(out, X_OK) == 0 ? 0 : -1;
+    }
+    size_t plen = strlen(path);
+    char *copy = (char *)malloc(plen + 1);
+    if (!copy) return -1;
+    memcpy(copy, path, plen + 1);
+    char *save = NULL;
+    const char *dir = strtok_r(copy, ":", &save);
+    int found = -1;
+    while (dir) {
+        if (dir[0] == '\0') dir = ".";
+        snprintf(out, cap, "%s/%s", dir, exe);
+        if (access(out, X_OK) == 0) { found = 0; break; }
+        dir = strtok_r(NULL, ":", &save);
+    }
+    free(copy);
+    return found;
+}
+#endif
+
 static int spawn_proc(const char *exe, const char *arg, uint16_t port,
                       uint32_t *out_pid, uintptr_t *out_hproc)
 {
@@ -90,15 +124,18 @@ static int spawn_proc(const char *exe, const char *arg, uint16_t port,
     *out_hproc = (uintptr_t)pi.hProcess;
     return 0;
 #else
+    char resolved[512];
+    if (resolve_exe(exe, resolved, sizeof(resolved)) != 0)
+        return -1;                /* fail before forking: no false success */
     char env[32];
     snprintf(env, sizeof(env), "%u", (unsigned)port);
     pid_t p = fork();
     if (p == 0) {
         setenv("SCENE_STORE_PORT", env, 1);
         if (arg && arg[0])
-            execl(exe, exe, arg, (char *)NULL);
+            execl(resolved, exe, arg, (char *)NULL);
         else
-            execl(exe, exe, (char *)NULL);
+            execl(resolved, exe, (char *)NULL);
         _exit(127);               /* exec failed: the socket never opens */
     }
     if (p < 0) return -1;

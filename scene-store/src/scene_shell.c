@@ -56,6 +56,8 @@ struct scene_shell {
     /* launcher state */
     uint8_t              menu_open;
     uint32_t             last_clock_min;  /* for clock update debounce */
+    scene_shell_launch_fn launch_fn;     /* host app factory hook      */
+    void                 *launch_ud;
 
     /* hover tracking */
     scene_node_id        hovered_id;      /* current node under cursor   */
@@ -267,6 +269,14 @@ void scene_shell_set_hover_style(scene_shell *sh, scene_style_ref ref)
 void scene_shell_set_active_style(scene_shell *sh, scene_style_ref ref)
 {
     if (sh) sh->active_style = ref;
+}
+
+void scene_shell_set_launch_cb(scene_shell *sh, scene_shell_launch_fn fn,
+                               void *ud)
+{
+    if (!sh) return;
+    sh->launch_fn = fn;
+    sh->launch_ud = ud;
 }
 
 /* ---- tree construction ----------------------------------------------- */
@@ -628,11 +638,16 @@ int scene_shell_handle_activate(scene_shell *sh, scene_node_id activated_id)
             for (j = 0; j < sh->cfg.launcher_app_count; j++)
                 emit_flags(sh, ID_MENU_BASE + j, 0);
 
-            /* Launch the app (best-effort, non-blocking) */
-            char cmd[128];
-            snprintf(cmd, sizeof(cmd), "%s &",
-                     sh->cfg.launcher_apps[idx]);
-            (void)system(cmd);
+            /* Launch the app: host hook if set, else shell out */
+            if (sh->launch_fn)
+                sh->launch_fn(sh->launch_ud, idx,
+                              sh->cfg.launcher_apps[idx]);
+            else {
+                char cmd[128];
+                snprintf(cmd, sizeof(cmd), "%s &",
+                         sh->cfg.launcher_apps[idx]);
+                (void)system(cmd);
+            }
         }
         return 1;
     }

@@ -234,10 +234,11 @@ build_scene_store() {
     # Force full rebuild: stale .o files from previous commits cause
     # subtle alpha/rendering bugs (seen live: 87% opacity on themed elements).
     rm -f build/*.o
-    make build/iso_drm CC="$MUSL_GCC" \
+    make build/iso_drm build/iso_demo CC="$MUSL_GCC" \
         CFLAGS="-std=c11 -Wall -Wextra -O2 -Iinclude" || die "iso_drm build failed"
     mkdir -p "$SYSROOT/usr/bin"
     cp build/iso_drm "$SYSROOT/usr/bin/iso-drm"
+    cp build/iso_demo "$SYSROOT/usr/bin/iso-demo"
     cd -
     msg "scene-store done."
 }
@@ -342,6 +343,7 @@ menu_border=0xFF444466
 menu_item_color=0xFF2A2A4E
 menu_item_text=0xFFE8E8E8
 clock_12h=0
+launcher_apps=iso-demo
 CONF
 
     # Overlay (hand-written boot scripts, may override the above)

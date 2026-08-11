@@ -43,6 +43,7 @@
 
 #include "scene_compositor.h"
 #include "scene_shell.h"
+#include "scene_launcher.h"
 #include "scene_client.h"
 #include "scene_transport.h"
 #include "scene_server.h"
@@ -255,6 +256,7 @@ typedef struct ctx {
     scene_transport  *server_ts;
     scene_loopback   *lb;
     scene_transport  *client_ts;
+    scene_launcher   *launcher;
     int               run;
 } ctx;
 
@@ -275,6 +277,38 @@ static const scene_client_cbs shell_cbs = {
     .welcome       = cb_welcome,
     .input_activate = cb_activate,
 };
+
+/* ======================================================================
+ * App launcher callbacks (the shell menu hands spawns to the host)
+ * ====================================================================== */
+
+static void cb_session_added(void *ud, int layer, uint32_t pid)
+{
+    (void)ud;
+    fprintf(stderr, "iso-drm: app %u joined layer %d\n", pid, layer);
+}
+
+static void cb_session_exited(void *ud, int layer, uint32_t pid)
+{
+    (void)ud;
+    fprintf(stderr, "iso-drm: app %u exited layer %d\n", pid, layer);
+}
+
+static const scene_launcher_cbs launcher_cbs = {
+    .session_added  = cb_session_added,
+    .session_exited = cb_session_exited,
+};
+
+static void cb_launch(void *ud, uint32_t idx, const char *name)
+{
+    ctx *c = ud;
+    (void)idx;
+    uint32_t pid = 0;
+    if (scene_launcher_spawn(c->launcher, name, NULL, &pid) != 0)
+        fprintf(stderr, "iso-drm: spawn '%s' failed\n", name);
+    else
+        fprintf(stderr, "iso-drm: spawned '%s' pid=%u\n", name, pid);
+}
 
 /* ======================================================================
  * Main loop plumbing: pump the shell client + compose + present
@@ -507,6 +541,13 @@ int main(int argc, char **argv)
         c.cp, 0xFF2E4E6E, 0xFFE8E8E8);
     if (act) scene_shell_set_active_style(c.sh, act);
     pump_shell(&c);
+
+    /* App launcher: hosts guest app processes as session layers. The
+     * shell's launcher menu spawns through it. */
+    c.launcher = scene_launcher_new(c.cp, NULL, &launcher_cbs, &c);
+    if (!c.launcher) return 1;
+    scene_shell_set_launch_cb(c.sh, cb_launch, &c);
+    pump_shell(&c);
     fprintf(stderr, "iso-drm: scene nodes=%u\n",
             scene_store_node_count(scene_compositor_store(c.cp)));
 
@@ -593,6 +634,7 @@ int main(int argc, char **argv)
 
         pump_shell(&c);
         if (c.sh) scene_shell_tick(c.sh);
+        scene_launcher_pump(c.launcher);
 
         if (scene_compositor_frame(c.cp) != 0)
             break;
@@ -614,6 +656,7 @@ int main(int argc, char **argv)
 
     /* ---- cleanup ---- */
     pump_shell(&c);
+    scene_launcher_free(c.launcher);
     scene_shell_free(c.sh);
     scene_client_free(c.cli);
     scene_transport_close(c.client_ts);

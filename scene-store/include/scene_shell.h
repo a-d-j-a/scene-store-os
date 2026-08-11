@@ -80,6 +80,15 @@ void scene_shell_set_hover_style(scene_shell *sh, scene_style_ref ref);
  * The focused window's task button gets this style.                     */
 void scene_shell_set_active_style(scene_shell *sh, scene_style_ref ref);
 
+/* Launch hook for the launcher menu. Called when a menu item is
+ * activated (idx = item index, name = configured app name). The host
+ * owns the app factory (e.g. scene_launcher_spawn); without a hook the
+ * shell falls back to shelling out: system("name &").                    */
+typedef void (*scene_shell_launch_fn)(void *ud, uint32_t idx,
+                                      const char *name);
+void scene_shell_set_launch_cb(scene_shell *sh, scene_shell_launch_fn fn,
+                               void *ud);
+
 /* Free the shell and its internal state. Does NOT destroy nodes (the
  * client session handles that on close). */
 void scene_shell_free(scene_shell *sh);

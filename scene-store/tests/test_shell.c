@@ -824,6 +824,59 @@ static void test_shell_no_wallpaper_no_compositor(void)
     printf("test_shell_no_wallpaper_no_compositor: ok\n");
 }
 
+/* Launch callback: the host hook fires instead of system(), with the
+ * menu item's index and configured app name. */
+static uint32_t g_launch_calls, g_launch_idx;
+static char     g_launch_name[64];
+
+static void cb_launch(void *ud, uint32_t idx, const char *name)
+{
+    (void)ud;
+    g_launch_calls++;
+    g_launch_idx = idx;
+    snprintf(g_launch_name, sizeof(g_launch_name), "%s", name);
+}
+
+static void test_shell_launch_cb(void)
+{
+    printf("test_shell_launch_cb:\n");
+    struct harness h;
+    harness_init(&h);
+
+    scene_shell_config cfg;
+    scene_shell_config_defaults(&cfg);
+    cfg.launcher_app_count = 1;
+    snprintf(cfg.launcher_apps[0], 64, "demo-app");
+
+    scene_shell *sh = scene_shell_new(h.cl,
+        scene_compositor_store(h.cp), h.cp, &cfg);
+    scene_shell_build(sh, 800, 600);
+    g_launch_calls = g_launch_idx = 0;
+    g_launch_name[0] = '\0';
+    scene_shell_set_launch_cb(sh, cb_launch, NULL);
+
+    /* Open the menu, then activate the item: the cb must fire with
+     * the item's index + name, and the menu must close. */
+    CHECK_EQ(scene_shell_handle_activate(sh, 10002), 1);   /* start btn */
+    tickf(&h);
+    CHECK_EQ(scene_shell_handle_activate(sh, 20000), 1);   /* item 0 */
+    tickf(&h);
+
+    CHECK_EQ(g_launch_calls, 1);
+    CHECK_EQ(g_launch_idx, 0);
+    CHECK(strcmp(g_launch_name, "demo-app") == 0);
+
+    /* Menu closed after launch (items hidden again) */
+    scene_store *s = scene_compositor_store(h.cp);
+    scene_node_vis v;
+    CHECK_EQ(scene_store_node_vis(s, 20000, &v), 0);
+    CHECK_EQ(v.flags & SCENE_FLAG_VISIBLE, 0u);
+
+    scene_shell_free(sh);
+    harness_destroy(&h);
+    printf("test_shell_launch_cb: ok\n");
+}
+
 int main(void)
 {
     test_shell_build();
@@ -846,6 +899,7 @@ int main(void)
     test_shell_wallpaper_config();
     test_shell_wallpaper_resize();
     test_shell_no_wallpaper_no_compositor();
+    test_shell_launch_cb();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -14,7 +14,7 @@ else
   SOCKLIB =
 endif
 
-all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE)
+all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE) build/iso_demo$(EXE)
 
 build:
 	mkdir -p build
@@ -159,16 +159,27 @@ build/test_launcher$(EXE): tests/test_launcher.c build/scene_fmt.o \
 	build/scene_store.o build/scene_transport.o build/scene_client.o \
 	build/scene_server.o build/scene_fb.o build/scene_font.o \
 	build/scene_font_data.o build/scene_compositor.o build/scene_app.o \
-	build/scene_launcher.o | build
-	$(CC) $(CFLAGS) tests/test_launcher.c build/scene_fmt.o build/scene_store.o \
-		build/scene_transport.o build/scene_client.o build/scene_server.o \
-		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
-		build/scene_compositor.o build/scene_app.o build/scene_launcher.o \
+	build/scene_launcher.o build/scene_a11y.o build/scene_shell.o \
+	build/scene_wallpaper.o build/scene_image.o | build
+	$(CC) $(CFLAGS) tests/test_launcher.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_server.o build/scene_fb.o build/scene_font.o \
+		build/scene_font_data.o build/scene_compositor.o build/scene_app.o \
+		build/scene_launcher.o build/scene_a11y.o build/scene_shell.o \
+		build/scene_wallpaper.o build/scene_image.o \
 		$(SOCKLIB) -o $@
 
 build/test_launcher_app$(EXE): tests/test_launcher_app.c build/scene_fmt.o \
 	build/scene_transport.o build/scene_client.o build/scene_app.o | build
 	$(CC) $(CFLAGS) tests/test_launcher_app.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_app.o $(SOCKLIB) -o $@
+
+# Guest app binary: the first app shipped on the ISO (spawned by the
+# launcher; connects over TCP via SCENE_STORE_PORT).
+build/iso_demo$(EXE): src/iso_demo.c build/scene_fmt.o \
+	build/scene_transport.o build/scene_client.o build/scene_app.o | build
+	$(CC) $(CFLAGS) src/iso_demo.c build/scene_fmt.o \
 		build/scene_store.o build/scene_transport.o build/scene_client.o \
 		build/scene_app.o $(SOCKLIB) -o $@
 
@@ -308,12 +319,12 @@ build/iso_drm$(EXE): src/iso_drm.c build/scene_fmt.o build/scene_store.o \
 	build/scene_transport.o build/scene_client.o build/scene_server.o \
 	build/scene_fb.o build/scene_font.o build/scene_font_data.o \
 	build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
-	build/scene_wallpaper.o build/scene_image.o | build
+	build/scene_wallpaper.o build/scene_image.o build/scene_launcher.o | build
 	$(CC) $(CFLAGS) src/iso_drm.c build/scene_fmt.o build/scene_store.o \
 		build/scene_transport.o build/scene_client.o build/scene_server.o \
 		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
 		build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
-		build/scene_wallpaper.o build/scene_image.o \
+		build/scene_wallpaper.o build/scene_image.o build/scene_launcher.o \
 		-lm -lpthread -o $@
 
 iso-drm: build/iso_drm$(EXE)

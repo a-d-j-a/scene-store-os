@@ -15,6 +15,7 @@
  */
 #include "scene_launcher.h"
 #include "scene_client.h"
+#include "scene_shell.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,6 +63,7 @@ struct harness {
     scene_loopback   *lb;       /* layer-0 shell link (owns both ends) */
     scene_transport  *server_ts;
     scene_client     *sh_cl;    /* layer-0 shell client: the desktop   */
+    scene_shell      *sh;       /* desktop shell (NULL in bare harness) */
     int  added_calls;   int added_layer;
     int  exited_calls;  int exited_layer;
     uint32_t added_pid, exited_pid;
@@ -81,6 +83,20 @@ static void cb_exited(void *ud, int layer, uint32_t pid)
     h->exited_calls++;
     h->exited_layer = layer;
     h->exited_pid = pid;
+}
+
+/* Host launch hook for the shell menu (the iso_drm wiring): spawn the
+ * app through the launcher. hook = {sl, exe, out_pid, out_calls}. The
+ * menu hands a NAME; the host resolves it to an executable (here: the
+ * sibling test binary; on the ISO: /usr/bin path lookup). */
+static void cb_launch_menu(void *ud, uint32_t idx, const char *name)
+{
+    (void)idx;
+    struct { scene_launcher *sl; const char *exe;
+             uint32_t *pid; int *calls; } *hook = ud;
+    (void)name;
+    (*hook->calls)++;
+    (void)scene_launcher_spawn(hook->sl, hook->exe, NULL, hook->pid);
 }
 
 /* One driver loop iteration: pump the launcher + the layer-0 shell
@@ -134,6 +150,7 @@ static void harness_init(struct harness *h, uint32_t w, uint32_t hh)
 
 static void harness_destroy(struct harness *h)
 {
+    if (h->sh) scene_shell_free(h->sh);
     scene_launcher_free(h->sl);
     scene_client_free(h->sh_cl);
     scene_compositor_free(h->cp);
@@ -150,7 +167,7 @@ static void pump_n(struct harness *h, int n)
 }
 
 /* Child executable path: argv[0]-relative, then CWD-relative. */
-static const char *child_exe_path(void)
+static const char *sibling_exe_path(const char *name)
 {
     static char path[1024];
     const char *a0 = g_argv0 ? g_argv0 : "";
@@ -163,14 +180,18 @@ static const char *child_exe_path(void)
     if (sep) {
         size_t n = (size_t)(sep - a0) + 1;
         if (n < sizeof(path)) {
-            snprintf(path, sizeof(path), "%.*stest_launcher_app.exe",
-                     (int)n, a0);
+            snprintf(path, sizeof(path), "%.*s%s", (int)n, a0, name);
             FILE *f = fopen(path, "rb");
             if (f) { fclose(f); return path; }
         }
     }
-    snprintf(path, sizeof(path), "test_launcher_app.exe");
+    snprintf(path, sizeof(path), "%s", name);
     return path;
+}
+
+static const char *child_exe_path(void)
+{
+    return sibling_exe_path("test_launcher_app.exe");
 }
 
 /* Pump until the child's window is painted (window fill at 150,150). */
@@ -409,6 +430,134 @@ static void test_shell_survives_app_death(void)
     harness_destroy(&h);
 }
 
+/* The ISO path end-to-end: a REAL desktop shell owns layer 0; the
+ * launcher menu item activates -> the host launch hook spawns the app
+ * process -> it connects back and is composited above the desktop. */
+static void test_menu_launch(void)
+{
+    struct harness h;
+    memset(&h, 0, sizeof(h));
+    h.cp = scene_compositor_new(NULL, 800, 600);
+    CHECK(h.cp != NULL);
+    scene_compositor_set_clear(h.cp, 0xFF101010);
+    scene_launcher_cbs cbs = { cb_added, cb_exited };
+    h.sl = scene_launcher_new(h.cp, NULL, &cbs, &h);
+    CHECK(h.sl != NULL);
+
+    /* Layer 0: a real shell client (the desktop background + panel). */
+    h.lb = scene_loopback_new();
+    h.server_ts = scene_loopback_server_end(h.lb);
+    h.sh_cl = scene_client_new();
+    scene_server_attach(scene_compositor_server(h.cp));
+    scene_client_connect(h.sh_cl, scene_loopback_client_end(h.lb),
+                         "shell", NULL, NULL);
+    tickf(&h);                                   /* WELCOME */
+
+    scene_shell_config cfg;
+    scene_shell_config_defaults(&cfg);
+    cfg.launcher_app_count = 1;
+    snprintf(cfg.launcher_apps[0], 64, "Demo App");
+    h.sh = scene_shell_new(h.sh_cl, scene_compositor_store(h.cp),
+                           h.cp, &cfg);
+    CHECK(h.sh != NULL);
+    CHECK(scene_shell_build(h.sh, 800, 600) == 0);
+    tickf(&h);
+    CHECK(PX(h.cp, 400, 300) == 0xFF1A1A2Eu);    /* shell desktop */
+
+    /* Host launch hook: spawn through the launcher (the exact iso_drm
+     * wiring). The menu name is resolved to the executable path. */
+    static struct { scene_launcher *sl; const char *exe;
+                    uint32_t *pid; int *calls; } hook;
+    static uint32_t s_pid;
+    static int s_calls;
+    s_pid = 0; s_calls = 0;
+    hook.sl = h.sl; hook.exe = child_exe_path();
+    hook.pid = &s_pid; hook.calls = &s_calls;
+    scene_shell_set_launch_cb(h.sh, cb_launch_menu, &hook);
+
+    /* Activate the menu item (id 20000): menu opens first like a real
+     * user click on the start button, then the item click launches. */
+    CHECK_EQ(scene_shell_handle_activate(h.sh, 10002), 1);   /* start */
+    tickf(&h);
+    CHECK_EQ(scene_shell_handle_activate(h.sh, 20000), 1);   /* item */
+    tickf(&h);
+    CHECK_EQ(s_calls, 1);
+    CHECK(s_pid != 0);
+
+    /* The app joins and paints above the desktop. */
+    pump_until_window(&h, 200);
+    CHECK_EQ(h.added_calls, 1);
+    CHECK_EQ(h.added_pid, s_pid);
+    CHECK(h.added_layer >= 1);
+    CHECK(PX(h.cp, 150, 150) == 0xFF202020u);    /* app window fill */
+    CHECK(PX(h.cp, 50, 50) == 0xFF1A1A2Eu);      /* shell desktop intact */
+
+    /* Kill: reaped, desktop repainted. */
+    CHECK(scene_launcher_kill(h.sl, s_pid) == 0);
+    pump_n(&h, 50);
+    CHECK_EQ(h.exited_calls, 1);
+    CHECK_EQ(scene_launcher_session_count(h.sl), 0);
+    pump_n(&h, 10);
+    CHECK(PX(h.cp, 150, 150) == 0xFF1A1A2Eu);
+
+    harness_destroy(&h);
+}
+
+/* The real ISO guest app (iso_demo): spawn it, click its button, and
+ * verify the app process reacted (count logged). This is the exact
+ * binary the launcher menu spawns on the ISO. */
+static void test_iso_demo_app(void)
+{
+    struct harness h;
+    harness_init(&h, 800, 600);
+
+    uint32_t pid = 0;
+    CHECK(scene_launcher_spawn(h.sl, sibling_exe_path("iso_demo.exe"),
+                               "iso_demo.log", &pid) == 0);
+    CHECK(pid != 0);
+
+    /* Wait for the window (120,60,300,220) to paint. */
+    int i;
+    for (i = 0; i < 400 && PX(h.cp, 150, 150) != 0xFF202020u; i++) {
+        tickf(&h);
+        msleep(5);
+    }
+    CHECK_EQ(h.added_calls, 1);
+    CHECK(PX(h.cp, 150, 150) == 0xFF202020u);    /* window fill */
+    CHECK(PX(h.cp, 300, 70) == 0xFF1A1A1Au);     /* titlebar band  */
+    CHECK(PX(h.cp, 170, 175) == 0xFF3C3C3Cu);    /* button fill */
+
+    /* Click the button at its center (196,177): the app must receive
+     * pointer + activate and bump the counter. */
+    scene_compositor_input_pointer(h.cp, 0, 196, 177, 1);
+    pump_n(&h, 30);
+    CHECK_EQ(scene_compositor_focus_is_shell(h.cp), 0);
+
+    FILE *f = fopen("iso_demo.log", "r");
+    CHECK(f != NULL);
+    if (f) {
+        char line[128];
+        int got_start = 0, got_click = 0, got_count1 = 0;
+        while (fgets(line, sizeof(line), f)) {
+            if (strstr(line, "iso-demo: start port=")) got_start = 1;
+            if (strstr(line, "activate id=")) got_click = 1;
+            if (strstr(line, "iso-demo: count=1")) got_count1 = 1;
+        }
+        fclose(f);
+        CHECK_EQ(got_start, 1);
+        CHECK_EQ(got_click, 1);
+        CHECK_EQ(got_count1, 1);
+    }
+    remove("iso_demo.log");
+
+    scene_launcher_kill(h.sl, pid);
+    pump_n(&h, 50);
+    CHECK_EQ(h.exited_calls, 1);
+    CHECK(PX(h.cp, 150, 150) == 0xFF101010u);    /* desktop restored */
+
+    harness_destroy(&h);
+}
+
 int main(int argc, char **argv)
 {
     (void)argc;
@@ -420,6 +569,8 @@ int main(int argc, char **argv)
     test_kill_reap();
     test_spawn_timeout();
     test_shell_survives_app_death();
+    test_menu_launch();
+    test_iso_demo_app();
 
     printf("test_launcher: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
