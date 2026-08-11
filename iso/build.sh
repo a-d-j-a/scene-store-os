@@ -91,7 +91,7 @@ fetch_sources() {
           "$SRC/musl-${MUSLVER}.tar.gz"
     fetch "https://busybox.net/downloads/busybox-${BUSYBOXVER}.tar.bz2" \
           "$SRC/busybox-${BUSYBOXVER}.tar.bz2"
-    fetch "https://zlib.net/zlib-1.3.1.tar.gz" \
+    fetch "https://zlib.net/fossils/zlib-1.3.1.tar.gz" \
           "$SRC/zlib-1.3.1.tar.gz"
     fetch "https://www.openssl.org/source/openssl-3.0.13.tar.gz" \
           "$SRC/openssl-3.0.13.tar.gz"
