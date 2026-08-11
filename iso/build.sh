@@ -316,7 +316,7 @@ build_apk() {
     # src/Makefile pulls openssl/zlib flags via pkg-config, so pin them
     # to the sysroot explicitly (command-line vars beat := in-make).
     make -C src install DESTDIR="$SYSROOT" \
-        CC="$MUSL_GCC_SHARED" \
+        CC="$MUSL_GCC_SHARED" LUA=no \
         CFLAGS="-O2 -I$SYSROOT/usr/include" \
         LDFLAGS="-L$SYSROOT/usr/lib" \
         OPENSSL_CFLAGS="-I$SYSROOT/usr/include" \
