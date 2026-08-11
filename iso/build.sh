@@ -348,7 +348,7 @@ build_apk() {
     mkdir -p /tmp/alpine-keys
     tar -xzf /tmp/alpine-keys.apk -C /tmp/alpine-keys
     mkdir -p "$SYSROOT/etc/apk/keys"
-    cp /tmp/alpine-keys/*.rsa.pub "$SYSROOT/etc/apk/keys/"
+    cp /tmp/alpine-keys/etc/apk/keys/*.rsa.pub "$SYSROOT/etc/apk/keys/"
     rm -rf /tmp/apkidx /tmp/alpine-keys /tmp/apkindex.tar.gz /tmp/alpine-keys.apk
     cd -
     msg "apk done."
