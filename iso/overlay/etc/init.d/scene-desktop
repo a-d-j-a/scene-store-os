@@ -19,9 +19,17 @@ done
 # DRM/KMS compositor (own code, kernel UAPI — the boot path)
 # /dev/console maps to ttyS0 (last console= param), so iso-drm's
 # stdout/stderr land on the serial log automatically.
+# autolaunch=NAME kernel cmdline tokens are forwarded so apps start at
+# login (headless test path: no input needed).
 if [ -x /usr/bin/iso-drm ]; then
     echo "Starting iso-drm compositor..."
-    exec /usr/bin/iso-drm
+    AUTOLAUNCH=""
+    for tok in $(cat /proc/cmdline); do
+        case "$tok" in
+            autolaunch=*) AUTOLAUNCH="$AUTOLAUNCH --autolaunch=${tok#autolaunch=}" ;;
+        esac
+    done
+    exec /usr/bin/iso-drm $AUTOLAUNCH
 fi
 
 # wlroots compositor (alternative backend, if built)
