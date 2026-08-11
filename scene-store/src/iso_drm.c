@@ -212,10 +212,15 @@ static int drm_wait_flip(int fd, int timeout_ms)
     struct pollfd pfd = { .fd = fd, .events = POLLIN };
     int r = poll(&pfd, 1, timeout_ms);
     if (r <= 0) return -1;
-    struct drm_event ev;
-    ssize_t n = read(fd, &ev, sizeof ev);
+    /* Page-flip events are full drm_event_vblank records (32 bytes);
+     * reading only sizeof(struct drm_event) (8) desyncs the event queue
+     * permanently — every later event read fails the type check and the
+     * fd stays readable, spinning the main loop at 100% CPU. */
+    struct drm_event_vblank ev;
+    ssize_t n;
+    do { n = read(fd, &ev, sizeof ev); } while (n < 0 && errno == EINTR);
     if (n < (ssize_t)sizeof ev) return -1;
-    return ev.type == DRM_EVENT_FLIP_COMPLETE ? 0 : -1;
+    return ev.base.type == DRM_EVENT_FLIP_COMPLETE ? 0 : -1;
 }
 
 /* ======================================================================
@@ -324,6 +329,31 @@ static void autolaunch_each(ctx *c)
         cb_launch(c, (uint32_t)i, g_autolaunch[i]);
 }
 
+/* ---- debug diagnostics (--debug on the command line) ---------------- */
+
+static int g_dbg;
+static unsigned long long g_flips_ok, g_flips_fail, g_frames;
+
+static void dbg_line(ctx *c, const fb_buf *bufs, int cur,
+                     const struct drm_mode_modeinfo *mode)
+{
+    const scene_fb *fb = scene_compositor_fb(c->cp);
+    scene_rect dr[8];
+    uint32_t nd = scene_compositor_damage(c->cp, dr, 8);
+    uint32_t fb_w = scene_fb_get(fb, 150, 150) & 0xFFFFFFu;
+    uint32_t fb_b = scene_fb_get(fb, 170, 175) & 0xFFFFFFu;
+    uint32_t db_w = 0xFFFFFFu;
+    if (bufs[cur].map && mode->hdisplay > 150 && mode->vdisplay > 175)
+        db_w = *(uint32_t *)((uint8_t *)bufs[cur].map +
+                             (size_t)150 * bufs[cur].pitch + (size_t)150 * 4)
+               & 0xFFFFFFu;
+    fprintf(stderr,
+            "iso-drm: D frames=%llu anims=%u damage=%u pxFb=0x%06X/0x%06X "
+            "pxDumb=0x%06X flips=%llu/%llu cur=%d\n",
+            g_frames, scene_compositor_anim_count(c->cp), nd, fb_w, fb_b,
+            db_w, g_flips_ok, g_flips_fail, cur);
+}
+
 /* ======================================================================
  * Main loop plumbing: pump the shell client + compose + present
  * ====================================================================== */
@@ -430,6 +460,8 @@ int main(int argc, char **argv)
         } else if (strncmp(argv[i], "--autolaunch=", 13) == 0) {
             if (g_autolaunch_n < MAX_AUTOLAUNCH)
                 g_autolaunch[g_autolaunch_n++] = argv[i] + 13;
+        } else if (strcmp(argv[i], "--debug") == 0) {
+            g_dbg = 1;
         }
     }
 
@@ -586,6 +618,7 @@ int main(int argc, char **argv)
     long next_ms = ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 
     scene_rect drects[32];
+    long last_dbg = 0;
     while (g_run) {
         /* ---- input ---- */
         struct pollfd pfds[MAX_DEV + 1];
@@ -659,6 +692,7 @@ int main(int argc, char **argv)
 
         if (scene_compositor_frame(c.cp) != 0)
             break;
+        g_frames++;
 
         uint32_t nd = scene_compositor_damage(c.cp, drects, 32);
         if (nd > 0 || scene_compositor_anim_count(c.cp) > 0) {
@@ -666,12 +700,22 @@ int main(int argc, char **argv)
             const scene_fb *fb = scene_compositor_fb(c.cp);
             blit_damage(fb, &bufs[back], drects, nd);
             if (drm_page_flip(fd, crtc_id, bufs[back].fb_id) == 0) {
+                g_flips_ok++;
                 cur = back;
             } else {
-                /* no flip possible: blit into the current buffer in place */
+                g_flips_fail++;
+                /* no flip possible: refresh the current buffer in place,
+                 * and the back buffer too so its next patch starts from
+                 * this state (otherwise it holds stale pixels) */
                 memcpy(bufs[cur].map, fb->px,
                        (size_t)mode.hdisplay * 4 * mode.vdisplay);
+                memcpy(bufs[back].map, fb->px,
+                       (size_t)mode.hdisplay * 4 * mode.vdisplay);
             }
+        }
+        if (g_dbg && now - last_dbg >= 1000) {
+            last_dbg = now;
+            dbg_line(&c, bufs, cur, &mode);
         }
     }
 

@@ -558,6 +558,87 @@ static void test_iso_demo_app(void)
     harness_destroy(&h);
 }
 
+/* The ISO loop shape with the REAL guest app: shell menu launch of
+ * iso_demo.exe over real TCP, then 120 frames at the ISO's 16ms gate.
+ * The enter animations must run to completion AND STAY settled — the
+ * QEMU screenshot froze at the t=7 alpha (223 = 7*255/8), i.e. at the
+ * second-to-last animation frame; this test proves the Windows loop
+ * reaches identity and holds it. */
+static void test_iso_settle(void)
+{
+    struct harness h;
+    memset(&h, 0, sizeof(h));
+    h.cp = scene_compositor_new(NULL, 800, 600);
+    CHECK(h.cp != NULL);
+    scene_compositor_set_clear(h.cp, 0xFF101010);
+    scene_compositor_set_effects(h.cp, 1);
+    scene_launcher_cbs cbs = { cb_added, cb_exited };
+    h.sl = scene_launcher_new(h.cp, NULL, &cbs, &h);
+    CHECK(h.sl != NULL);
+
+    h.lb = scene_loopback_new();
+    h.server_ts = scene_loopback_server_end(h.lb);
+    h.sh_cl = scene_client_new();
+    scene_server_attach(scene_compositor_server(h.cp));
+    scene_client_connect(h.sh_cl, scene_loopback_client_end(h.lb),
+                         "shell", NULL, NULL);
+    tickf(&h);
+
+    scene_shell_config cfg;
+    scene_shell_config_defaults(&cfg);
+    cfg.launcher_app_count = 1;
+    snprintf(cfg.launcher_apps[0], 64, "Demo App");
+    h.sh = scene_shell_new(h.sh_cl, scene_compositor_store(h.cp),
+                           h.cp, &cfg);
+    CHECK(h.sh != NULL);
+    CHECK(scene_shell_build(h.sh, 800, 600) == 0);
+    tickf(&h);
+
+    static struct { scene_launcher *sl; const char *exe;
+                    uint32_t *pid; int *calls; } hook;
+    static uint32_t s_pid;
+    static int s_calls;
+    s_pid = 0; s_calls = 0;
+    hook.sl = h.sl; hook.exe = sibling_exe_path("iso_demo.exe");
+    hook.pid = &s_pid; hook.calls = &s_calls;
+    scene_shell_set_launch_cb(h.sh, cb_launch_menu, &hook);
+
+    CHECK_EQ(scene_shell_handle_activate(h.sh, 10002), 1);   /* start */
+    tickf(&h);
+    CHECK_EQ(scene_shell_handle_activate(h.sh, 20000), 1);   /* item */
+    tickf(&h);
+    CHECK_EQ(s_calls, 1);
+    CHECK(s_pid != 0);
+
+    /* Wait for the window, then prove it reaches identity (the ISO
+     * screenshot shows it frozen one tick short: 0xFF1F1F21 at (150,150),
+     * 0xFF383838 at (170,175) — the enter ramp at t=7). */
+    int i;
+    for (i = 0; i < 400 && PX(h.cp, 150, 150) != 0xFF202020u; i++) {
+        tickf(&h);
+        msleep(16);
+    }
+    CHECK(PX(h.cp, 150, 150) == 0xFF202020u);    /* reached identity */
+    CHECK(PX(h.cp, 170, 175) == 0xFF3C3C3Cu);    /* button identity */
+
+    /* 120 more frames at the ISO cadence: the state must hold. */
+    int stuck = 0;
+    for (i = 0; i < 120; i++) {
+        tickf(&h);
+        msleep(16);
+        if (PX(h.cp, 150, 150) != 0xFF202020u) stuck++;
+        if (PX(h.cp, 170, 175) != 0xFF3C3C3Cu) stuck++;
+        if (PX(h.cp, 300, 70) != 0xFF1A1A1Au) stuck++;
+    }
+    CHECK_EQ(stuck, 0);
+
+    scene_launcher_kill(h.sl, s_pid);
+    pump_n(&h, 50);
+    CHECK_EQ(h.exited_calls, 1);
+
+    harness_destroy(&h);
+}
+
 int main(int argc, char **argv)
 {
     (void)argc;
@@ -571,6 +652,7 @@ int main(int argc, char **argv)
     test_shell_survives_app_death();
     test_menu_launch();
     test_iso_demo_app();
+    test_iso_settle();
 
     printf("test_launcher: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

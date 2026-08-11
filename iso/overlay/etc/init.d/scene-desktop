@@ -27,6 +27,7 @@ if [ -x /usr/bin/iso-drm ]; then
     for tok in $(cat /proc/cmdline); do
         case "$tok" in
             autolaunch=*) AUTOLAUNCH="$AUTOLAUNCH --autolaunch=${tok#autolaunch=}" ;;
+            iso-debug) AUTOLAUNCH="$AUTOLAUNCH --debug" ;;
         esac
     done
     exec /usr/bin/iso-drm $AUTOLAUNCH
