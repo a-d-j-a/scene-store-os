@@ -24,8 +24,12 @@
 #include <windows.h>
 static void msleep(unsigned m) { Sleep(m); }
 #else
-#include <unistd.h>
-static void msleep(unsigned m) { usleep(m * 1000); }
+#include <time.h>
+static void msleep(unsigned m)
+{
+    struct timespec ts = { (time_t)(m / 1000), (long)(m % 1000) * 1000000L };
+    nanosleep(&ts, NULL);
+}
 #endif
 
 static scene_app *g_app;
