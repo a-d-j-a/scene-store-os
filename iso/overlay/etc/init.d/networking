@@ -1,0 +1,30 @@
+#!/bin/sh
+# networking - bring up the first wired NIC with DHCP, then optionally
+# run the pkgtest=PKG cmdline gate (package-manager proof on serial).
+# Runs from rcS before the desktop starts; logs to the serial console.
+
+export PATH=/usr/bin:/bin:/sbin:/usr/sbin
+
+for iface in $(ls /sys/class/net 2>/dev/null | grep -v '^lo$'); do
+    ifconfig "$iface" up 2>/dev/null || true
+    # -b: background if no lease (never blocks boot), -q: quit after lease
+    udhcpc -i "$iface" -b -q >/dev/null 2>&1 || true
+    IP=$(ip addr show "$iface" 2>/dev/null | grep 'inet ' | awk '{print $2}')
+    echo "network: $iface up ${IP:-no lease}"
+done
+
+for tok in $(cat /proc/cmdline 2>/dev/null); do
+    case "$tok" in
+        pkgtest=*)
+            PKG="${tok#pkgtest=}"
+            echo "network: pkgtest: apk add --no-cache $PKG"
+            if apk add --no-cache "$PKG" >/dev/null 2>&1; then
+                echo "network: pkgtest: $PKG installed OK"
+            else
+                echo "network: pkgtest: $PKG FAILED"
+            fi
+            ;;
+    esac
+done
+
+exit 0

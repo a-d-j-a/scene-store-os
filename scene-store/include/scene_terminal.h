@@ -38,6 +38,9 @@ int scene_terminal_pump(scene_terminal *term);
 /* Get the current line count. */
 int32_t scene_terminal_line_count(const scene_terminal *term);
 
+/* Get the absolute index of the first visible line (scroll origin). */
+int32_t scene_terminal_view_top(const scene_terminal *term);
+
 /* Get a line of text (caller must free). Returns NULL on error. */
 char *scene_terminal_line(const scene_terminal *term, int32_t row);
 

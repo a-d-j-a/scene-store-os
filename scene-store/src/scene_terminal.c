@@ -19,6 +19,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <pty.h>
 #endif
 
 #define MAX_LINES 1024
@@ -174,6 +175,35 @@ static void drain_win32(scene_terminal *term)
 
 static int spawn_shell_posix(scene_terminal *term)
 {
+    int master = -1, slave = -1;
+    /* A real PTY: the shell gets a tty, so it prints a prompt, echoes
+     * input, and does line editing — a pipe-based stdin is not a tty
+     * and busybox ash refuses all three. */
+    if (openpty(&master, &slave, NULL, NULL, NULL) == 0) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            close(master); close(slave);
+            return -1;
+        }
+        if (pid == 0) {
+            close(master);
+            dup2(slave, STDIN_FILENO);
+            dup2(slave, STDOUT_FILENO);
+            dup2(slave, STDERR_FILENO);
+            close(slave);
+            setenv("TERM", "scene", 1);
+            execl("/bin/sh", "sh", NULL);
+            _exit(127);
+        }
+        close(slave);
+        term->child_write_fd = master;
+        term->child_read_fd  = master;
+        term->child_pid = pid;
+        int flags = fcntl(master, F_GETFL, 0);
+        fcntl(master, F_SETFL, flags | O_NONBLOCK);
+        return 0;
+    }
+
     int in_pipe[2], out_pipe[2];
     if (pipe(in_pipe) != 0 || pipe(out_pipe) != 0) return -1;
 
@@ -400,6 +430,15 @@ int scene_terminal_pump(scene_terminal *term)
 int32_t scene_terminal_line_count(const scene_terminal *term)
 {
     return term ? term->line_count : 0;
+}
+
+int32_t scene_terminal_view_top(const scene_terminal *term)
+{
+    if (!term) return 0;
+    int32_t top = term->view_top;
+    if (top + term->cfg.rows > term->line_count)
+        top = term->line_count - term->cfg.rows;
+    return top < 0 ? 0 : top;
 }
 
 char *scene_terminal_line(const scene_terminal *term, int32_t row)

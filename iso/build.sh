@@ -75,6 +75,7 @@ install_prereqs() {
         gcc make flex bison bc libelf-dev \
         cpio gzip xz-utils \
         xorriso grub-pc-bin grub-common mtools \
+        autoconf automake libtool ca-certificates \
         2>/dev/null || true
     msg "Host prerequisites installed."
 }
@@ -90,6 +91,12 @@ fetch_sources() {
           "$SRC/musl-${MUSLVER}.tar.gz"
     fetch "https://busybox.net/downloads/busybox-${BUSYBOXVER}.tar.bz2" \
           "$SRC/busybox-${BUSYBOXVER}.tar.bz2"
+    fetch "https://zlib.net/zlib-1.3.1.tar.gz" \
+          "$SRC/zlib-1.3.1.tar.gz"
+    fetch "https://www.openssl.org/source/openssl-3.0.13.tar.gz" \
+          "$SRC/openssl-3.0.13.tar.gz"
+    fetch "https://gitlab.alpinelinux.org/alpine/apk-tools/-/archive/v2.14.4/apk-tools-v2.14.4.tar.gz" \
+          "$SRC/apk-tools-v2.14.4.tar.gz"
 
     msg "All sources fetched."
 }
@@ -125,8 +132,13 @@ WRAPPER
 
 # ---- phase 3: build kernel -------------------------------------------------
 build_kernel() {
-    if [ -f "$SYSROOT/boot/vmlinuz-${KVER}" ]; then
-        msg "kernel cached (vmlinuz-${KVER} present), skipping"
+    # Config fingerprint: rebuild the kernel only when the config lines
+    # in this script change (cached vmlinuz otherwise).
+    local CFG_FP="$(grep '^    scripts/config' "$SCRIPT_DIR/build.sh" | sha256sum | cut -d' ' -f1)"
+    if [ -f "$SYSROOT/boot/vmlinuz-${KVER}" ] && \
+       [ -f "$SYSROOT/boot/.kconfig-fp" ] && \
+       [ "$(cat "$SYSROOT/boot/.kconfig-fp")" = "$CFG_FP" ]; then
+        msg "kernel cached (config unchanged), skipping"
         return 0
     fi
     msg "=== Phase 3: Building kernel ==="
@@ -184,6 +196,22 @@ build_kernel() {
     scripts/config --enable OVERLAY_FS
     scripts/config --enable SQUASHFS
     scripts/config --enable SQUASHFS_ZSTD
+
+    # Networking: wired NICs built-in (the ISO loads no modules)
+    scripts/config --enable ETHERNET
+    scripts/config --enable NET_VENDOR_INTEL
+    scripts/config --enable E1000          # QEMU e1000 + many real NICs
+    scripts/config --enable E1000E
+    scripts/config --enable NET_VENDOR_REALTEK
+    scripts/config --enable RTL8139        # QEMU rtl8139 + older real NICs
+    scripts/config --enable R8169          # Realtek Gigabit Ethernet
+    scripts/config --enable VIRTIO
+    scripts/config --enable VIRTIO_PCI
+    scripts/config --enable VIRTIO_NET     # QEMU virtio-net
+    scripts/config --enable USB_NET_DRIVERS
+    scripts/config --enable USB_NET_AX8817X  # USB ethernet (ASIX)
+    scripts/config --enable USB_NET_RTL8152  # USB ethernet (Realtek)
+
     scripts/config --disable SECURITY
     scripts/config --disable DEBUG_INFO
 
@@ -193,6 +221,7 @@ build_kernel() {
     make modules_install INSTALL_MOD_PATH="$SYSROOT" || die "modules_install failed"
     mkdir -p "$SYSROOT/boot"
     cp arch/x86/boot/bzImage "$SYSROOT/boot/vmlinuz-${KVER}"
+    echo "$CFG_FP" > "$SYSROOT/boot/.kconfig-fp"
     cd -
     msg "Kernel done."
 }
@@ -209,6 +238,11 @@ build_busybox() {
     sed -i 's/# CONFIG_FEATURE_SH_STANDALONE is not set/CONFIG_FEATURE_SH_STANDALONE=y/' .config
     sed -i 's/# CONFIG_FEATURE_MOUNT_LOOP is not set/CONFIG_FEATURE_MOUNT_LOOP=y/' .config
     sed -i 's/# CONFIG_FEATURE_MOUNT_LOOP_CREATE is not set/CONFIG_FEATURE_MOUNT_LOOP_CREATE=y/' .config
+    # Networking applets (DHCP client, wget for apk bootstrap, ping, nc)
+    sed -i 's/# CONFIG_UDHCPC is not set/CONFIG_UDHCPC=y/' .config
+    sed -i 's/# CONFIG_WGET is not set/CONFIG_WGET=y/' .config
+    sed -i 's/# CONFIG_PING is not set/CONFIG_PING=y/' .config
+    sed -i 's/# CONFIG_NC is not set/CONFIG_NC=y/' .config
     # vi needs sigsetjmp, which musl only exposes as a macro under
     # _GNU_SOURCE — disable it (not needed on the ISO) to kill the
     # classic busybox-on-musl link failure for good.
@@ -224,6 +258,62 @@ build_busybox() {
     msg "busybox done."
 }
 
+# ---- phase 4.5: zlib (apk runtime dependency) -------------------------------
+build_zlib() {
+    msg "=== Phase 4.5: Building zlib ==="
+    setup_musl_gcc
+    local VER="1.3.1"
+    extract "$SRC/zlib-${VER}.tar.gz" "$BUILDDIR/zlib-${VER}"
+    cd "$BUILDDIR/zlib-${VER}"
+    ./configure --prefix=/usr
+    make -j"$JOBS" CC="$MUSL_GCC" LDSHARED="$MUSL_GCC -shared" \
+        || die "zlib build failed"
+    make install DESTDIR="$SYSROOT" CC="$MUSL_GCC" \
+        LDSHARED="$MUSL_GCC -shared" || die "zlib install failed"
+    cd -
+    msg "zlib done."
+}
+
+# ---- phase 4.6: openssl (HTTPS for apk repositories) ------------------------
+build_openssl() {
+    msg "=== Phase 4.6: Building OpenSSL ==="
+    setup_musl_gcc
+    local VER="3.0.13"
+    extract "$SRC/openssl-${VER}.tar.gz" "$BUILDDIR/openssl-${VER}"
+    cd "$BUILDDIR/openssl-${VER}"
+    ./Configure linux-x86_64 --prefix=/usr --openssldir=/etc/ssl shared \
+        -I"$SYSROOT/usr/include" -L"$SYSROOT/usr/lib"
+    make -j"$JOBS" CC="$MUSL_GCC" || die "openssl build failed"
+    make install_sw DESTDIR="$SYSROOT" CC="$MUSL_GCC" \
+        || die "openssl install failed"
+    cd -
+    msg "openssl done."
+}
+
+# ---- phase 4.7: apk-tools (the package manager) -----------------------------
+build_apk() {
+    msg "=== Phase 4.7: Building apk-tools ==="
+    setup_musl_gcc
+    local VER="2.14.4"
+    extract "$SRC/apk-tools-v${VER}.tar.gz" "$BUILDDIR/apk-tools-v${VER}"
+    cd "$BUILDDIR/apk-tools-v${VER}"
+    autoreconf -fi >/dev/null 2>&1 || die "apk autoreconf failed"
+    ./configure --prefix=/usr --sysconfdir=/etc \
+        CC="$MUSL_GCC" \
+        CFLAGS="-O2 -I$SYSROOT/usr/include" \
+        LDFLAGS="-L$SYSROOT/usr/lib" \
+        || die "apk configure failed"
+    make -j"$JOBS" CC="$MUSL_GCC" || die "apk build failed"
+    make install DESTDIR="$SYSROOT" CC="$MUSL_GCC" \
+        || die "apk install failed"
+    # Alpine's signing key (ships in the apk-tools source) so package
+    # signatures verify against the official repositories.
+    mkdir -p "$SYSROOT/etc/apk/keys"
+    cp keys/*.rsa.pub "$SYSROOT/etc/apk/keys/" 2>/dev/null || true
+    cd -
+    msg "apk done."
+}
+
 # ---- phase 5: build scene-store (engine + DRM compositor) ------------------
 build_scene_store() {
     msg "=== Phase 5: Building scene-store ==="
@@ -234,11 +324,12 @@ build_scene_store() {
     # Force full rebuild: stale .o files from previous commits cause
     # subtle alpha/rendering bugs (seen live: 87% opacity on themed elements).
     rm -f build/*.o
-    make build/iso_drm build/iso_demo CC="$MUSL_GCC" \
+    make build/iso_drm build/iso_demo build/iso_terminal CC="$MUSL_GCC" \
         CFLAGS="-std=c11 -Wall -Wextra -O2 -Iinclude" || die "iso_drm build failed"
     mkdir -p "$SYSROOT/usr/bin"
     cp build/iso_drm "$SYSROOT/usr/bin/iso-drm"
     cp build/iso_demo "$SYSROOT/usr/bin/iso-demo"
+    cp build/iso_terminal "$SYSROOT/usr/bin/iso-terminal"
     cd -
     msg "scene-store done."
 }
@@ -306,6 +397,9 @@ mkdir -p /run/user/0 /run/user/1000
 chown 0:0 /run/user/0
 chown 1000:1000 /run/user/1000
 chmod 700 /run/user/0 /run/user/1000
+if [ -x /etc/init.d/networking ]; then
+    /etc/init.d/networking start 2>/dev/null || true
+fi
 echo "ISO Linux starting scene desktop..."
 exec /etc/init.d/scene-desktop
 RCS
@@ -351,8 +445,19 @@ menu_border=0xFF444466
 menu_item_color=0xFF2A2A4E
 menu_item_text=0xFFE8E8E8
 clock_12h=0
-launcher_apps=iso-demo
+launcher_apps=iso-terminal,iso-demo
 CONF
+
+    # Package manager: official Alpine repositories + CA trust bundle
+    mkdir -p "$R/etc/apk"
+    cat > "$R/etc/apk/repositories" <<'REPO'
+https://dl-cdn.alpinelinux.org/alpine/latest-stable/main
+https://dl-cdn.alpinelinux.org/alpine/latest-stable/community
+REPO
+    if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
+        mkdir -p "$R/etc/ssl/certs"
+        cp /etc/ssl/certs/ca-certificates.crt "$R/etc/ssl/certs/"
+    fi
 
     # Overlay (hand-written boot scripts, may override the above)
     cp -a "$(dirname "$0")/overlay/"* "$R/" 2>/dev/null || true
@@ -376,6 +481,10 @@ build_initramfs() {
     # Drop build-only artifacts
     rm -rf "$TMP/usr/include" "$TMP/boot" "$TMP/usr/lib/pkgconfig" \
            "$TMP/usr/share/man" 2>/dev/null || true
+    # Static libs are build-time only; strip the shared ones (saves MB)
+    find "$TMP/usr/lib" -name '*.a' -delete 2>/dev/null || true
+    find "$TMP/usr/lib" -type f -name 'lib*.so*' \
+        -exec strip --strip-unneeded {} \; 2>/dev/null || true
 
     cat > "$TMP/init" <<'INIT'
 #!/bin/sh
@@ -439,7 +548,7 @@ case "${1:-}" in
     fetch)     fetch_sources ;;
     musl)      install_prereqs; fetch_sources; build_musl ;;
     kernel)    install_prereqs; fetch_sources; build_musl; build_kernel ;;
-    busybox)   install_prereqs; fetch_sources; build_musl; build_kernel; build_busybox ;;
+    busybox)   install_prereqs; fetch_sources; build_musl; build_kernel; build_busybox; build_zlib; build_openssl; build_apk ;;
     scene)     build_scene_store ;;
     rootfs)    assemble_rootfs ;;
     initramfs) build_initramfs ;;
