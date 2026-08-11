@@ -424,8 +424,7 @@ static void on_signal(int s) { (void)s; g_run = 0; }
 int main(int argc, char **argv)
 {
     const char *card = "/dev/dri/card0";
-    int i;
-    for (i = 1; i < argc; i++) {
+    for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--drm") == 0 && i + 1 < argc) {
             card = argv[++i];
         } else if (strncmp(argv[i], "--autolaunch=", 13) == 0) {
