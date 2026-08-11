@@ -278,10 +278,10 @@ build_zlib() {
     extract "$SRC/zlib-${VER}.tar.gz" "$BUILDDIR/zlib-${VER}"
     cd "$BUILDDIR/zlib-${VER}"
     ./configure --prefix=/usr
-    make -j"$JOBS" CC="$MUSL_GCC" \
+    make -j"$JOBS" CC="$MUSL_GCC_SHARED" \
         LDSHARED="$MUSL_GCC_SHARED -shared -Wl,-soname,libz.so.1" \
         || die "zlib build failed"
-    make install DESTDIR="$SYSROOT" CC="$MUSL_GCC" \
+    make install DESTDIR="$SYSROOT" CC="$MUSL_GCC_SHARED" \
         LDSHARED="$MUSL_GCC_SHARED -shared -Wl,-soname,libz.so.1" \
         || die "zlib install failed"
     cd -
