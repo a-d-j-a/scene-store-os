@@ -62,6 +62,10 @@ MUSL_GCC=""
 setup_musl_gcc() {
     if [ -x "$SYSROOT/bin/musl-gcc" ]; then
         MUSL_GCC="$SYSROOT/bin/musl-gcc"
+        MUSL_GCC_SHARED="$SYSROOT/bin/musl-gcc-shared"
+        [ -x "$MUSL_GCC_SHARED" ] || \
+            { printf '#!/bin/sh\nexec gcc --sysroot=%q -I%q/usr/include -I%q/include -L%q/usr/lib -L%q/lib -Wl,--sysroot=%q "$@"\n' \
+                "$SYSROOT" "$SYSROOT" "$SYSROOT" "$SYSROOT" "$SYSROOT" "$SYSROOT" > "$MUSL_GCC_SHARED"; chmod +x "$MUSL_GCC_SHARED"; }
     else
         die "musl-gcc not found in $SYSROOT — run: $0 musl"
     fi
@@ -125,6 +129,14 @@ build_musl() {
 exec gcc --sysroot="$SYSROOT" -I"$SYSROOT/usr/include" -I"$SYSROOT/include" -L"$SYSROOT/usr/lib" -L"$SYSROOT/lib" -Wl,--sysroot="$SYSROOT" -static "\$@"
 WRAPPER
     chmod +x "$SYSROOT/bin/musl-gcc"
+
+    # Shared-lib twin (zlib/openssl/apk): the wrapper above hardcodes
+    # -static, which breaks -shared links (crtbeginT.o relocation error).
+    cat > "$SYSROOT/bin/musl-gcc-shared" <<WRAPPER
+#!/bin/sh
+exec gcc --sysroot="$SYSROOT" -I"$SYSROOT/usr/include" -I"$SYSROOT/include" -L"$SYSROOT/usr/lib" -L"$SYSROOT/lib" -Wl,--sysroot="$SYSROOT" "\$@"
+WRAPPER
+    chmod +x "$SYSROOT/bin/musl-gcc-shared"
 
     [ -x "$SYSROOT/bin/musl-gcc" ] || die "musl-gcc wrapper not created"
     msg "musl done."
@@ -266,10 +278,12 @@ build_zlib() {
     extract "$SRC/zlib-${VER}.tar.gz" "$BUILDDIR/zlib-${VER}"
     cd "$BUILDDIR/zlib-${VER}"
     ./configure --prefix=/usr
-    make -j"$JOBS" CC="$MUSL_GCC" LDSHARED="$MUSL_GCC -shared" \
+    make -j"$JOBS" CC="$MUSL_GCC" \
+        LDSHARED="$MUSL_GCC_SHARED -shared -Wl,-soname,libz.so.1" \
         || die "zlib build failed"
     make install DESTDIR="$SYSROOT" CC="$MUSL_GCC" \
-        LDSHARED="$MUSL_GCC -shared" || die "zlib install failed"
+        LDSHARED="$MUSL_GCC_SHARED -shared -Wl,-soname,libz.so.1" \
+        || die "zlib install failed"
     cd -
     msg "zlib done."
 }
@@ -283,8 +297,8 @@ build_openssl() {
     cd "$BUILDDIR/openssl-${VER}"
     ./Configure linux-x86_64 --prefix=/usr --openssldir=/etc/ssl shared \
         -I"$SYSROOT/usr/include" -L"$SYSROOT/usr/lib"
-    make -j"$JOBS" CC="$MUSL_GCC" || die "openssl build failed"
-    make install_sw DESTDIR="$SYSROOT" CC="$MUSL_GCC" \
+    make -j"$JOBS" CC="$MUSL_GCC_SHARED" || die "openssl build failed"
+    make install_sw DESTDIR="$SYSROOT" CC="$MUSL_GCC_SHARED" \
         || die "openssl install failed"
     cd -
     msg "openssl done."
@@ -299,12 +313,12 @@ build_apk() {
     cd "$BUILDDIR/apk-tools-v${VER}"
     autoreconf -fi >/dev/null 2>&1 || die "apk autoreconf failed"
     ./configure --prefix=/usr --sysconfdir=/etc \
-        CC="$MUSL_GCC" \
+        CC="$MUSL_GCC_SHARED" \
         CFLAGS="-O2 -I$SYSROOT/usr/include" \
         LDFLAGS="-L$SYSROOT/usr/lib" \
         || die "apk configure failed"
-    make -j"$JOBS" CC="$MUSL_GCC" || die "apk build failed"
-    make install DESTDIR="$SYSROOT" CC="$MUSL_GCC" \
+    make -j"$JOBS" CC="$MUSL_GCC_SHARED" || die "apk build failed"
+    make install DESTDIR="$SYSROOT" CC="$MUSL_GCC_SHARED" \
         || die "apk install failed"
     # Alpine's signing key (ships in the apk-tools source) so package
     # signatures verify against the official repositories.
