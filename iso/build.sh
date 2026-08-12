@@ -133,9 +133,12 @@ WRAPPER
 
     # Shared-lib twin (zlib/openssl/apk): the wrapper above hardcodes
     # -static, which breaks -shared links (crtbeginT.o relocation error).
+    # Shared twin for -shared builds (zlib/openssl/apk): gcc's default
+    # -dynamic-linker is the glibc loader path; pin the musl loader or
+    # every shared binary comes out unloadable in our rootfs.
     cat > "$SYSROOT/bin/musl-gcc-shared" <<WRAPPER
 #!/bin/sh
-exec gcc --sysroot="$SYSROOT" -I"$SYSROOT/usr/include" -I"$SYSROOT/include" -L"$SYSROOT/usr/lib" -L"$SYSROOT/lib" -Wl,--sysroot="$SYSROOT" "\$@"
+exec gcc --sysroot="$SYSROOT" -I"$SYSROOT/usr/include" -I"$SYSROOT/include" -L"$SYSROOT/usr/lib" -L"$SYSROOT/lib" -Wl,--sysroot="$SYSROOT" -Wl,-dynamic-linker,/lib/ld-musl-x86_64.so.1 "\$@"
 WRAPPER
     chmod +x "$SYSROOT/bin/musl-gcc-shared"
 
