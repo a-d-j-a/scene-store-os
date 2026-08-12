@@ -1,7 +1,0 @@
-iso-demo: start port=61139
-iso-demo: connected, waiting for welcome
-iso-demo: welcomed
-iso-demo: window built content=40004
-iso-demo: pointer 196,177 buttons=1
-iso-demo: activate id=40010
-iso-demo: count=1
