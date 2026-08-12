@@ -128,6 +128,8 @@ uint32_t scene_compositor_damage(scene_compositor *cp, scene_rect *out,
                                  uint32_t cap);
 /* Committed seq the framebuffer currently shows.                        */
 uint64_t scene_compositor_rendered_seq(scene_compositor *cp);
+/* Committed seq of one layer's store (0 = shell). Debug/diagnostics.   */
+uint64_t scene_compositor_layer_seq(scene_compositor *cp, uint32_t layer);
 void scene_compositor_force_repaint(scene_compositor *cp);
 
 /* Effects (v1): enter/exit fade+slide transitions, tick-driven and fully

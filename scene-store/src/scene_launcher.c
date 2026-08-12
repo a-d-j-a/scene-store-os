@@ -303,6 +303,7 @@ void scene_launcher_pump(scene_launcher *sl)
     for (i = 0; i < sl->count; i++) {
         session *s = &sl->sessions[i];
         if (!s->peer || s->dead) continue;
+        uint32_t fed_total = 0;
         for (;;) {
             uint32_t got = 0;
             int r = scene_transport_recv(s->peer, buf, sizeof(buf), &got);
@@ -311,12 +312,16 @@ void scene_launcher_pump(scene_launcher *sl)
                     s->dead = 1;  /* protocol violation: ERROR already sent */
                     break;
                 }
+                fed_total += got;
                 continue;
             }
             if (r == 1) break;    /* would-block: drained */
             s->dead = 1;          /* connection closed/error */
             break;
         }
+        if (fed_total > 0)
+            fprintf(stderr, "launcher: session %d fed %u bytes\n",
+                    i, fed_total);
         if (s->dead) continue;
         const uint8_t *frame;
         uint32_t flen;

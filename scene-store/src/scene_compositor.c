@@ -1431,6 +1431,12 @@ uint64_t scene_compositor_rendered_seq(scene_compositor *cp)
     return cp ? cp->ly[0].rendered_seq : 0;
 }
 
+uint64_t scene_compositor_layer_seq(scene_compositor *cp, uint32_t layer)
+{
+    if (!cp || layer >= cp->ly_count) return 0;
+    return scene_store_view_seq(cp->ly[layer].store);
+}
+
 void scene_compositor_force_repaint(scene_compositor *cp)
 {
     if (cp) cp->force = 1;

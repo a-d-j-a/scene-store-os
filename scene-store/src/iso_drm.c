@@ -353,9 +353,14 @@ static void dbg_line(ctx *c, const fb_buf *bufs, int cur,
     }
     fprintf(stderr,
             "iso-drm: D frames=%llu anims=%u damage=%u pxFb=0x%06X/0x%06X "
-            "pxDumb=0x%06X/0x%06X flips=%llu/%llu cur=%d\n",
+            "pxDumb=0x%06X/0x%06X flips=%llu/%llu cur=%d "
+            "l0=%llu l1=%llu l2=%llu l3=%llu\n",
             g_frames, scene_compositor_anim_count(c->cp), nd, fb_w, fb_b,
-            db_w, db_o, g_flips_ok, g_flips_fail, cur);
+            db_w, db_o, g_flips_ok, g_flips_fail, cur,
+            (unsigned long long)scene_compositor_layer_seq(c->cp, 0),
+            (unsigned long long)scene_compositor_layer_seq(c->cp, 1),
+            (unsigned long long)scene_compositor_layer_seq(c->cp, 2),
+            (unsigned long long)scene_compositor_layer_seq(c->cp, 3));
 }
 
 /* ======================================================================
