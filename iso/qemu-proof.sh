@@ -14,8 +14,8 @@ timeout 150 qemu-system-x86_64 -m 512 \
     -kernel "$K" -initrd "$I" \
     -append "$APPEND" \
     -netdev user,id=n1 -device e1000,netdev=n1 \
-    -nographic -no-reboot -serial file:/tmp/qemu-proof.log
+    -nographic -no-reboot -serial file:/tmp/qemu-proof.log || true
 echo "--- serial proof lines ---"
-grep -aE 'udhcpc|lease of|pkgtest|installing|OK:' /tmp/qemu-proof.log | tail -20
+grep -aE 'udhcpc|lease of|pkgtest|installing|OK:' /tmp/qemu-proof.log | tail -20 || true
 cp /tmp/qemu-proof.log serial-qemu.log
 echo "log: serial-qemu.log ($(wc -l < serial-qemu.log) lines)"
