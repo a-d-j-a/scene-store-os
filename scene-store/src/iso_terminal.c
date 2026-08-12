@@ -99,12 +99,14 @@ static void render_screen(void)
 int main(int argc, char **argv)
 {
     const char *port = getenv("SCENE_STORE_PORT");
+    fprintf(stderr, "iso-terminal: port=%s\n", port ? port : "(none)");
     if (!port) return 2;
     (void)argc; (void)argv;
 
     char target[64];
     snprintf(target, sizeof(target), "127.0.0.1:%s", port);
     scene_transport *t = scene_tcp_client(target);
+    fprintf(stderr, "iso-terminal: transport=%s\n", t ? "ok" : "FAIL");
     if (!t) return 3;
 
     scene_app_cbs cbs;
@@ -113,6 +115,7 @@ int main(int argc, char **argv)
     cbs.activate = on_activate;
     cbs.key = on_key;
     g_app = scene_app_new_on(t, target, &cbs, NULL);
+    fprintf(stderr, "iso-terminal: app=%s\n", g_app ? "ok" : "FAIL");
     if (!g_app) return 4;
 
     int i;
@@ -122,10 +125,13 @@ int main(int argc, char **argv)
         if (scene_client_welcomed(scene_app_client(g_app))) break;
         msleep(5);
     }
+    fprintf(stderr, "iso-terminal: welcome=%s (i=%d)\n",
+            i < 500 ? "ok" : "TIMEOUT", i);
     if (i >= 500) return 5;
 
     g_content = scene_app_create_window(g_app, WIN_X, WIN_Y, WIN_W, WIN_H,
                                         "Terminal");
+    fprintf(stderr, "iso-terminal: window id=%u\n", (unsigned)g_content);
     if (g_content == SCENE_NO_PARENT) return 6;
     g_close = g_content - 1;    /* scene_app: close = base+3, content = base+4 */
 
@@ -135,8 +141,10 @@ int main(int argc, char **argv)
     tcfg.rows = ROWS;
     tcfg.bg_color = 0xFF0C0C0C;
     g_term = scene_terminal_new(g_app, g_content, &tcfg);
+    fprintf(stderr, "iso-terminal: terminal=%s\n", g_term ? "ok" : "FAIL");
     if (!g_term) return 7;
 
+    fprintf(stderr, "iso-terminal: running\n");
     for (;;) {
         scene_app_pump(g_app);
         scene_terminal_pump(g_term);
