@@ -335,13 +335,13 @@ build/iso_terminal$(EXE): src/iso_terminal.c build/scene_fmt.o build/scene_store
 	build/scene_fb.o build/scene_font.o build/scene_font_data.o \
 	build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
 	build/scene_wallpaper.o build/scene_image.o build/scene_launcher.o \
-	build/scene_terminal.o | build
+	build/scene_terminal.o build/scene_app.o | build
 	$(CC) $(CFLAGS) src/iso_terminal.c build/scene_fmt.o build/scene_store.o \
 		build/scene_transport.o build/scene_client.o build/scene_server.o \
 		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
 		build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
 		build/scene_wallpaper.o build/scene_image.o build/scene_launcher.o \
-		build/scene_terminal.o -lm -lpthread -o $@
+		build/scene_terminal.o build/scene_app.o -lm -lpthread -o $@
 
 iso-terminal: build/iso_terminal$(EXE)
 endif
