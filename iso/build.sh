@@ -500,6 +500,11 @@ REPO
     if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
         mkdir -p "$R/etc/ssl/certs"
         cp /etc/ssl/certs/ca-certificates.crt "$R/etc/ssl/certs/"
+        # libfetch (apk) is compiled with CA_CERT_FILE=/etc/apk/ca.pem;
+        # OpenSSL's compiled default is /etc/ssl/cert.pem. Cover both.
+        mkdir -p "$R/etc/apk" "$R/etc/ssl"
+        cp /etc/ssl/certs/ca-certificates.crt "$R/etc/apk/ca.pem"
+        cp /etc/ssl/certs/ca-certificates.crt "$R/etc/ssl/cert.pem"
     fi
 
     # Overlay (hand-written boot scripts, may override the above)
