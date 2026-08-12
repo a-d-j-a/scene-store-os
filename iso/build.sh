@@ -513,7 +513,7 @@ REPO
     # overlay files' modes — re-assert exec bits here (git filemode can
     # lose +x on Windows checkouts, seen live: "can't run rcS: Permission
     # denied").
-    chmod +x "$R/etc/init.d/rcS" "$R/etc/init.d/scene-desktop"
+    chmod +x "$R/etc/init.d/rcS" "$R/etc/init.d/scene-desktop" "$R/etc/init.d/networking"
     msg "Rootfs assembled."
 }
 
