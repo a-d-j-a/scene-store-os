@@ -24,7 +24,7 @@ def fnv1a32(b):
 
 
 def welcome_frame():
-    payload = struct.pack('<IHIIIQ', 0x1337, 0, 4096, 1024, 32, 8192, 0)
+    payload = struct.pack('<IHIIIIQ', 0x1337, 0, 4096, 1024, 32, 8192, 0)
     hdr = struct.pack('<IHHI', MAGIC, 0, 0x8001, len(payload))
     zeroed = hdr + b'\x00\x00\x00\x00' + payload
     return hdr + struct.pack('<I', fnv1a32(zeroed)) + payload
