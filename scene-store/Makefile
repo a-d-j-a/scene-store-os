@@ -14,7 +14,7 @@ else
   SOCKLIB =
 endif
 
-all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE) build/iso_demo$(EXE)
+all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE) build/iso_demo$(EXE) build/test_video_app$(EXE) build/iso_video$(EXE)
 
 build:
 	mkdir -p build
@@ -183,6 +183,22 @@ build/iso_demo$(EXE): src/iso_demo.c build/scene_fmt.o \
 		build/scene_store.o build/scene_transport.o build/scene_client.o \
 		build/scene_app.o $(SOCKLIB) -o $@
 
+build/iso_video$(EXE): src/iso_video.c build/scene_fmt.o \
+	build/scene_transport.o build/scene_client.o build/scene_app.o | build
+	$(CC) $(CFLAGS) src/iso_video.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_app.o $(SOCKLIB) -o $@
+
+build/test_video_app$(EXE): tests/test_video_app.c build/scene_fmt.o \
+	build/scene_store.o build/scene_transport.o build/scene_client.o \
+	build/scene_server.o build/scene_fb.o build/scene_font.o \
+	build/scene_font_data.o build/scene_compositor.o | build
+	$(CC) $(CFLAGS) tests/test_video_app.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_server.o build/scene_fb.o build/scene_font.o \
+		build/scene_font_data.o build/scene_compositor.o \
+		$(SOCKLIB) -o $@
+
 build/test_settings$(EXE): tests/test_settings.c build/scene_fmt.o build/scene_store.o \
 	build/scene_transport.o build/scene_client.o build/scene_server.o \
 	build/scene_fb.o build/scene_font.o build/scene_font_data.o \
@@ -287,6 +303,9 @@ test-image: build/test_image$(EXE)
 test-wallpaper: build/test_wallpaper$(EXE)
 	./build/test_wallpaper$(EXE)
 
+test-video: build/test_video_app$(EXE) build/iso_video$(EXE)
+	./build/test_video_app$(EXE)
+
 bench: build/bench$(EXE)
 	./build/bench$(EXE)
 
@@ -349,4 +368,4 @@ endif
 clean:
 	rm -rf build
 
-.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-sessions test-launcher test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm iso-terminal clean
+.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-sessions test-launcher test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm iso-terminal test-video clean
