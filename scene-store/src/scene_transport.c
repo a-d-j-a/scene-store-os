@@ -234,7 +234,6 @@ static void tcp_close(scene_transport *t)
 static int tcp_send(scene_transport *t, const uint8_t *data, uint32_t len)
 {
     tcp_transport *tc = (tcp_transport *)t;
-    fprintf(stderr, "tcp_send: s=%d len=%u\n", tc->s, len);
     if (tc->s == SC_SOCK_INVALID) return -1;
     uint32_t off = 0;
     while (off < len) {
@@ -264,7 +263,6 @@ static int tcp_recv(scene_transport *t, uint8_t *buf, uint32_t cap,
 #else
     ssize_t n = recv(tc->s, buf, cap, 0);
     if (n > 0) { *got = (uint32_t)n; return 0; }
-    fprintf(stderr, "tcp_recv: n=%zd errno=%d\n", (ssize_t)n, errno);
     if (n == 0) return -1;        /* peer closed                            */
     if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
         return 1;                 /* would-block                            */
