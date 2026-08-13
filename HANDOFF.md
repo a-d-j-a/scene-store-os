@@ -423,9 +423,9 @@ FIRST PROBE RUN RESULT (this session, 2026-08-13):
   started decode loop, hit its 10s limit, closed; or it was itself still
   mid-accept and the connection never completed.
 
-NEXT DEBUG STEP (already prepared): rerun term_probe.sh after the pkill
-is in place (committed in ee43b73; term_probe.sh now starts with
-`pkill -f fake_server.py` + sleep 1) so the port is clean; add one more
+NEXT DEBUG STEP (already prepared): rerun term_probe.sh (it now starts with
+`pkill -f fake_server.py` + sleep 1, committed in d80e642 with the tcp_recv
+errno trace); add one more
 print in tcp_recv for the SUCCESS path (n>0 -> fprintf) and in
 dispatch() for WELCOME receipt, then rerun to see exactly what the app
 receives. Two candidate root causes remain (kill one each run):
