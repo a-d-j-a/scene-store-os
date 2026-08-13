@@ -8,9 +8,15 @@ Status as of this document: daily-driver milestone COMPLETE (networking,
 apk package manager, GRUB ISO boot, working terminal app — ALL PROVEN in
 QEMU). The one active bug (terminal never paints) was root-caused, fixed,
 and verified at wire level and in a QEMU screendump (see §6/§16.2).
-Remaining before shipping: write iso/USAGE.md, update the AGENTS.md ledger.
-Debug instrumentation is already stripped (commit eddb960) and re-verified
-on the QEMU shot with a clean serial log.
+Post-milestone (2026-08-13, same day): persistence (persist=DEV switch_root
+mode — apk installs survive reboots, two-boot proven), GRUB -cdrom boot
+proof with terminal visible + pixels verified, shell window resize by
+pointer, iso-video texture-streaming demo (honest boundary). See §16.3.
+Remaining before shipping: update the AGENTS.md ledger; then the release
+gap list is: real-hardware bring-up, storage/file manager, power
+management, and wlroots integration (skeleton exists).
+Debug instrumentation is stripped (eddb960) and re-verified on the QEMU
+shot with a clean serial log.
 ================================================================================
 
 --------------------------------------------------------------------------------
@@ -632,7 +638,13 @@ e1351b5 debug trace cli_emit/flush/tcp_send  <== REMOVED by eddb960
 2f77b4d terminal paints its own background: content node SCENE_ROLE_TERMINAL
         + role default fill 0xFF0C0C0C
 5b9c4f6 docs: close terminal-paint bug in handoff (root cause, fix, proof)
-eddb960 perf: strip debug fprintf instrumentation         <== LATEST HEAD
+eddb960 perf: strip debug fprintf instrumentation
+7e139eb docs: usage guide, agents ledger close-out, handoff status
+ceee597 persist: disk persistence via format+switch_root, pkgtest=check:,
+         GRUB photo-entry proof config
+884497a shell: pointer-driven window resize (edges, corner, min 96x64)
+990960c iso-video: texture-streaming demo app + launcher-harness test
+ec27e92 docs: pass-19 ledger, handoff record, usage guide   <== LATEST HEAD
 
 STALE BEFORE THESE: passes 1-13 commits are earlier in the log; the
 ledger in AGENTS.md covers them in detail.
@@ -648,8 +660,13 @@ ledger in AGENTS.md covers them in detail.
   damage-based present deferred until per-buffer accumulation exists.
 - w64devkit: no ASan/UBSan; test-dbg dead by environment.
 - INITRD IS FULLY RAM-RESIDENT; rootfs drops static .a + strips shared
-  libs (ISAMU-style). apk works but installed packages live in RAM —
-  persistence across boots is NOT yet implemented (future milestone).
+  libs (ISAMU-style). RAM mode is still the DEFAULT boot (initramfs = the
+  whole rootfs). Superseded 2026-08-13: `persist=DEV` (or `persist=auto`)
+  now formats a blank disk on first boot, copies the ramfs rootfs onto it,
+  and every boot mounts the disk and switch_root's into it — the disk, not
+  RAM, is the running system; `apk add` installs, `/etc`, `/home` survive
+  reboots. Two-boot proof on the codespace (htop boot 1 → check:htop
+  boot 2 `present OK`, no re-copy). See §16.3.
 - The debug fprintf traces in scene_client.c/scene_transport.c MUST be
   removed before shipping (or gated behind an env var). (REMOVED —
   commit eddb960, 2026-08-13: cli_emit/flush/tcp_send/tcp_recv prints
@@ -667,18 +684,27 @@ DONE this session (2026-08-13): root cause found + fixed (blocking pump
 proves terminal paints 0xFF0C0C0C at the window area. See §6.
 Debug instrumentation stripped (eddb960), suite re-run green, ISO
 rebuilt, second QEMU shot with a clean serial log and identical pixels.
-iso/USAGE.md written. Remaining: AGENTS.md ledger update.
+iso/USAGE.md written. AGENTS.md ledger updated (pass 19: persistence,
+GRUB proof, shell resize).
 1. DONE — Remove the debug fprintf instrumentation (eddb960: cli_emit/
    flush/tcp_send/tcp_recv + launcher feed prints; suite still 1,921/0;
    QEMU re-shot clean: 0 cli_emit lines, pixels unchanged).
-2. DONE — iso/USAGE.md written (build, boot, qemu-proof, cmdline,
-   boot sequence, desktop, apk, host tests).
-3. Update AGENTS.md ledger with this milestone + bug resolution, final
-   commit.
-4. Optional polish (next milestone): GRUB -cdrom boot proof with the
-   terminal visible; task-button styling / system tray in the shell;
-   wlroots compositor integration (skeleton written, needs Linux build
-   env); cross-app automation service surfaced in the shell.
+2. DONE — iso/USAGE.md written + updated (persistence, GRUB proof
+   modes, window resize, iso-video).
+3. DONE — AGENTS.md ledger updated with pass 19 (ceee597 persistence
+   mode, 884497a shell resize, 990960c iso-video) — see §16.3.
+4. NEXT — codespace: rebuild ISO with pass-18/19 changes (`sh iso/
+   build.sh scene` + rootfs + initramfs + iso) and QEMU-proof
+   `autolaunch=iso-video` (screendump: content 0xFF120040-gradient
+   frames, titlebar 0xFF1A1A1A, desktop 0xFF1A1A2E; serial log: welcome
+   ok, no cli_emit lines) — the one unverified item this session.
+5. NEXT — shell visual polish: task-button styling, menu hover
+   effects, system tray (ISO as demonstration target). Or wlroots
+   compositor integration (skeleton exists, needs a Linux build env to
+   compile the skeleton + test). Or cross-app automation service
+   (macro record/replay surfaced in the shell).
+6. DEFERRED — release gap list: real-hardware bring-up, storage/file
+   manager, power management.
 
 --------------------------------------------------------------------------------
 14. OPEN QUESTION WORTH FORMALIZING
@@ -706,3 +732,54 @@ fake_server artifact plus the blocking-pump deadlock; the ISO welcome=ok
 flush (window ops stuck in c->out, launcher never sees bytes). No
 conn_open reset exists; the two "contradictory" observations were the
 same bug seen from two angles. Fix and proof: §6.
+
+--------------------------------------------------------------------------------
+16.3 POST-MILESTONE RECORD (2026-08-13): PERSISTENCE + GRUB PROOF + RESIZE
+--------------------------------------------------------------------------------
+Commits ceee597 (persist + check/pkgtest + GRUB proof config), 884497a
+(shell pointer resize), 990960c (iso-video; pass-18 content), docs commit
+on top. Windows tree re-verified clean: 16 suites / 2,080 checks /
+0 failures on the final tree (store 88, client 283, compositor 766,
+automation 161, a11y 50, rewind 45, shell 200, app 52, terminal 9,
+sessions 94, launcher 128, settings 43, theme 30, image 17, wallpaper
+60, video_app 54). All committed to GitHub.
+
+PERSISTENCE (iso/initramfs/init + networking + build.sh + qemu-proof.sh):
+- `persist=DEV` / `persist=auto` (first of vda/sda/hda). First boot with
+  a blank disk: mkfs ext2, copy the whole ramfs rootfs onto /mnt/root,
+  write /mnt/root/.iso-rootfs-v1 marker. Every boot: mount disk root,
+  switch_root — the disk is the running system. RAM mode (initramfs =
+  rootfs, exec /sbin/init) remains the default and is untouched.
+- `pkgtest=check:PKG` (networking): `command -v PKG` → prints to serial
+  `present OK` / `absent FAIL` after the lease; proves installs survive.
+- Proof (codespace): boot 1 `pkgtest=htop` → apk add OK; boot 2
+  `pkgtest=check:htop` → `present OK`, no rootfs re-copy (marker + tail
+  check). Serial logs in the codespace era; rerun with:
+  `sh iso/qemu-proof.sh disk=state.img pkgtest=htop` then
+  `sh iso/qemu-proof.sh disk=state.img pkgtest=check:htop`.
+
+GRUB -cdrom BOOT PROOF (iso/grub-proof.cfg + build.sh `iso` phase):
+- `sh iso/build.sh iso iso-terminal /dev/vda` appends the tracked
+  grub-proof.cfg entries to the ISO GRUB menu (photo apps list included;
+  proof entry: `autolaunch=iso-terminal persist=/dev/vda`, default=4).
+- QEMU `-cdrom output/iso-...iso` (no -kernel/-initrd): GRUB menu → proof
+  entry → kernel + initramfs load, persist disk mounts, switch_root, and
+  the terminal paints. Screendump: body 0xFF0C0C0C, titlebar 0xFF1A1A1A,
+  desktop 0xFF1A1A2E — identical to the -kernel mode. Serial log carries
+  the switch_root/persist proof lines.
+
+SHELL WINDOW RESIZE (scene_shell.c + test_shell.c, ~450 test lines):
+- scene_shell_handle_pointer drag-resizes windows: right-edge (w += dx,
+  min 96), bottom-edge (h += dy, min 64), bottom-right corner (both).
+  Hit zones: within 4px of the edge, computed from the window's absolute
+  rect. titlebar / close button / content node rects re-derive per tick
+  from the window rect; active-task button and resize state survive.
+- Tests: per-edge resize, both-edge corner, min-size clamp, resize then
+  move, non-resize clicks pass through, determinism (two shells,
+  identical pointer sequences → identical tree).
+
+iso-video (990960c) — see AGENTS.md pass 18 for the full record;
+its Windows-side proof (test_video_app, 54 checks) is in this tree.
+The ONLY unverified item is the codespace side: rebuild the ISO with the
+iso-video bits and QEMU-screendump `autolaunch=iso-video` (pixel targets
+in AGENTS.md "Next").

@@ -26,3 +26,7 @@ desktop.ini
 *.swp
 *~
 git_setup.bat
+
+# Serial proof artifacts
+serial*.log
+state.img
