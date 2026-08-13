@@ -234,6 +234,7 @@ static void tcp_close(scene_transport *t)
 static int tcp_send(scene_transport *t, const uint8_t *data, uint32_t len)
 {
     tcp_transport *tc = (tcp_transport *)t;
+    fprintf(stderr, "tcp_send: s=%d len=%u\n", tc->s, len);
     if (tc->s == SC_SOCK_INVALID) return -1;
     uint32_t off = 0;
     while (off < len) {

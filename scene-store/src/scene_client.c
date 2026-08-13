@@ -13,6 +13,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 /* ---- growable buffers -------------------------------------------------- */
 
@@ -188,7 +189,9 @@ static int cli_emit(scene_client *c, uint16_t opcode,
                     const uint8_t *body, uint32_t blen,
                     int is_ack, int log_it)
 {
-    if (!c->conn_open || !c->welcomed || c->fatal) return -1;
+    fprintf(stderr, "cli_emit: op=%u conn=%d wel=%d fatal=%d out.len=%u\n",
+            opcode, c->conn_open, c->welcomed, c->fatal, c->out.len);
+    if (!c->conn_open || !c->welcomed || c->fatal) { fprintf(stderr, "cli_emit: BLOCKED\n"); return -1; }
     uint64_t seq = 0;
     uint32_t plen;
     if (is_ack) {
@@ -224,6 +227,8 @@ static int cli_emit(scene_client *c, uint16_t opcode,
 
 int scene_client_flush(scene_client *c)
 {
+    fprintf(stderr, "flush: conn=%d out.len=%u out_off=%u\n",
+            c->conn_open, c->out.len, c->out_off);
     if (!c->conn_open) return -1;
     if (c->out_off < c->out.len) {
         if (scene_transport_send(c->t, c->out.data + c->out_off,
