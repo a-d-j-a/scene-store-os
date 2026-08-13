@@ -673,6 +673,49 @@ static void test_comp_rounded_corner(void)
     printf("test_comp_rounded_corner: ok\n");
 }
 
+/* TERMINAL role default: radius 0, no border, fill 0xFF0C0C0C (the
+ * terminal emulator's bg_color). A window whose CONTENT node is created
+ * with SCENE_ROLE_TERMINAL must paint that fill over its body area.    */
+static void test_comp_terminal_role_fill(void)
+{
+    struct harness h;
+    static const scene_rect r_term = {60, 40, 648, 168};
+    const int32_t cx = 60;       /* content body (below titlebar) */
+    const int32_t cy = 72;
+    const int32_t cw = 648;
+    const int32_t ch = 136;
+
+    harness_init(&h);
+    tickf(&h);
+    /* Full window: WINDOW + TITLEBAR + CONTENT. The CONTENT node gets
+     * role TERMINAL, so its body paints 0xFF0C0C0C over the WINDOW fill. */
+    op_ok(&h, scene_client_create_node(h.cl, SCENE_NO_PARENT, 60,
+                                       SCENE_ROLE_WINDOW, &r_term,
+                                       SCENE_FLAG_VISIBLE), "term win");
+    static const scene_rect r_tb = {60, 40, 648, 32};
+    op_ok(&h, scene_client_create_node(h.cl, 60, 61, SCENE_ROLE_TITLEBAR,
+                                       &r_tb, SCENE_FLAG_VISIBLE), "ter tb");
+    static const scene_rect r_ct = {cx, cy, cw, ch};
+    op_ok(&h, scene_client_create_node(h.cl, 60, 62, SCENE_ROLE_TERMINAL,
+                                       &r_ct, SCENE_FLAG_VISIBLE), "ter ct");
+    tickf(&h);
+
+    /* Titlebar keeps the WINDOW role default derive (TITLEBAR 0xFF1A1A1A). */
+    CHECK_EQ(PX(h.cp, 200, 50), 0xFF1A1A1Au);
+    /* Body: TERMINAL role fill, not the WINDOW fill underneath. */
+    CHECK_EQ(PX(h.cp, 100, 80), 0xFF0C0C0Cu);
+    CHECK_EQ(PX(h.cp, 100, 200), 0xFF0C0C0Cu);
+    CHECK_EQ(PX(h.cp, 600, 150), 0xFF0C0C0Cu);
+    /* Right at the body edge: fill, no border (radius/bw 0). */
+    CHECK_EQ(PX(h.cp, 60, 72), 0xFF0C0C0Cu);
+    CHECK_EQ(PX(h.cp, 60, 207), 0xFF0C0C0Cu);
+    /* Desktop (outside the window) is the clear color. */
+    CHECK_EQ(PX(h.cp, 5, 5), 0xFF101010u);
+
+    harness_free(&h);
+    printf("test_comp_terminal_role_fill: ok\n");
+}
+
 /* ENTER: a new visible node fades in over 8 ticks (eff = t*255/8) while
  * sliding up from 6px below (off = (8-t)*6/8). off reaches 0 at t=7, so
  * frames 1..6 damage base+sweep (2 rects); t=7 and t=8 damage base only. */
@@ -1012,6 +1055,7 @@ int main(void)
     test_comp_input_flow();
     test_comp_node_vis_ground_truth();
     test_comp_rounded_corner();
+    test_comp_terminal_role_fill();
     test_comp_effects_enter();
     test_comp_effects_exit();
     test_comp_effects_identity();

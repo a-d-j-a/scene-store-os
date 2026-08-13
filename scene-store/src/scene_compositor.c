@@ -161,7 +161,7 @@ static const scene_style role_defaults[32] = {
     /* TOOLBAR    */ {0xFF222222u, 0x00000000u, 0xFFFFFFFFu, 0, 0, 0, 0},
     /* STATUSBAR  */ {0xFF222222u, 0x00000000u, 0xFFFFFFFFu, 0, 0, 0, 0},
     /* TITLEBAR   */ {0xFF1A1A1Au, 0x00000000u, 0xFFFFFFFFu, 0, 0, 0, 0},
-    /* TERMINAL   */ {0xFF141414u, 0x00000000u, 0xFFDDDDDDu, 0, 0, 0, 0},
+    /* TERMINAL   */ {0xFF0C0C0Cu, 0x00000000u, 0xFFDDDDDDu, 0, 0, 0, 0},
     /* EDITOR     */ {0xFF141414u, 0x00000000u, 0xFFDDDDDDu, 0, 0, 0, 0},
     /* COMBO      */ {0xFF2A2A2Au, 0xFF4A4A4Au, 0xFFFFFFFFu, 1, 0, 0, 2},
     /* PROGRESS   */ {0xFF2E2E2Eu, 0xFF3F3F3Fu, 0xFFFFFFFFu, 1, 0, 0, 0},

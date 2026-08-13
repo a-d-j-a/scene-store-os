@@ -57,6 +57,15 @@ scene_node_id scene_app_create_window(scene_app *app,
                                       int32_t w, int32_t h,
                                       const char *title);
 
+/* Like scene_app_create_window, but the CONTENT node gets the given
+ * role instead of GENERIC (e.g. SCENE_ROLE_TERMINAL so the compositor
+ * paints the server-owned terminal look).                                */
+scene_node_id scene_app_create_window_role(scene_app *app,
+                                           int32_t x, int32_t y,
+                                           int32_t w, int32_t h,
+                                           const char *title,
+                                           scene_role content_role);
+
 /* Destroy a window and all its child nodes.                              */
 int scene_app_destroy_window(scene_app *app, scene_node_id content_id);
 

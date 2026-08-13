@@ -136,8 +136,8 @@ int main(int argc, char **argv)
             i < 500 ? "ok" : "TIMEOUT", i);
     if (i >= 500) return 5;
 
-    g_content = scene_app_create_window(g_app, WIN_X, WIN_Y, WIN_W, WIN_H,
-                                        "Terminal");
+    g_content = scene_app_create_window_role(g_app, WIN_X, WIN_Y, WIN_W, WIN_H,
+                                        "Terminal", SCENE_ROLE_TERMINAL);
     fprintf(stderr, "iso-terminal: window id=%u\n", (unsigned)g_content);
     if (g_content == SCENE_NO_PARENT) return 6;
     g_close = g_content - 1;    /* scene_app: close = base+3, content = base+4 */

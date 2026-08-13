@@ -105,6 +105,45 @@ static void test_create_window(void)
     harness_destroy(&h);
 }
 
+static void test_create_window_role(void)
+{
+    struct harness h;
+    harness_init(&h);
+
+    /* The role variant gives the CONTENT node a non-GENERIC role.
+     * Defaults stay intact: GENERIC windows set by create_window. */
+    scene_node_id content = scene_app_create_window_role(
+        h.app, 100, 50, 400, 300, "Term", SCENE_ROLE_TERMINAL);
+    CHECK(content != 0);
+    tickf(&h);
+
+    scene_node_vis v;
+    CHECK(scene_store_node_vis(scene_compositor_store(h.cp), content, &v) == 0);
+    CHECK_EQ((uint32_t)v.role, SCENE_ROLE_TERMINAL);
+
+    /* Parent is still a WINDOW. */
+    CHECK(v.parent != 0);
+    scene_node_vis wv;
+    CHECK(scene_store_node_vis(scene_compositor_store(h.cp), v.parent, &wv) == 0);
+    CHECK_EQ((uint32_t)wv.role, SCENE_ROLE_WINDOW);
+
+    /* The old API still yields GENERIC content. */
+    scene_node_id content2 = scene_app_create_window(h.app, 0, 0, 100, 80, "G");
+    CHECK(content2 != 0);
+    tickf(&h);
+    CHECK(scene_store_node_vis(scene_compositor_store(h.cp), content2, &v) == 0);
+    CHECK_EQ((uint32_t)v.role, SCENE_ROLE_GENERIC);
+
+    /* Both windows destroyed cleanly. */
+    CHECK(scene_app_destroy_window(h.app, content) == 0);
+    CHECK(scene_app_destroy_window(h.app, content2) == 0);
+    tickf(&h);
+    CHECK(scene_store_node_vis(scene_compositor_store(h.cp), content, &v) != 0);
+    CHECK(scene_store_node_vis(scene_compositor_store(h.cp), content2, &v) != 0);
+
+    harness_destroy(&h);
+}
+
 static void test_set_text(void)
 {
     struct harness h;
@@ -281,6 +320,7 @@ int main(void)
     failures = 0;
 
     test_create_window();
+    test_create_window_role();
     test_set_text();
     test_present();
     test_multiple_windows();

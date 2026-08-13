@@ -139,10 +139,11 @@ void scene_app_free(scene_app *app)
 
 /* ---- window management ------------------------------------------------ */
 
-scene_node_id scene_app_create_window(scene_app *app,
-                                      int32_t x, int32_t y,
-                                      int32_t w, int32_t h,
-                                      const char *title)
+scene_node_id scene_app_create_window_role(scene_app *app,
+                                           int32_t x, int32_t y,
+                                           int32_t w, int32_t h,
+                                           const char *title,
+                                           scene_role content_role)
 {
     if (!app || app->win_count >= MAX_WINDOWS) return SCENE_NO_PARENT;
 
@@ -182,10 +183,10 @@ scene_node_id scene_app_create_window(scene_app *app,
          &(scene_rect){x + w - 28, y + 4, 24, 24}, vis);
     scene_client_set_text(app->cl, close_id, 0, "X", 1);
 
-    /* CONTENT: app draws here */
+/* CONTENT: app draws here */
     scene_client_create_node(app->cl, win_id, content_id,
-                             SCENE_ROLE_GENERIC,
-         &(scene_rect){x, y + tb_h, w, h - tb_h}, vis);
+                             content_role,
+     &(scene_rect){x, y + tb_h, w, h - tb_h}, vis);
 
     /* Track the window */
     app_window *win = &app->wins[app->win_count++];
@@ -199,6 +200,15 @@ scene_node_id scene_app_create_window(scene_app *app,
     if (title) snprintf(win->title, sizeof(win->title), "%s", title);
 
     return content_id;
+}
+
+scene_node_id scene_app_create_window(scene_app *app,
+                                      int32_t x, int32_t y,
+                                      int32_t w, int32_t h,
+                                      const char *title)
+{
+    return scene_app_create_window_role(app, x, y, w, h, title,
+                                        SCENE_ROLE_GENERIC);
 }
 
 int scene_app_destroy_window(scene_app *app, scene_node_id content_id)
