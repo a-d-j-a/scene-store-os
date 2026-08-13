@@ -4,9 +4,12 @@ Written: 2026-08-13, by the agent working the "daily-driver" milestone.
 Purpose: carries EVERYTHING needed to continue in a brand new chat, cold, with
 zero history. Read this file first, then AGENTS.md (rules + research state) and
 scene-store-spec.md (locked wire format, v0) before touching anything.
-Status as of this document: daily-driver milestone mostly complete (networking,
-apk package manager, GRUB ISO boot — all PROVEN in QEMU); ONE ACTIVE BUG: the
-terminal app never paints its window (investigation in progress, see §16).
+Status as of this document: daily-driver milestone COMPLETE (networking,
+apk package manager, GRUB ISO boot, working terminal app — ALL PROVEN in
+QEMU). The one active bug (terminal never paints) was root-caused, fixed,
+and verified at wire level and in a QEMU screendump (see §6/§16.2).
+Remaining before shipping: remove the debug fprintf instrumentation
+(e1351b5/d80e642), write iso/USAGE.md, update the AGENTS.md ledger.
 ================================================================================
 
 --------------------------------------------------------------------------------
@@ -333,8 +336,9 @@ minutes):
    (1280x800@75, scene nodes=7). Networking ran.
 4. Terminal spawn proof: `iso-drm: spawned 'iso-terminal' pid=105` ->
    app reached "running" (transport ok, app ok, welcome ok, window
-   id=40004, terminal ok, running). BUT the window never PAINTS — active
-   bug, see §16.
+   id=40004, terminal ok, running). THE WINDOW THEN PAINTED (fix +
+   verification: see §16.2) — QEMU shot shows terminal bg 0xFF0C0C0C at
+   the window area (60,40,648,168), prompt glyphs, and title text.
 
 TERMINAL APP WORK: scene_terminal spawn now tries openpty (musl has
 pty.h; term->child_write_fd == master for PTY), exec /bin/sh, non-blocking
@@ -349,9 +353,10 @@ MUST link build/scene_app.o (was missing -> undefined
 scene_app_present/flush).
 
 --------------------------------------------------------------------------------
-6. THE ACTIVE BUG: TERMINAL WINDOW NEVER PAINTS ON THE ISO (OPEN)
+6. RESOLVED BUG: TERMINAL WINDOW NEVER PAINTED ON THE ISO (CLOSED 2026-08-13)
 --------------------------------------------------------------------------------
-SYMPTOMS (live ISO, QEMU, kernel cmdline autolaunch=iso-terminal):
+SYMPTOMS (as observed before the fix; live ISO, QEMU, kernel cmdline
+autolaunch=iso-terminal):
 - iso_terminal connects, receives welcome, creates window, spawns PTY
   shell — ALL confirmed via serial stage prints (reached "running").
 - Screenshot shows only the desktop (0xFF1A1A2E) at all pixel coordinates
@@ -365,10 +370,50 @@ SYMPTOMS (live ISO, QEMU, kernel cmdline autolaunch=iso-terminal):
 
 NOTE ON THE EARLIER "SMOKING GUN": the fake-server test (iso_terminal vs
 standalone Python fake_server.py) showed the app sending ZERO bytes over
-the wire even though its recv path worked (welcome received). That
-conclusion was PARTIALLY OVERTURNED on the codespace (see §16.1) — the
-repro there showed conn=0 state instead. Both symptoms need resolution;
-the codespace probe is the faster arena but the ISO is the ground truth.
+the wire even though its recv path worked (welcome received). Both that
+symptom and the codespace conn=0 / ISO l1=0 manifestations resolved to
+ONE root cause — see §16.2 for the full analysis, fix, and verification.
+
+ROOT CAUSE (proven by local repro via fake_server + iso_terminal on
+Windows, then confirmed on the codespace with tools/term_probe.sh):
+iso_terminal.c's main loop called BLOCKING scene_app_pump as its first
+action. The scene server only replies after the client speaks, so the
+window ops (336 B) sat un-flushed in c->out while recv() blocked
+forever; the launcher fed zero bytes; the compositor never ingested
+anything. This violated the Pass-15 launcher-children rule: children
+MUST use non-blocking sockets + poll; a child that blocks on its second
+recv hangs forever.
+
+FIX (commits 10c4165 + 2f77b4d):
+1. iso_terminal.c: scene_tcp_set_nonblock(t, 1) right after
+   scene_app_new_on succeeds. Pump now returns would-block immediately;
+   the loop keeps flushing every tick.
+2. The terminal's CONTENT node now carries SCENE_ROLE_TERMINAL (via the
+   new scene_app_create_window_role API) so the compositor paints the
+   server-owned terminal look; role_defaults[TERMINAL].fill set to
+   0xFF0C0C0C matching the terminal's bg (previously the transparent
+   GENERIC content showed the WINDOW 0xFF202020 fill through). Apps
+   transmit roles; the OS owns the look — no wire format change.
+
+VERIFICATION CHAIN:
+- Windows repro (pre-fix): fake: END frames=0 bytes=0; app stuck with
+  cli_emit BLOCKED, out.len=336. Post-fix: END frames=24 bytes=959, all
+  checksums OK — deterministic across runs.
+- New regression test test_tcp_silent_server_flush (test_client): a
+  non-blocking TCP client MUST deliver window ops to a silent server
+  without deadlocking (would-block contract + buffered ops reach the
+  wire). 283 checks.
+- test_comp_terminal_role_fill (test_compositor): TERMINAL role body
+  pixels are exactly 0xFF0C0C0C, titlebar 0xFF1A1A1A. test_app gained
+  test_create_window_role (role variant + GENERIC default both checked).
+  Windows suite: 15 suites / 1,921 checks / 0 failures.
+- ISO rebuild (scene+rootfs+initramfs, musl-gcc, 0 warnings) + QEMU shot
+  (iso/qemu-proof.sh shot autolaunch=iso-terminal): serial log shows 11
+  "cli_emit: op=3 conn=1 wel=1" records (op stream flushing); screendump
+  decodes to: body 0xFF0C0C0C at (100,80)/(100,150)/(100,200)/(600,150)/
+  (700,200), titlebar 0xFF1A1A1A, desktop 0xFF1A1A2E, 299 prompt glyph
+  pixels (bbox x:64-89 = "/ # " row), 195 title-text pixels. HANDOFF §7
+  pixel target met exactly.
 
 --------------------------------------------------------------------------------
 16.1 THE CODESPACE PROBE (2026-08-13, LATEST STATE OF THIS BUG)
@@ -463,8 +508,9 @@ run).
 - shot mode: `iso/qemu-proof.sh shot` — boots with -vga std, -monitor
   stdio piped through a subshell so `screendump /tmp/qemu-shot.ppm` can
   be injected; produces a 1280x800 P6 PPM (3MB). Screendumps are via
-  monitor command; the terminal pixel check would look for
-  0xFF0C0C0C (terminal bg) at ~(120,90) window area.
+  monitor command. DONE 2026-08-13: terminal pixel check passed —
+  0xFF0C0C0C (terminal bg) at the window area (60,40,648,168) in the
+  ppm (see §6).
 - GRUB ISO boot proof: `qemu-system-x86_64 -cdrom
   output/iso-custom-6.6.52.iso ...` — grub.cfg has timeout=3, serial
   console; kernel cmdline passes no autolaunch (grub.cfg does NOT
@@ -581,7 +627,9 @@ de9bf0f chmod networking
 ef5cd27 fake_server.py
 92017e8 fake_server pack format fix
 e1351b5 debug trace cli_emit/flush/tcp_send  <== INSTRUMENTATION IN CODE
-ee43b73 term_probe.sh with pkill                        <== LATEST HEAD
+10c4165 iso_terminal: fix never-paints on ISO — non-blocking transport
+2f77b4d terminal paints its own background: content node SCENE_ROLE_TERMINAL
+        + role default fill 0xFF0C0C0C     <== LATEST HEAD
 
 STALE BEFORE THESE: passes 1-13 commits are earlier in the log; the
 ledger in AGENTS.md covers them in detail.
@@ -600,29 +648,29 @@ ledger in AGENTS.md covers them in detail.
   libs (ISAMU-style). apk works but installed packages live in RAM —
   persistence across boots is NOT yet implemented (future milestone).
 - The debug fprintf traces in scene_client.c/scene_transport.c MUST be
-  removed before shipping (or gated behind an env var).
+  removed before shipping (or gated behind an env var). (STILL PRESENT —
+  commit e1351b5/d80e642; the QEMU shot serial log floods with
+  tcp_send/cli_emit/flush lines.)
 - gh codespace orphan processes: pkill stale servers before rebinding.
 
 --------------------------------------------------------------------------------
 13. WHAT'S NEXT (ordered)
---------------------------------------------------------------------------------
-1. Rerun the codespace probe CLEAN (term_probe.sh now pkills first);
-   add the two missing debug prints first (tcp_recv success n>0,
-   dispatch WELCOME) so the run tells us whether welcome arrives and
-   whether send is reached. If inconclusive: strace the app
-   (strace -f -e trace=connect,sendto,recvfrom,send,recv ...).
-2. Fix whichever side is broken (client conn_open/emit/flush/send chain
-   or server welcome path). Re-run Windows suite (make all + all test_
-   binaries) — MUST stay 15 suites/1,873 checks/0 failures.
-3. Rebuild scene + initramfs (+ ISO if needed), then QEMU:
-   iso/qemu-proof.sh shot with autolaunch=iso-terminal — verify pixel
-   0xFF0C0C0C (terminal bg) at window area (60,40,648,168) in the ppm.
-4. Rebuild the final ISO, run the GRUB -cdrom boot proof with
-   screendump: terminal window visible + desktop settled.
-5. Write iso/USAGE.md (boot, network, apk usage), update AGENTS.md
-   ledger with this milestone + bug resolution, final commit.
-6. Remove debug fprintf instrumentation from scene_client.c/
-   scene_transport.c (after root cause is found and fixed) — new commit.
+-------------------------------------------------------------------------------
+DONE this session (2026-08-13): root cause found + fixed (blocking pump
+-> non-blocking transport, 10c4165); terminal bg via SCENE_ROLE_TERMINAL
+(2f77b4d); Windows suite 1,921 checks green; ISO rebuilt; QEMU shot
+proves terminal paints 0xFF0C0C0C at the window area. See §6.
+1. Remove the debug fprintf instrumentation from scene_client.c
+   (cli_emit/flush) and scene_transport.c (tcp_send/tcp_recv) — commits
+   e1351b5/d80e642. Re-run the Windows suite (must stay 1,921/0) and
+   rebuild scene+initramfs so the ISO serial log is clean.
+2. Write iso/USAGE.md (boot, network, apk usage, autolaunch= cmdline).
+3. Update AGENTS.md ledger with this milestone + bug resolution, final
+   commit.
+4. Optional polish (next milestone): GRUB -cdrom boot proof with the
+   terminal visible; task-button styling / system tray in the shell;
+   wlroots compositor integration (skeleton written, needs Linux build
+   env); cross-app automation service surfaced in the shell.
 
 --------------------------------------------------------------------------------
 14. OPEN QUESTION WORTH FORMALIZING
@@ -643,3 +691,10 @@ ISO's conn_open WAS 1 (or became 1), while the codespace's stayed 0.
    buffer not drained, non-blocking recv contract, listener accept vs
    scene_server_new wiring). Compare against test_launcher which passes
    with real TCP + real child on Windows.
+
+RESOLVED 2026-08-13: the codespace conn=0 runs were an orphaned
+fake_server artifact plus the blocking-pump deadlock; the ISO welcome=ok
++ l1=0 is fully explained by the app blocking in recv() before its first
+flush (window ops stuck in c->out, launcher never sees bytes). No
+conn_open reset exists; the two "contradictory" observations were the
+same bug seen from two angles. Fix and proof: §6.
