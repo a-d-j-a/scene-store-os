@@ -15,6 +15,15 @@ done
 
 for tok in $(cat /proc/cmdline 2>/dev/null); do
     case "$tok" in
+        pkgtest=check:*)
+            PKG="${tok#pkgtest=check:}"
+            echo "network: pkgtest: check:$PKG"
+            if command -v "$PKG" >/dev/null 2>&1; then
+                echo "network: pkgtest: $PKG present OK"
+            else
+                echo "network: pkgtest: $PKG absent FAIL"
+            fi
+            ;;
         pkgtest=*)
             PKG="${tok#pkgtest=}"
             echo "network: pkgtest: apk add --no-cache $PKG"

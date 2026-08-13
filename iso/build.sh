@@ -367,12 +367,13 @@ build_scene_store() {
     # Force full rebuild: stale .o files from previous commits cause
     # subtle alpha/rendering bugs (seen live: 87% opacity on themed elements).
     rm -f build/*.o
-    make build/iso_drm build/iso_demo build/iso_terminal CC="$MUSL_GCC" \
+    make build/iso_drm build/iso_demo build/iso_terminal build/iso_video CC="$MUSL_GCC" \
         CFLAGS="-std=c11 -Wall -Wextra -O2 -Iinclude" || die "iso_drm build failed"
     mkdir -p "$SYSROOT/usr/bin"
     cp build/iso_drm "$SYSROOT/usr/bin/iso-drm"
     cp build/iso_demo "$SYSROOT/usr/bin/iso-demo"
     cp build/iso_terminal "$SYSROOT/usr/bin/iso-terminal"
+    cp build/iso_video "$SYSROOT/usr/bin/iso-video"
     cd -
     msg "scene-store done."
 }
@@ -488,7 +489,7 @@ menu_border=0xFF444466
 menu_item_color=0xFF2A2A4E
 menu_item_text=0xFFE8E8E8
 clock_12h=0
-launcher_apps=iso-terminal,iso-demo
+launcher_apps=iso-terminal,iso-demo,iso-video
 CONF
 
     # Package manager: official Alpine repositories + CA trust bundle
@@ -536,6 +537,13 @@ build_initramfs() {
 
     cat > "$TMP/init" <<'INIT'
 #!/bin/sh
+# init — boot the ISO in one of two modes:
+#   RAM mode (no persist= on the cmdline): the initramfs IS the rootfs,
+#   everything lives in RAM, nothing survives reboot.
+#   Persist mode (persist=DEV, or persist=auto): DEV (e.g. /dev/vda) holds
+#   the real rootfs. First boot: format if blank, copy the ramfs rootfs to
+#   it, then switch_root into it. Later boots: switch_root straight in, so
+#   installed packages (apk), /etc, /home survive reboots.
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 mount -t proc     proc     /proc
 mount -t sysfs    sysfs    /sys
@@ -544,6 +552,52 @@ mount -t tmpfs    tmpfs    /run
 mkdir -p /dev/pts
 mount -t devpts   devpts   /dev/pts
 echo "ISO Linux booting..."
+
+PERSIST=""
+for tok in $(cat /proc/cmdline 2>/dev/null); do
+    case "$tok" in
+        persist=*) PERSIST="${tok#persist=}" ;;
+    esac
+done
+
+if [ -n "$PERSIST" ]; then
+    case "$PERSIST" in
+        auto)
+            for cand in /dev/vda /dev/sda /dev/hda; do
+                [ -b "$cand" ] && { PERSIST="$cand"; break; }
+            done
+            ;;
+    esac
+    if [ -b "$PERSIST" ]; then
+        echo "persist: device $PERSIST"
+        mkdir -p /mnt/root
+        if ! mount -t ext4 "$PERSIST" /mnt/root 2>/dev/null; then
+            echo "persist: blank disk — formatting (ext2 fs, ext4 driver)"
+            mke2fs -F -q "$PERSIST" 2>/dev/null && \
+                mount -t ext4 "$PERSIST" /mnt/root 2>/dev/null || \
+                echo "persist: format/mount FAILED"
+        fi
+        if [ ! -f /mnt/root/.iso-rootfs-v1 ]; then
+            echo "persist: first boot — copying rootfs to disk"
+            for d in bin sbin usr lib lib64 etc home root var opt; do
+                [ -e "/$d" ] || continue
+                cp -a "/$d" /mnt/root/
+            done
+            mkdir -p /mnt/root/dev /mnt/root/proc /mnt/root/sys \
+                     /mnt/root/run /mnt/root/tmp /mnt/root/dev/pts
+            touch /mnt/root/.iso-rootfs-v1
+        fi
+        mkdir -p /mnt/root/proc /mnt/root/sys /mnt/root/dev /mnt/root/run
+        mount --move /proc /mnt/root/proc
+        mount --move /sys  /mnt/root/sys
+        mount --move /dev  /mnt/root/dev
+        mount --move /run  /mnt/root/run
+        echo "persist: switching root to $PERSIST"
+        exec switch_root /mnt/root /sbin/init
+    fi
+    echo "persist: device $PERSIST missing — RAM mode"
+fi
+
 exec /sbin/init
 INIT
     chmod +x "$TMP/init"
@@ -570,7 +624,13 @@ build_iso() {
     # grub.cfg: single source of truth is iso/grub.cfg (tracked in repo).
     # Regex notes: [0-9.]* would swallow the trailing dot of "6.6.52." —
     # use version-then-(.digits)+ so "initramfs-6.6.52.cpio.gz" keeps the dot.
+    # Proof build: `build.sh iso <app> <persist-dev>` concatenates the
+    # tracked iso/grub-proof.cfg (hardcoded entry with autolaunch= +
+    # persist= baked in, default set to it) — no runtime sed of args.
     cp "$SCRIPT_DIR/grub.cfg" "$ISOROOT/boot/grub/grub.cfg"
+    if [ -n "${1:-}" ]; then
+        cat "$SCRIPT_DIR/grub-proof.cfg" >> "$ISOROOT/boot/grub/grub.cfg"
+    fi
     sed -i "s/vmlinuz-[0-9]\+\(\.[0-9]\+\)\+/vmlinuz-${KVER}/g; s/initramfs-[0-9]\+\(\.[0-9]\+\)\+/initramfs-${KVER}/g" \
         "$ISOROOT/boot/grub/grub.cfg"
 
@@ -600,7 +660,7 @@ case "${1:-}" in
     scene)     build_scene_store ;;
     rootfs)    assemble_rootfs ;;
     initramfs) build_initramfs ;;
-    iso)       build_iso ;;
+    iso)       shift 2>/dev/null || true; build_iso "$1" "$2" ;;
     all|"")
         msg "Starting full ISO build..."
         install_prereqs
