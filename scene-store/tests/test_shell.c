@@ -877,6 +877,262 @@ static void test_shell_launch_cb(void)
     printf("test_shell_launch_cb: ok\n");
 }
 
+/* ---- window resize (pointer drag on window edges) ---------------------- */
+
+/* Fake app window replicating scene_app_create_window_role's layout:
+ * WINDOW at (0,0,260,34) — deliberately small height so the 32px
+ * TITLEBAR reaches the window's bottom edge band (6px), which is where
+ * the corner/bottom resize grips live (a tall window hides its bottom
+ * edge under the content area, away from the titlebar). Rects are
+ * absolute session space (spec §3), children anchored at the window
+ * origin: TITLEBAR (0,0,w,32), LABEL (4,4,w-40,24), CLOSE (w-28,4,24,24)
+ * under the titlebar, CONTENT (0,32,w,h-32). */
+static void build_resize_app(struct harness *h)
+{
+    scene_client_create_node(h->cl, SCENE_NO_PARENT, 500, SCENE_ROLE_WINDOW,
+        &(scene_rect){0, 0, 260, 34}, SCENE_FLAG_VISIBLE);
+    scene_client_create_node(h->cl, 500, 501, SCENE_ROLE_TITLEBAR,
+        &(scene_rect){0, 0, 260, 32},
+        SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
+    scene_client_create_node(h->cl, 501, 502, SCENE_ROLE_LABEL,
+        &(scene_rect){4, 4, 220, 24}, SCENE_FLAG_VISIBLE);
+    scene_client_set_text(h->cl, 502, 1, "T", 1);
+    scene_client_create_node(h->cl, 501, 503, SCENE_ROLE_BUTTON,
+        &(scene_rect){232, 4, 24, 24},
+        SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
+    scene_client_set_text(h->cl, 503, 1, "X", 1);
+    scene_client_create_node(h->cl, 500, 504, SCENE_ROLE_GENERIC,
+        &(scene_rect){0, 32, 260, 2}, SCENE_FLAG_VISIBLE);
+    tickf(h);
+}
+
+static void test_shell_resize_corner(void)
+{
+    struct harness h;
+    harness_init(&h);
+
+    scene_shell_config cfg;
+    scene_shell_config_defaults(&cfg);
+    scene_shell *sh = scene_shell_new(h.cl,
+        scene_compositor_store(h.cp), h.cp, &cfg);
+    scene_shell_build(sh, 800, 600);
+    tickf(&h);
+
+    build_resize_app(&h);
+    scene_store *s = scene_compositor_store(h.cp);
+    scene_node_vis v;
+
+    /* Press the bottom-right corner: (258,30) is inside the 6px bands
+     * of both the right edge (x >= 254) and the bottom edge (y >= 28),
+     * and still inside the titlebar (y < 32). */
+    scene_node_id r = scene_shell_handle_pointer(sh, 258, 30, 0x01);
+    CHECK_EQ(r, 501);              /* pressed the titlebar */
+
+    /* Drag outward +30,+30 → 260+30 x 34+30 = 290x64. */
+    r = scene_shell_handle_pointer(sh, 288, 60, 0x01);
+    CHECK_EQ(r, 500);              /* resize drag reports the window */
+    tickf(&h);
+
+    CHECK_EQ(scene_store_node_vis(s, 500, &v), 0);
+    CHECK_EQ(v.rect[0], 0); CHECK_EQ(v.rect[1], 0);
+    CHECK_EQ(v.rect[2], 290); CHECK_EQ(v.rect[3], 64);
+    CHECK_EQ(scene_store_node_vis(s, 501, &v), 0);
+    CHECK_EQ(v.rect[0], 0); CHECK_EQ(v.rect[1], 0);
+    CHECK_EQ(v.rect[2], 290); CHECK_EQ(v.rect[3], 32);  /* titlebar w = window w */
+    CHECK_EQ(scene_store_node_vis(s, 502, &v), 0);
+    CHECK_EQ(v.rect[0], 4); CHECK_EQ(v.rect[1], 4);
+    CHECK_EQ(v.rect[2], 250); CHECK_EQ(v.rect[3], 24);  /* w-40 */
+    CHECK_EQ(scene_store_node_vis(s, 503, &v), 0);
+    CHECK_EQ(v.rect[0], 262); CHECK_EQ(v.rect[1], 4);   /* w-28 */
+    CHECK_EQ(v.rect[2], 24); CHECK_EQ(v.rect[3], 24);
+    CHECK_EQ(scene_store_node_vis(s, 504, &v), 0);
+    CHECK_EQ(v.rect[0], 0); CHECK_EQ(v.rect[1], 32);
+    CHECK_EQ(v.rect[2], 290); CHECK_EQ(v.rect[3], 32);  /* h-32 */
+
+    /* Drag again without releasing — deltas are measured from the
+     * ORIGINAL press origin (258,30), not incrementally: +60,+40 →
+     * 320x74. */
+    r = scene_shell_handle_pointer(sh, 318, 70, 0x01);
+    CHECK_EQ(r, 500);
+    tickf(&h);
+    CHECK_EQ(scene_store_node_vis(s, 500, &v), 0);
+    CHECK_EQ(v.rect[2], 320); CHECK_EQ(v.rect[3], 74);
+    CHECK_EQ(scene_store_node_vis(s, 501, &v), 0);
+    CHECK_EQ(v.rect[2], 320);
+    CHECK_EQ(scene_store_node_vis(s, 504, &v), 0);
+    CHECK_EQ(v.rect[2], 320); CHECK_EQ(v.rect[3], 42);
+
+    /* Release: resize ends, state cleared. */
+    r = scene_shell_handle_pointer(sh, 318, 70, 0x00);
+    CHECK_EQ(r, 0);
+
+    /* Moving again later still works: press the titlebar away from
+     * every edge band (right band starts x=314, bottom band y=28),
+     * drag → window position follows the move gesture, size preserved;
+     * move does not re-derive children (existing behavior). */
+    r = scene_shell_handle_pointer(sh, 130, 20, 0x01);
+    CHECK_EQ(r, 501);
+    r = scene_shell_handle_pointer(sh, 200, 50, 0x01);
+    CHECK_EQ(r, 501);
+    tickf(&h);
+    CHECK_EQ(scene_store_node_vis(s, 500, &v), 0);
+    CHECK_EQ(v.rect[0], 70);   /* 200 - 130 */
+    CHECK_EQ(v.rect[1], 30);   /* 50 - 20 */
+    CHECK_EQ(v.rect[2], 320); CHECK_EQ(v.rect[3], 74);
+    r = scene_shell_handle_pointer(sh, 200, 50, 0x00);
+    CHECK_EQ(r, 0);
+
+    scene_shell_free(sh);
+    harness_destroy(&h);
+    printf("test_shell_resize_corner: ok\n");
+}
+
+static void test_shell_resize_edge(void)
+{
+    struct harness h;
+    harness_init(&h);
+
+    scene_shell_config cfg;
+    scene_shell_config_defaults(&cfg);
+    scene_shell *sh = scene_shell_new(h.cl,
+        scene_compositor_store(h.cp), h.cp, &cfg);
+    scene_shell_build(sh, 800, 600);
+    tickf(&h);
+
+    build_resize_app(&h);
+    scene_store *s = scene_compositor_store(h.cp);
+    scene_node_vis v;
+
+    /* Right edge only: press (258,20) — inside the right band
+     * (x >= 254), left of the bottom band (y=20 < 28). Drag +60,+20:
+     * width grows, height stays 34. */
+    scene_node_id r = scene_shell_handle_pointer(sh, 258, 20, 0x01);
+    CHECK_EQ(r, 501);
+    r = scene_shell_handle_pointer(sh, 318, 40, 0x01);
+    CHECK_EQ(r, 500);
+    tickf(&h);
+    CHECK_EQ(scene_store_node_vis(s, 500, &v), 0);
+    CHECK_EQ(v.rect[2], 320); CHECK_EQ(v.rect[3], 34);   /* h unchanged */
+    CHECK_EQ(scene_store_node_vis(s, 501, &v), 0);
+    CHECK_EQ(v.rect[2], 320); CHECK_EQ(v.rect[3], 32);
+    CHECK_EQ(scene_store_node_vis(s, 504, &v), 0);
+    CHECK_EQ(v.rect[2], 320); CHECK_EQ(v.rect[3], 2);    /* content h unchanged */
+    CHECK_EQ(scene_store_node_vis(s, 503, &v), 0);
+    CHECK_EQ(v.rect[0], 292);                           /* w-28 */
+    r = scene_shell_handle_pointer(sh, 318, 40, 0x00);
+    CHECK_EQ(r, 0);
+
+    /* Bottom edge only: press (70,30) — inside the bottom band
+     * (y >= 28), left of the right band (x=70 < 314 now). Drag +30,+34:
+     * height grows, width stays. */
+    r = scene_shell_handle_pointer(sh, 70, 30, 0x01);
+    CHECK_EQ(r, 501);
+    r = scene_shell_handle_pointer(sh, 100, 64, 0x01);
+    CHECK_EQ(r, 500);
+    tickf(&h);
+    CHECK_EQ(scene_store_node_vis(s, 500, &v), 0);
+    CHECK_EQ(v.rect[2], 320); CHECK_EQ(v.rect[3], 68);   /* w unchanged */
+    CHECK_EQ(scene_store_node_vis(s, 501, &v), 0);
+    CHECK_EQ(v.rect[2], 320); CHECK_EQ(v.rect[3], 32);
+    CHECK_EQ(scene_store_node_vis(s, 504, &v), 0);
+    CHECK_EQ(v.rect[2], 320); CHECK_EQ(v.rect[3], 36);   /* 68-32 */
+    r = scene_shell_handle_pointer(sh, 100, 64, 0x00);
+    CHECK_EQ(r, 0);
+
+    scene_shell_free(sh);
+    harness_destroy(&h);
+    printf("test_shell_resize_edge: ok\n");
+}
+
+static void test_shell_resize_clamp(void)
+{
+    struct harness h;
+    harness_init(&h);
+
+    scene_shell_config cfg;
+    scene_shell_config_defaults(&cfg);
+    scene_shell *sh = scene_shell_new(h.cl,
+        scene_compositor_store(h.cp), h.cp, &cfg);
+    scene_shell_build(sh, 800, 600);
+    tickf(&h);
+
+    build_resize_app(&h);
+    scene_store *s = scene_compositor_store(h.cp);
+    scene_node_vis v;
+
+    /* Corner press, drag far up-left: deltas (-358,-230) → raw sizes
+     * (-98,-196) → both clamp to the 96x64 minimum. */
+    scene_node_id r = scene_shell_handle_pointer(sh, 258, 30, 0x01);
+    CHECK_EQ(r, 501);
+    r = scene_shell_handle_pointer(sh, -100, -200, 0x01);
+    CHECK_EQ(r, 500);
+    tickf(&h);
+    CHECK_EQ(scene_store_node_vis(s, 500, &v), 0);
+    CHECK_EQ(v.rect[2], 96); CHECK_EQ(v.rect[3], 64);   /* never below minimum */
+    CHECK_EQ(scene_store_node_vis(s, 501, &v), 0);
+    CHECK_EQ(v.rect[2], 96); CHECK_EQ(v.rect[3], 32);
+    CHECK_EQ(scene_store_node_vis(s, 504, &v), 0);
+    CHECK_EQ(v.rect[0], 0); CHECK_EQ(v.rect[1], 32);
+    CHECK_EQ(v.rect[2], 96); CHECK_EQ(v.rect[3], 32);
+    CHECK_EQ(scene_store_node_vis(s, 502, &v), 0);
+    CHECK_EQ(v.rect[2], 56);                            /* 96-40 */
+    CHECK_EQ(scene_store_node_vis(s, 503, &v), 0);
+    CHECK_EQ(v.rect[0], 68);                            /* 96-28 */
+    r = scene_shell_handle_pointer(sh, -100, -200, 0x00);
+    CHECK_EQ(r, 0);
+
+    scene_shell_free(sh);
+    harness_destroy(&h);
+    printf("test_shell_resize_clamp: ok\n");
+}
+
+static void test_shell_resize_not_on_edges(void)
+{
+    struct harness h;
+    harness_init(&h);
+
+    scene_shell_config cfg;
+    scene_shell_config_defaults(&cfg);
+    scene_shell *sh = scene_shell_new(h.cl,
+        scene_compositor_store(h.cp), h.cp, &cfg);
+    scene_shell_build(sh, 800, 600);
+    tickf(&h);
+
+    build_resize_app(&h);
+    scene_store *s = scene_compositor_store(h.cp);
+    scene_node_vis v;
+
+    /* Press inside the window body (the content area, not the titlebar)
+     * → neither resize nor move starts; dragging changes nothing. */
+    scene_node_id r = scene_shell_handle_pointer(sh, 150, 33, 0x01);
+    CHECK_EQ(r, 0);
+    r = scene_shell_handle_pointer(sh, 500, 400, 0x01);
+    CHECK_EQ(r, 0);
+    tickf(&h);
+    CHECK_EQ(scene_store_node_vis(s, 500, &v), 0);
+    CHECK_EQ(v.rect[0], 0); CHECK_EQ(v.rect[1], 0);
+    CHECK_EQ(v.rect[2], 260); CHECK_EQ(v.rect[3], 34);  /* unchanged */
+    r = scene_shell_handle_pointer(sh, 500, 400, 0x00);
+    CHECK_EQ(r, 0);
+
+    /* A titlebar press away from the edge bands still moves (not
+     * resize): position follows the pointer, size preserved. */
+    r = scene_shell_handle_pointer(sh, 130, 16, 0x01);
+    CHECK_EQ(r, 501);
+    r = scene_shell_handle_pointer(sh, 300, 100, 0x01);
+    CHECK_EQ(r, 501);
+    tickf(&h);
+    CHECK_EQ(scene_store_node_vis(s, 500, &v), 0);
+    CHECK_EQ(v.rect[0], 170); CHECK_EQ(v.rect[1], 84);
+    CHECK_EQ(v.rect[2], 260); CHECK_EQ(v.rect[3], 34);
+    r = scene_shell_handle_pointer(sh, 300, 100, 0x00);
+    CHECK_EQ(r, 0);
+
+    scene_shell_free(sh);
+    harness_destroy(&h);
+    printf("test_shell_resize_not_on_edges: ok\n");
+}
+
 int main(void)
 {
     test_shell_build();
@@ -900,6 +1156,10 @@ int main(void)
     test_shell_wallpaper_resize();
     test_shell_no_wallpaper_no_compositor();
     test_shell_launch_cb();
+    test_shell_resize_corner();
+    test_shell_resize_edge();
+    test_shell_resize_clamp();
+    test_shell_resize_not_on_edges();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

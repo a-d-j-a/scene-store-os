@@ -32,6 +32,14 @@
 #define SHELL_STYLE_MENU    7u
 #define SHELL_STYLE_SLOTS   8u
 
+/* Window resize gesture: edge band width in px, edge flags (corner =
+ * both bits), and the minimum window size. */
+#define RESIZE_BAND        6
+#define RESIZE_EDGE_RIGHT  1u
+#define RESIZE_EDGE_BOTTOM 2u
+#define RESIZE_MIN_W       96
+#define RESIZE_MIN_H       64
+
 /* ---- internal state -------------------------------------------------- */
 #define MAX_TASKS 256
 
@@ -68,6 +76,12 @@ struct scene_shell {
     /* window move (drag title bar) */
     scene_node_id        moving_titlebar; /* titlebar being dragged      */
     int32_t              move_off_x, move_off_y; /* offset from pointer to window origin */
+
+    /* window resize (drag window edge/corner) */
+    scene_node_id        resizing_window;  /* WINDOW node being resized  */
+    uint8_t              resize_edges;     /* RESIZE_EDGE_* bitmask      */
+    int32_t              resize_orig_w, resize_orig_h; /* rect at press  */
+    int32_t              resize_orig_px, resize_orig_py; /* pointer at press */
 
     /* wallpaper */
     scene_wallpaper     *wp;
@@ -703,10 +717,157 @@ static int get_abs_rect(scene_store *store, scene_node_id id, int32_t out[4])
     return 0;
 }
 
+/* Which resize edges the point (x,y) is within RESIZE_BAND of on the
+ * window rect `wr` (absolute session space). 0 = none (move instead);
+ * corner = both bits. */
+static uint8_t resize_edges_at(int32_t x, int32_t y, const int32_t wr[4])
+{
+    uint8_t e = 0;
+    if (x >= wr[0] + wr[2] - RESIZE_BAND && x < wr[0] + wr[2])
+        e |= RESIZE_EDGE_RIGHT;
+    if (y >= wr[1] + wr[3] - RESIZE_BAND && y < wr[1] + wr[3])
+        e |= RESIZE_EDGE_BOTTOM;
+    return e;
+}
+
+/* Depth of a node in the store (hops to the root; 0 for a root). */
+static uint32_t node_depth(scene_store *store, scene_node_id id)
+{
+    uint32_t d = 0;
+    scene_node_vis v;
+    while (scene_store_node_vis(store, id, &v) == 0 &&
+           v.parent != SCENE_NO_PARENT) {
+        d++;
+        id = v.parent;
+    }
+    return d;
+}
+
+struct tb_ctx {
+    scene_store   *store;
+    int32_t        x, y;
+    scene_node_id  best;
+    uint32_t       best_depth;
+};
+
+static int titlebar_walk_cb(scene_node_id id, void *ud)
+{
+    struct tb_ctx *c = ud;
+    scene_node_vis v;
+    if (scene_store_node_vis(c->store, id, &v) != 0) return 0;
+    if (v.role != SCENE_ROLE_TITLEBAR) return 0;
+    if (!(v.flags & SCENE_FLAG_VISIBLE) || v.stale) return 0;
+    if (!point_in_rect(c->x, c->y, v.rect)) return 0;
+    uint32_t d = node_depth(c->store, id);
+    if (d >= c->best_depth) { c->best = id; c->best_depth = d; }
+    return 0;
+}
+
+/* Innermost (deepest) titlebar node under (x,y), or 0. The shell's own
+ * nodes are never TITLEBARs, so this finds app window titlebars. */
+static scene_node_id titlebar_at(scene_store *store, int32_t x, int32_t y)
+{
+    struct tb_ctx c = { store, x, y, 0, 0 };
+    scene_store_walk(store, titlebar_walk_cb, &c);
+    return c.best;
+}
+
+/* ---- window resize (re-derive the window tree) ----------------------- */
+
+struct resize_ctx {
+    scene_client   *cl;
+    scene_store    *store;
+    scene_node_id   window_id;
+    scene_node_id   titlebar_id;
+    uint8_t         content_set;   /* first non-TITLEBAR child is CONTENT */
+    int32_t         wx, wy, nw, nh;
+};
+
+/* Re-derive the window tree for the new size. TITLEBAR spans the new
+ * width at the top; the first other direct child is CONTENT and fills
+ * below the 32px titlebar; the titlebar's own label and close button
+ * follow the scene_app layout (label at +4,+4 w-40x24, close at
+ * w-28,+4 24x24 — the "X" must track the new width). Unknown roles are
+ * left alone. All rects are absolute session space (spec §3). */
+static int resize_child_cb(scene_node_id id, void *ud)
+{
+    struct resize_ctx *rc = ud;
+    scene_node_vis v;
+    scene_rect r;
+
+    if (scene_store_node_vis(rc->store, id, &v) != 0) return 0;
+    if (v.parent == rc->window_id) {
+        if (v.role == SCENE_ROLE_TITLEBAR) {
+            rc->titlebar_id = id;
+            r.x = rc->wx; r.y = rc->wy; r.w = rc->nw; r.h = 32;
+            scene_client_set_rect(rc->cl, id, &r);
+        } else if (!rc->content_set) {
+            rc->content_set = 1;
+            r.x = rc->wx; r.y = rc->wy + 32; r.w = rc->nw; r.h = rc->nh - 32;
+            scene_client_set_rect(rc->cl, id, &r);
+        }
+    } else if (rc->titlebar_id != 0 && v.parent == rc->titlebar_id) {
+        if (v.role == SCENE_ROLE_LABEL) {
+            r.x = rc->wx + 4; r.y = rc->wy + 4;
+            r.w = rc->nw - 40; r.h = 24;
+            scene_client_set_rect(rc->cl, id, &r);
+        } else if (v.role == SCENE_ROLE_BUTTON) {
+            r.x = rc->wx + rc->nw - 28; r.y = rc->wy + 4; r.w = 24; r.h = 24;
+            scene_client_set_rect(rc->cl, id, &r);
+        }
+    }
+    return 0;
+}
+
+static void resize_children(scene_shell *sh, scene_node_id window_id,
+                            int32_t wx, int32_t wy, int32_t nw, int32_t nh)
+{
+    struct resize_ctx rc;
+
+    rc.cl = sh->client;
+    rc.store = sh->store;
+    rc.window_id = window_id;
+    rc.titlebar_id = 0;
+    rc.content_set = 0;
+    rc.wx = wx; rc.wy = wy; rc.nw = nw; rc.nh = nh;
+    scene_store_walk(sh->store, resize_child_cb, &rc);
+}
+
 scene_node_id scene_shell_handle_pointer(scene_shell *sh, int32_t x, int32_t y,
                                 uint8_t buttons)
 {
     if (!sh || !sh->built) return 0;
+
+    /* Window resize: if resizing, update the WINDOW rect and re-derive
+     * its children (titlebar/content/label/close follow the new size).
+     * Size = original + pointer delta along the active edges, clamped
+     * to the minimum; position is preserved. */
+    if (sh->resizing_window != 0) {
+        if (!(buttons & 0x01)) {
+            /* Button released — end resize. */
+            sh->resizing_window = 0;
+            return 0;
+        }
+        int32_t nw = sh->resize_orig_w, nh = sh->resize_orig_h;
+        if (sh->resize_edges & RESIZE_EDGE_RIGHT)
+            nw += x - sh->resize_orig_px;
+        if (sh->resize_edges & RESIZE_EDGE_BOTTOM)
+            nh += y - sh->resize_orig_py;
+        /* Clamp only the dimensions being dragged (an edge-only drag
+         * must leave the other dimension untouched). */
+        if ((sh->resize_edges & RESIZE_EDGE_RIGHT) && nw < RESIZE_MIN_W)
+            nw = RESIZE_MIN_W;
+        if ((sh->resize_edges & RESIZE_EDGE_BOTTOM) && nh < RESIZE_MIN_H)
+            nh = RESIZE_MIN_H;
+        scene_node_vis wv;
+        if (scene_store_node_vis(sh->store, sh->resizing_window, &wv) == 0) {
+            scene_rect wr = {wv.rect[0], wv.rect[1], nw, nh};
+            scene_client_set_rect(sh->client, sh->resizing_window, &wr);
+            resize_children(sh, sh->resizing_window,
+                            wv.rect[0], wv.rect[1], nw, nh);
+        }
+        return sh->resizing_window;
+    }
 
     /* Window move: if dragging a title bar, update the window rect. */
     if (sh->moving_titlebar != 0) {
@@ -780,20 +941,33 @@ scene_node_id scene_shell_handle_pointer(scene_shell *sh, int32_t x, int32_t y,
         sh->hovered_id = hit;
     }
 
-    /* Start window move: if button pressed on a titlebar, begin drag. */
-    if ((buttons & 0x01) && hit != 0) {
-        scene_node_vis v;
-        if (scene_store_node_vis(sh->store, hit, &v) == 0 &&
-            v.role == SCENE_ROLE_TITLEBAR &&
-            v.parent != SCENE_NO_PARENT) {
-            sh->moving_titlebar = hit;
-            /* Compute offset from pointer to window origin. */
-            scene_node_vis wv;
-            if (scene_store_node_vis(sh->store, v.parent, &wv) == 0) {
-                int32_t abs_x[4] = {0};
-                get_abs_rect(sh->store, v.parent, abs_x);
-                sh->move_off_x = x - abs_x[0];
-                sh->move_off_y = y - abs_x[1];
+    /* Start window move or resize: a press on a titlebar drags its
+     * parent WINDOW; presses within RESIZE_BAND of the window's right
+     * edge, bottom edge, or bottom-right corner resize instead. */
+    if (buttons & 0x01) {
+        scene_node_id tb = titlebar_at(sh->store, x, y);
+        if (tb != 0) {
+            scene_node_vis v;
+            if (scene_store_node_vis(sh->store, tb, &v) == 0 &&
+                v.parent != SCENE_NO_PARENT) {
+                int32_t wr[4];
+                if (get_abs_rect(sh->store, v.parent, wr) == 0) {
+                    uint8_t edges = resize_edges_at(x, y, wr);
+                    if (edges) {
+                        sh->resizing_window = v.parent;
+                        sh->resize_edges     = edges;
+                        sh->resize_orig_w    = wr[2];
+                        sh->resize_orig_h    = wr[3];
+                        sh->resize_orig_px   = x;
+                        sh->resize_orig_py   = y;
+                    } else {
+                        sh->moving_titlebar = tb;
+                        /* Offset from pointer to window origin. */
+                        sh->move_off_x = x - wr[0];
+                        sh->move_off_y = y - wr[1];
+                    }
+                    return tb;
+                }
             }
         }
     }
@@ -846,6 +1020,7 @@ int scene_shell_load_config(scene_shell *sh, const char *path)
         sh->hovered_id = 0;
         sh->active_task_id = 0;
         sh->moving_titlebar = 0;
+        sh->resizing_window = 0;
         /* Rebuild with new config */
         return scene_shell_build(sh, sh->width, sh->height);
     }
@@ -884,6 +1059,7 @@ int scene_shell_apply_config(scene_shell *sh, const scene_shell_config *cfg)
         sh->hovered_id = 0;
         sh->active_task_id = 0;
         sh->moving_titlebar = 0;
+        sh->resizing_window = 0;
         return scene_shell_build(sh, sh->width, sh->height);
     }
     return 0;
