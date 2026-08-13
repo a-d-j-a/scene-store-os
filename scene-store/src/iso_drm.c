@@ -287,16 +287,51 @@ static const scene_client_cbs shell_cbs = {
  * App launcher callbacks (the shell menu hands spawns to the host)
  * ====================================================================== */
 
+/* ---- OS-side media importer (honest boundary) --------------------------
+ * The v0 wire carries only texture REFERENCEs; the pixels live here, in
+ * the OS. This demo importer re-runs the demo decoder (the same formula
+ * as iso_video.c: frame n colors row y with (n*29+y)&0xFF, left half
+ * G=0 B=0x40, right half G=0xFF B=0x80) into the app session's store
+ * every compositor frame. A real system would decode the shared media
+ * stream at this same seam. ------------------------------------------- */
+#define IMP_REF  1u
+#define IMP_W    240u
+#define IMP_H    128u
+static scene_store *g_imp_store;
+static uint32_t     g_imp_frame;
+static uint32_t     g_imp_tex[IMP_W * IMP_H];
+
+static void importer_tick(void)
+{
+    uint32_t x, y, n;
+    if (!g_imp_store) return;
+    n = g_imp_frame++;
+    for (y = 0; y < IMP_H; y++) {
+        uint32_t R = (n * 29u + y) & 0xFFu;
+        for (x = 0; x < IMP_W; x++) {
+            uint32_t c = UINT32_C(0xFF000000) | (R << 16);
+            if (x < IMP_W / 2u) c |= UINT32_C(0x00000040);  /* left  */
+            else                c |= UINT32_C(0x00FF0080);  /* right */
+            g_imp_tex[y * IMP_W + x] = c;
+        }
+    }
+    scene_store_register_texture(g_imp_store, IMP_REF, IMP_W, IMP_H,
+                                 g_imp_tex);
+}
+
 static void cb_session_added(void *ud, int layer, uint32_t pid)
 {
-    (void)ud;
+    ctx *c = ud;
     fprintf(stderr, "iso-drm: app %u joined layer %d\n", pid, layer);
+    g_imp_store = scene_compositor_layer_store(c->cp, layer);
+    g_imp_frame = 0;
 }
 
 static void cb_session_exited(void *ud, int layer, uint32_t pid)
 {
     (void)ud;
     fprintf(stderr, "iso-drm: app %u exited layer %d\n", pid, layer);
+    g_imp_store = NULL;
 }
 
 static const scene_launcher_cbs launcher_cbs = {
@@ -687,6 +722,7 @@ int main(int argc, char **argv)
         pump_shell(&c);
         if (c.sh) scene_shell_tick(c.sh);
         scene_launcher_pump(c.launcher);
+        importer_tick();
 
         if (scene_compositor_frame(c.cp) != 0)
             break;

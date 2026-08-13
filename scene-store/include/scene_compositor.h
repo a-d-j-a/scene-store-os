@@ -92,6 +92,10 @@ int  scene_compositor_add_session(scene_compositor *cp, scene_server *sv);
  * Returns the removed layer index, or -1 when no layer hosts `sv`.
  * The layer's area repaints as the desktop.                              */
 int  scene_compositor_remove_session(scene_compositor *cp, scene_server *sv);
+/* The store of a foreign session layer (layer > 0), or NULL when the
+ * layer does not exist. The host uses this to run OS-side services on
+ * app stores (e.g. the media importer registering texture refs).      */
+scene_store *scene_compositor_layer_store(scene_compositor *cp, int layer);
 /* 1 = keyboard focus is on the shell session (layer 0). The host uses
  * this to keep OS-level key grabs (shell hotkeys) away from apps.      */
 int  scene_compositor_focus_is_shell(scene_compositor *cp);
