@@ -8,8 +8,9 @@ Status as of this document: daily-driver milestone COMPLETE (networking,
 apk package manager, GRUB ISO boot, working terminal app — ALL PROVEN in
 QEMU). The one active bug (terminal never paints) was root-caused, fixed,
 and verified at wire level and in a QEMU screendump (see §6/§16.2).
-Remaining before shipping: remove the debug fprintf instrumentation
-(e1351b5/d80e642), write iso/USAGE.md, update the AGENTS.md ledger.
+Remaining before shipping: write iso/USAGE.md, update the AGENTS.md ledger.
+Debug instrumentation is already stripped (commit eddb960) and re-verified
+on the QEMU shot with a clean serial log.
 ================================================================================
 
 --------------------------------------------------------------------------------
@@ -626,10 +627,12 @@ de9bf0f chmod networking
 6895c38 rm stray logs
 ef5cd27 fake_server.py
 92017e8 fake_server pack format fix
-e1351b5 debug trace cli_emit/flush/tcp_send  <== INSTRUMENTATION IN CODE
+e1351b5 debug trace cli_emit/flush/tcp_send  <== REMOVED by eddb960
 10c4165 iso_terminal: fix never-paints on ISO — non-blocking transport
 2f77b4d terminal paints its own background: content node SCENE_ROLE_TERMINAL
-        + role default fill 0xFF0C0C0C     <== LATEST HEAD
+        + role default fill 0xFF0C0C0C
+5b9c4f6 docs: close terminal-paint bug in handoff (root cause, fix, proof)
+eddb960 perf: strip debug fprintf instrumentation         <== LATEST HEAD
 
 STALE BEFORE THESE: passes 1-13 commits are earlier in the log; the
 ledger in AGENTS.md covers them in detail.
@@ -648,9 +651,11 @@ ledger in AGENTS.md covers them in detail.
   libs (ISAMU-style). apk works but installed packages live in RAM —
   persistence across boots is NOT yet implemented (future milestone).
 - The debug fprintf traces in scene_client.c/scene_transport.c MUST be
-  removed before shipping (or gated behind an env var). (STILL PRESENT —
-  commit e1351b5/d80e642; the QEMU shot serial log floods with
-  tcp_send/cli_emit/flush lines.)
+  removed before shipping (or gated behind an env var). (REMOVED —
+  commit eddb960, 2026-08-13: cli_emit/flush/tcp_send/tcp_recv prints
+  deleted from scene_client.c, scene_transport.c, scene_launcher.c;
+  Windows suite re-run 1,921/0, ISO rebuilt, QEMU shot serial log clean —
+  zero cli_emit lines, pixels unchanged.)
 - gh codespace orphan processes: pkill stale servers before rebinding.
 
 --------------------------------------------------------------------------------
@@ -660,11 +665,14 @@ DONE this session (2026-08-13): root cause found + fixed (blocking pump
 -> non-blocking transport, 10c4165); terminal bg via SCENE_ROLE_TERMINAL
 (2f77b4d); Windows suite 1,921 checks green; ISO rebuilt; QEMU shot
 proves terminal paints 0xFF0C0C0C at the window area. See §6.
-1. Remove the debug fprintf instrumentation from scene_client.c
-   (cli_emit/flush) and scene_transport.c (tcp_send/tcp_recv) — commits
-   e1351b5/d80e642. Re-run the Windows suite (must stay 1,921/0) and
-   rebuild scene+initramfs so the ISO serial log is clean.
-2. Write iso/USAGE.md (boot, network, apk usage, autolaunch= cmdline).
+Debug instrumentation stripped (eddb960), suite re-run green, ISO
+rebuilt, second QEMU shot with a clean serial log and identical pixels.
+iso/USAGE.md written. Remaining: AGENTS.md ledger update.
+1. DONE — Remove the debug fprintf instrumentation (eddb960: cli_emit/
+   flush/tcp_send/tcp_recv + launcher feed prints; suite still 1,921/0;
+   QEMU re-shot clean: 0 cli_emit lines, pixels unchanged).
+2. DONE — iso/USAGE.md written (build, boot, qemu-proof, cmdline,
+   boot sequence, desktop, apk, host tests).
 3. Update AGENTS.md ledger with this milestone + bug resolution, final
    commit.
 4. Optional polish (next milestone): GRUB -cdrom boot proof with the
