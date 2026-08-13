@@ -888,6 +888,114 @@ static void test_tcp_roundtrip(void)
     free(h.cap_payload);
     printf("test_tcp_roundtrip: ok\n");
 }
+
+/* ---- launcher-child contract: silent server must not deadlock ---------
+ * A launcher child must never block in pump: the scene server only
+ * replies after the client speaks, so a blocking recv before any flush
+ * deadlocks with the buffered ops stuck in the out buffer (the ISO
+ * terminal bug: window built, l1=0, zero bytes fed). The child sets
+ * non-blocking; pump returns would-block immediately and the loop keeps
+ * flushing each tick even though the server stays silent. This test
+ * proves: (a) recv on the non-blocking socket returns would-block (1)
+ * immediately when empty, (b) buffered window ops still reach the wire
+ * with a server that never replies.                                       */
+
+static volatile long g_silent_rx;   /* bytes the silent server received   */
+static volatile int  g_silent_done;
+
+static int silent_accept_cb(void *ud, scene_transport *peer)
+{
+    (void)ud;
+    /* real WELCOME so the client becomes welcomed, then silence */
+    const uint8_t *f;
+    uint32_t flen;
+    while (scene_server_out_next_frame(g_sv, &f, &flen) == 1)
+        scene_transport_send(peer, f, flen);
+    scene_tcp_set_nonblock(peer, 1);
+    uint8_t buf[8192];
+    g_silent_rx = 0;
+    for (;;) {
+        uint32_t got = 0;
+        int r = scene_transport_recv(peer, buf, sizeof(buf), &got);
+        if (r == -1) break;                 /* peer closed                  */
+        if (r == 1 || got == 0) {           /* would-block / nothing        */
+            Sleep(1);
+            if (g_silent_done) break;
+            continue;
+        }
+        g_silent_rx += got;                 /* count, never reply           */
+    }
+    scene_transport_close(peer);
+    return 0;
+}
+
+static DWORD WINAPI silent_srv_thread(LPVOID ud)
+{
+    (void)ud;
+    scene_tcp_listen(0, (uint16_t *)&g_port, silent_accept_cb, NULL);
+    return 0;
+}
+
+static void test_tcp_silent_server_flush(void)
+{
+    struct harness h;
+    memset(&h, 0, sizeof(h));
+    h.cl = scene_client_new();
+    h.sv = scene_server_new(NULL);
+    scene_server_attach(h.sv);
+    g_sv = h.sv;
+    g_port = 0;
+    g_silent_rx = 0;
+    g_silent_done = 0;
+    HANDLE th = CreateThread(NULL, 0, silent_srv_thread, NULL, 0, NULL);
+    CHECK(th != NULL);
+    int tries;
+    for (tries = 0; tries < 5000 && g_port == 0; tries++) Sleep(1);
+    CHECK(g_port != 0);
+    char target[64];
+    snprintf(target, sizeof(target), "127.0.0.1:%u", (unsigned)g_port);
+    scene_transport *t = scene_tcp_client(target);
+    CHECK(t != NULL);
+    CHECK_EQ(scene_client_connect(h.cl, t, target, &g_cbs, &h), 0);
+    /* launcher-children rule: the render loop must never block on recv */
+    CHECK_EQ(scene_tcp_set_nonblock(t, 1), 0);
+    for (tries = 0; tries < 5000 && h.wel_called == 0; tries++) {
+        scene_client_pump(h.cl);
+        scene_client_flush(h.cl);
+        Sleep(1);
+    }
+    CHECK_EQ(h.wel_called, 1);
+    /* non-blocking contract: recv on the now-empty socket returns
+     * would-block (1) immediately instead of stalling the loop          */
+    {
+        uint8_t tmp[16];
+        uint32_t got = 0;
+        int r = scene_transport_recv(t, tmp, sizeof(tmp), &got);
+        CHECK(r == 1 || (r == 0 && got == 0));
+    }
+    build_app_client(&h);
+    scene_client_present(h.cl, 9);
+    int round;
+    for (round = 0; round < 200 && h.closed_calls == 0; round++) {
+        scene_client_pump(h.cl);
+        scene_client_flush(h.cl);
+        Sleep(1);
+    }
+    CHECK(h.closed_calls == 0);             /* connection stayed open      */
+    CHECK(g_silent_rx > 0);                 /* window ops reached the wire */
+    scene_client_free(h.cl);
+    h.cl = NULL;
+    g_silent_done = 1;
+    Sleep(50);
+    scene_tcp_listen_close();
+    CHECK_EQ(WaitForSingleObject(th, 5000), WAIT_OBJECT_0);
+    CloseHandle(th);
+    scene_server_free(h.sv);
+    free(h.snap_payload);
+    free(h.cap_payload);
+    printf("test_tcp_silent_server_flush: ok (server rx=%ld bytes)\n",
+           g_silent_rx);
+}
 #endif /* _WIN32 */
 
 int main(void)
@@ -903,6 +1011,7 @@ int main(void)
     test_wire_macro();
 #if defined(_WIN32)
     test_tcp_roundtrip();
+    test_tcp_silent_server_flush();
 #endif
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

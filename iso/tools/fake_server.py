@@ -55,8 +55,8 @@ def main():
             break
         buf += b
         total += len(b)
-        while len(buf) >= 16:
-            magic, ver, op, plen = struct.unpack('<IHHI', buf[:16])
+        while len(buf) >= 12:
+            magic, ver, op, plen = struct.unpack('<IHHI', buf[:12])
             if magic != MAGIC or len(buf) < 16 + plen:
                 break
             full = buf[:16 + plen]

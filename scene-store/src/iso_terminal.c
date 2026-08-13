@@ -118,6 +118,13 @@ int main(int argc, char **argv)
     fprintf(stderr, "iso-terminal: app=%s\n", g_app ? "ok" : "FAIL");
     if (!g_app) return 4;
 
+    /* The render loop must never block on recv: the scene server only
+     * replies after the client speaks, so a blocking pump before any
+     * flush deadlocks with the window ops stuck in the out buffer.
+     * Non-blocking mode makes pump return would-block immediately and
+     * the loop keeps flushing each tick (launcher-children rule).      */
+    scene_tcp_set_nonblock(t, 1);
+
     int i;
     for (i = 0; i < 500; i++) {
         scene_app_pump(g_app);
