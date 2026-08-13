@@ -264,6 +264,7 @@ static int tcp_recv(scene_transport *t, uint8_t *buf, uint32_t cap,
 #else
     ssize_t n = recv(tc->s, buf, cap, 0);
     if (n > 0) { *got = (uint32_t)n; return 0; }
+    fprintf(stderr, "tcp_recv: n=%zd errno=%d\n", (ssize_t)n, errno);
     if (n == 0) return -1;        /* peer closed                            */
     if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
         return 1;                 /* would-block                            */
