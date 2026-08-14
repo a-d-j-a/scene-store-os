@@ -780,6 +780,33 @@ SHELL WINDOW RESIZE (scene_shell.c + test_shell.c, ~450 test lines):
 
 iso-video (990960c) — see AGENTS.md pass 18 for the full record;
 its Windows-side proof (test_video_app, 54 checks) is in this tree.
-The ONLY unverified item is the codespace side: rebuild the ISO with the
-iso-video bits and QEMU-screendump `autolaunch=iso-video` (pixel targets
-in AGENTS.md "Next").
+VERIFIED 2026-08-14 (commits 6e5949a, 519cb4d, 1ad8386, f07b08a):
+the ISO rebuild + GRUB proof now targets `autolaunch=iso-video`
+(iso/grub-proof.cfg updated, 45s→80s screendump wait in qemu-proof.sh
+for fresh persist-disk first boot). QEMU screendump pixel truth
+(1280x800, video window at 100,50 240x160, titlebar 32px):
+- titlebar (100,50)/(200,60) = 0xFF1A1A1A, desktop (700,700) =
+  0xFF1A1A2E, panel (640,790) = 0xFF16213E — exact.
+- content: left half (100,y) = R=(n*29+(y-82))&0xFF, G=00, B=40;
+  right half (250,y) = same R, G=FF, B=80 — exact for rows 82..208
+  (gradient 0xB7..0x35 mod 256 verified at 11 probes). The stream
+  was live (serial logged frames to 6050+; px= values match the
+  decoder formula bit-for-bit).
+- Fixes found by this verification: (a) 6e5949a — iso_drm had no
+  OS-side texture importer; the app's SET_TEXTURE ref-1 hit an
+  unregistered store ref → engine rejected the op → launcher reaped
+  the session ("app N exited layer 1"), desktop-only screen. Added
+  scene_compositor_layer_store() + importer_tick() (compositor
+  register per frame; store pre-seed once at session add). (b)
+  519cb4d — iso_drm.c build fix (same importer call signature
+  correction, musl clean). (c) 1ad8386 — real channel-mask bug in
+  ALL THREE sites (iso_video.c:93, iso_drm.c:315,
+  test_video_app.c:96/113): 0x00FF0080 puts 0xFF in the R channel
+  (bits 23-16), not G — the QEMU pixel truth showed right half as
+  (R=FF, G=00, B=80). Intended G=0xFF,B=0x80 is 0x0000FF80; fixed
+  everywhere; Windows suite 16/2,080/0 re-verified. (d) f07b08a —
+  proof entry + wait committed (was codespace scratch sed).
+- Clean-tree final proof: repo pulled to f07b08a, tree empty
+  (git status clean), full ISO rebuilt from committed sources,
+  proof rerun: pixels byte-identical to the targets above.
+  THE PASS-18 ISO VERIFICATION ITEM IS NOW CLOSED.
