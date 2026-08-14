@@ -39,8 +39,8 @@ DRIVE_ARGS=""
 
 if [ "$SHOT" = 1 ]; then
     if [ -n "$ISO_CD" ]; then
-        (sleep 45; echo screendump /tmp/qemu-shot.ppm; echo quit) \
-            | timeout 100 qemu-system-x86_64 -m 512 \
+        (sleep 80; echo screendump /tmp/qemu-shot.ppm; echo quit) \
+            | timeout 120 qemu-system-x86_64 -m 512 \
                 -cdrom "$ISO_CD" \
                 $DRIVE_ARGS \
                 -netdev user,id=n1 -device e1000,netdev=n1 \
@@ -48,8 +48,8 @@ if [ "$SHOT" = 1 ]; then
                 -no-reboot -serial file:/tmp/qemu-shot.log -monitor stdio \
             || true
     else
-        (sleep 45; echo screendump /tmp/qemu-shot.ppm; echo quit) \
-            | timeout 100 qemu-system-x86_64 -m 512 \
+        (sleep 80; echo screendump /tmp/qemu-shot.ppm; echo quit) \
+            | timeout 120 qemu-system-x86_64 -m 512 \
                 -kernel "$K" -initrd "$I" \
                 -append "$APPEND" \
                 $DRIVE_ARGS \
