@@ -90,7 +90,7 @@ static void gen_frame(uint32_t n, uint32_t *px)
         for (x = 0; x < VID_CW; x++) {
             uint32_t c = UINT32_C(0xFF000000) | (R << 16);
             if (x < VID_CW / 2u) c |= UINT32_C(0x00000040);  /* left  */
-            else                 c |= UINT32_C(0x00FF0080);  /* right */
+            else                 c |= UINT32_C(0x0000FF80);  /* right */
             px[y * VID_CW + x] = c;
         }
     }

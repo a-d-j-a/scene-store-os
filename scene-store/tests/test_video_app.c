@@ -93,7 +93,7 @@ static void gen_frame(uint32_t n, uint32_t *px)
         for (x = 0; x < VID_CW; x++) {
             uint32_t c = UINT32_C(0xFF000000) | (R << 16);
             if (x < VID_CW / 2u) c |= UINT32_C(0x00000040);
-            else                 c |= UINT32_C(0x00FF0080);
+            else                 c |= UINT32_C(0x0000FF80);
             px[y * VID_CW + x] = c;
         }
     }
@@ -110,7 +110,7 @@ static uint32_t frame_probe_left(uint32_t n)
 static uint32_t frame_probe_right(uint32_t n)
 {
     return UINT32_C(0xFF000000) | (((n * 29u + 18u) & 0xFFu) << 16)
-           | UINT32_C(0x00FF0080);
+           | UINT32_C(0x0000FF80);
 }
 
 /* ---- harness ----------------------------------------------------------- */

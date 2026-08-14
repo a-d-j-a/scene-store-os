@@ -312,7 +312,7 @@ static void importer_tick(void)
         for (x = 0; x < IMP_W; x++) {
             uint32_t c = UINT32_C(0xFF000000) | (R << 16);
             if (x < IMP_W / 2u) c |= UINT32_C(0x00000040);  /* left  */
-            else                c |= UINT32_C(0x00FF0080);  /* right */
+            else                c |= UINT32_C(0x0000FF80);  /* right */
             g_imp_tex[y * IMP_W + x] = c;
         }
     }
