@@ -402,7 +402,6 @@ static void cb_session_exited(void *ud, int layer, uint32_t pid)
     fprintf(stderr, "iso-drm: app %u exited layer %d\n", pid, layer);
     g_imp_store = NULL;
     g_imp_layer = -1;
-    g_photo_store = NULL;   /* pixels are kept: reused by the next session */
 }
 
 static const scene_launcher_cbs launcher_cbs = {
