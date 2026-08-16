@@ -79,6 +79,10 @@ typedef struct scene_client_cbs {
                          uint64_t latency_us);
     void (*text_index)(void *ud, const scene_text_hit *entries,
                        uint32_t count);
+    /* 0x800D: reply to an IMPORT_TEXTURE. ok=1 -> the ref is registered
+     * and a SET_TEXTURE of it will validate; ok=0 -> decode failed,
+     * do NOT reference the ref. */
+    void (*import_result)(void *ud, scene_texture_ref ref, uint8_t ok);
     /* Transport closed or open failed: the connection is gone, the
      * client is dead until reconnect(). */
     void (*closed)(void *ud);
@@ -145,6 +149,11 @@ int scene_client_ack(scene_client *c, uint64_t consumed_seq);
 int scene_client_ping(scene_client *c, uint64_t nonce);
 int scene_client_set_input_mode(scene_client *c, uint8_t mode);
 int scene_client_seek(scene_client *c, uint64_t target_seq);
+/* Ask the OS-side importer to decode `path` and register `ref` for this
+ * session (0x0017). Fire-and-forget: success is observed by a later
+ * SET_TEXTURE validating (or not). Max path length: MAX_RECORD_LENGTH.  */
+int scene_client_import_texture(scene_client *c, scene_texture_ref ref,
+                                const char *path);
 
 /* ---- session state ------------------------------------------------------ */
 

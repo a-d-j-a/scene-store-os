@@ -18,6 +18,8 @@ typedef struct scene_terminal_config {
     uint32_t bg_color;          /* background ARGB (default 0xFF0C0C0C) */
     uint32_t fg_color;          /* text ARGB (default 0xFFCCCCCC) */
     uint32_t cursor_color;      /* cursor ARGB (default 0xFFCCCCCC) */
+    int      block_cursor;      /* 1 = render a block cursor node (default 1) */
+    uint32_t cursor_blink_ms;   /* half-cycle in ms (default 800) */
 } scene_terminal_config;
 
 void scene_terminal_config_defaults(scene_terminal_config *cfg);
@@ -34,6 +36,10 @@ void scene_terminal_input_key(scene_terminal *term, uint32_t key_code,
 /* Read from the child process and update the text buffer.
  * Returns 0 on success, -1 if the child has exited. */
 int scene_terminal_pump(scene_terminal *term);
+
+/* Per-frame UI update: positions the block cursor (if enabled) and
+ * advances its blink phase. Call once per rendered frame. */
+void scene_terminal_tick(scene_terminal *term);
 
 /* Get the current line count. */
 int32_t scene_terminal_line_count(const scene_terminal *term);

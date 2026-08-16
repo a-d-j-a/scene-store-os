@@ -59,6 +59,12 @@ int  scene_store_out_next_frame(scene_store *s,
  * checksum).                                                            */
 int  scene_store_fail(scene_store *s, uint16_t code, const char *msg);
 
+/* Server-side raw record emit (adapter-owned records like
+ * IMPORT_RESULT; frame + checksum computed here). Server-record opcodes
+ * (0x8000 range) only; oversized payloads rejected.                      */
+int  scene_store_emit_record(scene_store *s, uint16_t opcode,
+                             const uint8_t *payload, uint32_t plen);
+
 /* Server-side feed: emit WELCOME as the first outbound record.          */
 int  scene_store_welcome(scene_store *s);
 
@@ -90,6 +96,9 @@ int  scene_store_register_texture(scene_store *s, scene_texture_ref ref,
                                   uint32_t w, uint32_t h,
                                   uint16_t fmt, uint8_t opaque);
 int  scene_store_release_texture(scene_store *s, scene_texture_ref ref);
+/* 1 when `ref` is registered in s's texture table (per-session).       */
+int  scene_store_texture_registered(const scene_store *s,
+                                    scene_texture_ref ref);
 
 /* Style/effect table sizes (server-owned tables).                       */
 void scene_store_set_style_count(scene_store *s, uint32_t n);
@@ -166,6 +175,31 @@ int scene_store_node_texts(const scene_store *s, scene_node_id id,
 /* Number of direct children of `id` (not counting grandchildren).
  * Returns 0 for unknown/stale ids or leaf nodes.                          */
 uint32_t scene_store_node_child_count(const scene_store *s, scene_node_id id);
+
+/* ---- host-side WM service (OS interventions, not wire) ---------------- */
+/* These are direct library calls for OS services (the shell WM, cross-
+ * app automation). They do NOT produce wire bytes: the peer's seq stream
+ * (s->next_seq) is untouched. They commit through the engine's own path
+ * (apply_op on the live arena + committed-seq advance), so the
+ * compositor's per-layer diff fires on the next frame, and they mirror
+ * the engine's internal semantics (focus assignment as on InputActivate,
+ * flags/rect as on SetFlags/SetRect).
+ *
+ * Honest limitations (by design): (a) host mutations are OS interventions,
+ * not client input — they are NOT appended to the op log, so replay/seek
+ * reconstructs only the app's own committed input history; (b) a host
+ * mutation advances the committed seq by one without consuming a wire
+ * seq, so the next client mutation that lands on the same seq value is
+ * coalesced into the already-painted frame (visually benign: the layer's
+ * next seq change repaints it).                                     */
+/* Set the engine focus to an existing live node (as InputActivate).
+ * -1 for a dead store, replay mode, or an unknown/stale node id.          */
+int scene_store_host_focus(scene_store *s, scene_node_id id);
+/* Set or clear SCENE_FLAG_VISIBLE on a live node and commit. -1 as above. */
+int scene_store_host_set_visible(scene_store *s, scene_node_id id, int on);
+/* Set the absolute rect on a live node and commit. -1 as above.           */
+int scene_store_host_set_rect(scene_store *s, scene_node_id id,
+                              int32_t x, int32_t y, int32_t w, int32_t h);
 
 /* ---- internal-consumer mode transitions (bypass op/seq pipeline) ------ */
 

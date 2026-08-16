@@ -49,6 +49,7 @@
 #include "scene_server.h"
 #include "scene_fb.h"
 #include "scene_store.h"
+#include "scene_image.h"
 
 /* Kernel connector status (enum drm_connector_status): 1 = connected.
  * Not exposed as a UAPI constant — this is the uapi-visible value the
@@ -299,13 +300,14 @@ static const scene_client_cbs shell_cbs = {
 #define IMP_H    128u
 static scene_compositor *g_imp_cp;
 static scene_store      *g_imp_store;
+static int               g_imp_layer = -1;
 static uint32_t          g_imp_frame;
 static uint32_t          g_imp_tex[IMP_W * IMP_H];
 
 static void importer_tick(void)
 {
     uint32_t x, y, n;
-    if (!g_imp_cp || !g_imp_store) return;
+    if (!g_imp_cp || !g_imp_store || g_imp_layer < 0) return;
     n = g_imp_frame++;
     for (y = 0; y < IMP_H; y++) {
         uint32_t R = (n * 29u + y) & 0xFFu;
@@ -316,17 +318,77 @@ static void importer_tick(void)
             g_imp_tex[y * IMP_W + x] = c;
         }
     }
-    scene_compositor_register_texture(g_imp_cp, IMP_REF, IMP_W, IMP_H,
-                                      SCENE_TEX_FMT_XRGB, 1, g_imp_tex);
+    scene_compositor_register_texture_layer(g_imp_cp, g_imp_layer,
+                                            IMP_REF, IMP_W, IMP_H,
+                                            SCENE_TEX_FMT_XRGB, 1,
+                                            g_imp_tex);
+}
+
+/* ---- OS-side photo import -----------------------------------------------
+ * REMOVED (2026-08-15): iso_photo now requests its image over the wire
+ * (0x0017 → iso_import_cb below); the ISO_PHOTO_PATH env pre-seed is
+ * dead. Any path, any session, at runtime — open-with territory.      */
+
+/* ---- Wire import hook (0x0017) ------------------------------------------
+ * An app requests a file by ref over the wire; the OS decodes it at
+ * this seam (scene_image: BMP/TGA in-house, PNG/JPEG/GIF via vendored
+ * stb_image), registers ref+pixels into the session's layer, and
+ * reports the result. The app's SET_TEXTURE validates only after a
+ * successful import (or against the pre-seeded demo refs above).
+ * Failure reports ok=0; the session stays alive (the app decides).
+ * The layer is resolved from the server identity (not the last-joined
+ * global): with several sessions at once, each import lands in the
+ * session that asked.                                            */
+static int iso_import_cb(void *ud, scene_server *sv, scene_texture_ref ref,
+                         const char *path)
+{
+    ctx *c = ud;
+    int w = 0, h = 0;
+    uint32_t *px = NULL;
+    int layer = -1;
+    int i;
+    int n = scene_compositor_layer_count(c->cp);
+    for (i = 1; i < n; i++) {
+        if (scene_compositor_layer_server(c->cp, i) == sv) {
+            layer = i;
+            break;
+        }
+    }
+
+    fprintf(stderr, "iso-drm: import ref %u path %s (layer %d)\n",
+            (unsigned)ref, path, layer);
+    if (layer < 0) return -1;                      /* no such session */
+    if (scene_image_load(path, &w, &h, &px) != 0 || !px || w <= 0 || h <= 0) {
+        fprintf(stderr, "iso-drm: import %s: %s\n", path,
+                scene_image_error());
+        scene_image_free(px);
+        return -1;
+    }
+    if (scene_compositor_register_texture_layer(c->cp, layer, ref,
+                                                (uint32_t)w, (uint32_t)h,
+                                                SCENE_TEX_FMT_ARGB, 1,
+                                                px) != 0) {
+        fprintf(stderr, "iso-drm: import %s: register failed\n", path);
+        scene_image_free(px);
+        return -1;
+    }
+    scene_image_free(px);
+    fprintf(stderr, "iso-drm: imported %s: %dx%d ref %u\n", path, w, h,
+            (unsigned)ref);
+    return scene_server_import_result(sv, ref, 1);
 }
 
 static void cb_session_added(void *ud, int layer, uint32_t pid)
 {
     ctx *c = ud;
+    scene_server *sv;
     fprintf(stderr, "iso-drm: app %u joined layer %d\n", pid, layer);
     g_imp_cp = c->cp;
     g_imp_store = scene_compositor_layer_store(c->cp, layer);
+    g_imp_layer = layer;
     g_imp_frame = 0;
+    sv = scene_compositor_layer_server(c->cp, layer);
+    if (sv) scene_server_set_import_cb(sv, iso_import_cb, c);
     /* Pre-seed the ref in the store so the app's wire SET_TEXTURE ops
      * validate (same seam as the test harness: store register once,
      * compositor register refreshes pixels per frame).              */
@@ -339,6 +401,8 @@ static void cb_session_exited(void *ud, int layer, uint32_t pid)
     (void)ud;
     fprintf(stderr, "iso-drm: app %u exited layer %d\n", pid, layer);
     g_imp_store = NULL;
+    g_imp_layer = -1;
+    g_photo_store = NULL;   /* pixels are kept: reused by the next session */
 }
 
 static const scene_launcher_cbs launcher_cbs = {

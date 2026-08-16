@@ -11,6 +11,7 @@
 #include "scene_transport.h"
 #include "scene_client.h"
 #include "scene_server.h"
+#include "scene_store.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -146,6 +147,117 @@ static void test_line_accessors(void)
     harness_destroy(&h);
 }
 
+/* ---- block cursor ------------------------------------------------------ */
+
+static scene_node_id cur_id_of(scene_node_id content)
+{
+    return content + 1000u;
+}
+
+static void test_cursor_ops(void)
+{
+    struct harness h;
+    harness_init(&h);
+
+    scene_node_id content = scene_app_create_window(h.app, 40, 60, 400, 200,
+                                                    "Term");
+    tickf(&h);
+    CHECK(content != 0);
+
+    /* window-rect accessor: content abs = {40, 92, 400, 168} (below tb) */
+    scene_rect cr;
+    CHECK(scene_app_window_rect(h.app, content, &cr) == 0);
+    CHECK_EQ(cr.x, 40);
+    CHECK_EQ(cr.y, 92);
+    CHECK_EQ(cr.w, 400);
+    CHECK_EQ(cr.h, 168);
+    CHECK(scene_app_window_rect(h.app, 999999, &cr) == -1);
+
+    scene_terminal_config cfg;
+    scene_terminal_config_defaults(&cfg);
+    cfg.block_cursor = 1;
+    cfg.cursor_blink_ms = 100000;    /* effectively never flips          */
+    h.term = scene_terminal_new(h.app, content, &cfg);
+    CHECK(h.term != NULL);
+
+    scene_store *st = scene_compositor_store(h.cp);
+    CHECK(st != NULL);
+
+    scene_node_id cur = cur_id_of(content);
+    scene_node_vis v;
+
+    /* CreateNode op flushed by the first tickf: hidden, cell-sized rect. */
+    tickf(&h);
+    CHECK(scene_store_node_vis(st, cur, &v) == 0);
+    CHECK_EQ((unsigned)v.role, (unsigned)SCENE_ROLE_CURSOR);
+    CHECK_EQ((unsigned)v.parent, (unsigned)content);
+    CHECK_EQ((unsigned)v.flags, 0u);
+    CHECK(v.rect[0] == 0 && v.rect[1] == 0 && v.rect[2] == 8 && v.rect[3] == 8);
+
+    /* First tick: cursor becomes visible at cell (0,0), glyph ' '. */
+    scene_terminal_tick(h.term);
+    tickf(&h);
+    CHECK(scene_store_node_vis(st, cur, &v) == 0);
+    CHECK_EQ((unsigned)v.flags, (unsigned)SCENE_FLAG_VISIBLE);
+    CHECK(v.rect[0] == 40 && v.rect[1] == 92 && v.rect[2] == 8 && v.rect[3] == 8);
+
+    scene_node_text_vis tv[4];
+    int n = scene_store_node_texts(st, cur, tv, 4);
+    CHECK_EQ(n, 1);
+    CHECK(tv[0].len == 1 && tv[0].data && tv[0].data[0] == ' ');
+
+    /* A second tick with no state change emits nothing (idempotent). */
+    scene_terminal_tick(h.term);
+    tickf(&h);
+    (void)v;
+
+    printf("  test_cursor_ops: ok\n");
+    harness_destroy(&h);
+}
+
+static void test_cursor_blink(void)
+{
+    struct harness h;
+    harness_init(&h);
+
+    scene_node_id content = scene_app_create_window(h.app, 40, 60, 400, 200,
+                                                    "Term");
+    tickf(&h);
+
+    scene_terminal_config cfg;
+    scene_terminal_config_defaults(&cfg);
+    cfg.block_cursor = 1;
+    cfg.cursor_blink_ms = 150;       /* fast half-cycle for the test     */
+    h.term = scene_terminal_new(h.app, content, &cfg);
+    CHECK(h.term != NULL);
+    scene_store *st = scene_compositor_store(h.cp);
+    scene_node_id cur = cur_id_of(content);
+    scene_node_vis v;
+
+    /* Phase starts at 1 so the first tick shows the cursor. */
+    scene_terminal_tick(h.term);
+    tickf(&h);
+    CHECK(scene_store_node_vis(st, cur, &v) == 0);
+    CHECK_EQ((unsigned)v.flags, (unsigned)SCENE_FLAG_VISIBLE);
+
+    /* Sleep past one half-cycle: the blink phase flips, cursor hides. */
+    usleep(220000);
+    scene_terminal_tick(h.term);
+    tickf(&h);
+    CHECK(scene_store_node_vis(st, cur, &v) == 0);
+    CHECK_EQ((unsigned)v.flags, 0u);
+
+    /* And back on after the next half-cycle. */
+    usleep(220000);
+    scene_terminal_tick(h.term);
+    tickf(&h);
+    CHECK(scene_store_node_vis(st, cur, &v) == 0);
+    CHECK_EQ((unsigned)v.flags, (unsigned)SCENE_FLAG_VISIBLE);
+
+    printf("  test_cursor_blink: ok\n");
+    harness_destroy(&h);
+}
+
 #ifndef _WIN32
 /* Interactive tests: only run on Linux where pipe I/O is reliable.
  * On Windows, cmd.exe pipe I/O garbles character-by-character input. */
@@ -186,6 +298,18 @@ static void test_input_echo(void)
         free(line);
     }
     CHECK(found);
+
+    /* The cursor moved down with the echoed output: after at least one
+     * echoed line the cursor sits on row >= 3 at a cell boundary. The
+     * last tick (after the final output) re-emits the moved rect.      */
+    scene_terminal_tick(h.term);
+    tickf(&h);
+    scene_store *st = scene_compositor_layer_store(h.cp, 0);
+    scene_node_vis cv;
+    CHECK(scene_store_node_vis(st, cur_id_of(content), &cv) == 0);
+    CHECK_EQ(cv.rect[0] % 8, 0);
+    CHECK_EQ(cv.rect[1] % 8, 0);
+    CHECK(cv.rect[1] >= 3 * 8);
 
     printf("  test_input_echo: ok\n");
     harness_destroy(&h);
@@ -230,6 +354,8 @@ int main(void)
 
     test_spawn();
     test_line_accessors();
+    test_cursor_ops();
+    test_cursor_blink();
 #ifndef _WIN32
     test_input_echo();
     test_exit();

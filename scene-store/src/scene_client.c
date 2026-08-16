@@ -446,6 +446,22 @@ int scene_client_seek(scene_client *c, uint64_t target_seq)
     return cli_emit(c, SCENE_OP_SEEK, b, sizeof(b), 0, 0);
 }
 
+int scene_client_import_texture(scene_client *c, scene_texture_ref ref,
+                                const char *path)
+{
+    if (!path) return -1;
+    uint32_t len = (uint32_t)strlen(path);
+    if (len > c->lim.max_record_length - 16u) return -1;
+    uint8_t *b = (uint8_t *)malloc(12u + len);
+    if (!b) return -1;
+    scene_put_u32(b + 0, ref);
+    scene_put_u32(b + 4, len);
+    if (len) memcpy(b + 8, path, len);
+    int r = cli_emit(c, SCENE_OP_IMPORT_TEXTURE, b, 8u + len, 0, 0);
+    free(b);
+    return r;
+}
+
 /* ---- inbound -------------------------------------------------------------- */
 
 /* Protocol violation from the server side: report and close the session. */
@@ -602,6 +618,13 @@ static void dispatch(scene_client *c, uint16_t opcode,
         c->last_token = token;
         c->last_present_seq = seq;
         if (cb && cb->present_done) cb->present_done(c->ud, seq, token, lat);
+        return;
+    }
+
+    case SCENE_SRV_IMPORT_RESULT: {
+        if (plen != 5) { cli_violation(c, "import len"); return; }
+        if (cb && cb->import_result)
+            cb->import_result(c->ud, scene_get_u32(p + 0), p[4]);
         return;
     }
 

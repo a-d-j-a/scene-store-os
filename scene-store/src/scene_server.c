@@ -44,6 +44,8 @@ struct scene_server {
     int attached;
     int ghosted;                /* detached: next frame rebases the stream */
     int dead;
+    scene_import_fn import_cb;
+    void *import_ud;
 };
 
 scene_server *scene_server_new(const scene_limits *limits)
@@ -119,6 +121,42 @@ int scene_server_feed(scene_server *sv, const uint8_t *bytes, uint32_t len)
             }
             sv->ghosted = 0;
         }
+        if (h.opcode == SCENE_OP_IMPORT_TEXTURE) {
+            /* Host-side request: strict payload check here (the engine
+             * no-ops it), then hand {ref,path} to the importer. Failure
+             * is silent by design — the client observes it when its
+             * SET_TEXTURE of the ref is rejected.                      */
+            uint32_t pl = plen;
+            if (pl < 16) {
+                scene_store_fail(sv->s, SCENE_ERR_PROTOCOL, "imp len");
+                sv->dead = 1;
+                return -1;
+            }
+            uint32_t tlen = scene_get_u32(f + SCENE_HEADER_SIZE + 12);
+            if (pl != 16 + tlen) {
+                scene_store_fail(sv->s, SCENE_ERR_PROTOCOL, "imp path");
+                sv->dead = 1;
+                return -1;
+            }
+            if (sv->import_cb) {
+                uint32_t ref = scene_get_u32(f + SCENE_HEADER_SIZE + 8);
+                char *path = (char *)malloc((size_t)tlen + 1);
+                if (!path) { sv->dead = 1; return -1; }
+                memcpy(path, f + SCENE_HEADER_SIZE + 16, tlen);
+                path[tlen] = '\0';
+                int rc = sv->import_cb(sv->import_ud, sv, ref, path);
+                free(path);
+                if (rc != 0) {
+                    /* Decode failed: the importer could not register
+                     * the ref. The client observes IMPORT_RESULT ok=0
+                     * and must not SET_TEXTURE the ref.             */
+                    if (scene_server_import_result(sv, ref, 0) != 0) {
+                        sv->dead = 1;
+                        return -1;
+                    }
+                }
+            }
+        }
         if (scene_store_ingest(sv->s, h.opcode, f + SCENE_HEADER_SIZE, plen)
             != 0) {
             sv->dead = 1;                  /* engine emitted ERROR itself   */
@@ -161,4 +199,23 @@ int scene_server_dead(const scene_server *sv)
 scene_store *scene_server_store(scene_server *sv)
 {
     return sv->s;
+}
+
+void scene_server_set_import_cb(scene_server *sv, scene_import_fn fn,
+                                void *ud)
+{
+    if (!sv) return;
+    sv->import_cb = fn;
+    sv->import_ud = ud;
+}
+
+int scene_server_import_result(scene_server *sv, scene_texture_ref ref,
+                               uint8_t ok)
+{
+    uint8_t b[5];
+    if (!sv) return -1;
+    scene_put_u32(b + 0, ref);
+    b[4] = ok;
+    return scene_store_emit_record(sv->s, SCENE_SRV_IMPORT_RESULT, b,
+                                   sizeof(b));
 }

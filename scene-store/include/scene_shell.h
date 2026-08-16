@@ -89,6 +89,13 @@ typedef void (*scene_shell_launch_fn)(void *ud, uint32_t idx,
 void scene_shell_set_launch_cb(scene_shell *sh, scene_shell_launch_fn fn,
                                void *ud);
 
+/* Network tray probe: fills the tray label text ("net" / "no net" /
+ * "NA" on Windows). The shell calls it at most every 2 seconds and only
+ * updates the label when the cached text changes. Tests set this to a
+ * stub; the default probe reads the Linux sysfs net-carrier files and
+ * returns "NA" on Windows.                                             */
+extern const char *(*scene_shell_tray_probe)(void);
+
 /* Free the shell and its internal state. Does NOT destroy nodes (the
  * client session handles that on close). */
 void scene_shell_free(scene_shell *sh);

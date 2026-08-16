@@ -23,6 +23,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <pty.h>
+#include <time.h>
 #endif
 
 #define MAX_LINES 1024
@@ -39,6 +40,18 @@ struct scene_terminal {
     int32_t       view_top;
     int32_t       cursor_row;
     int32_t       cursor_col;
+
+    /* Block cursor (scene node) state */
+    scene_node_id cursor_id;
+    int           cursor_on;       /* cursor feature enabled              */
+    int           blink_phase;     /* 0 = hidden, 1 = shown               */
+    uint64_t      blink_ms;        /* half-cycle                           */
+    uint64_t      last_blink_ms;
+    int32_t       cur_row_last;    /* last sent position (-1 = unknown)   */
+    int32_t       cur_col_last;
+    int32_t       cur_ox_last;     /* last sent content origin            */
+    int32_t       cur_oy_last;
+    int           cur_vis_last;    /* last sent visibility                 */
 
 #ifdef _WIN32
     HANDLE        child_in;
@@ -63,6 +76,8 @@ void scene_terminal_config_defaults(scene_terminal_config *cfg)
     cfg->bg_color     = 0xFF0C0C0C;
     cfg->fg_color     = 0xFFCCCCCC;
     cfg->cursor_color = 0xFFCCCCCC;
+    cfg->block_cursor = 1;
+    cfg->cursor_blink_ms = 800;
 }
 
 /* ---- output processing (shared logic) --------------------------------- */
@@ -253,6 +268,8 @@ static void drain_posix(scene_terminal *term)
 
 /* ---- lifecycle -------------------------------------------------------- */
 
+static uint64_t now_ms(void);
+
 scene_terminal *scene_terminal_new(scene_app *app, scene_node_id content_id,
                                    const scene_terminal_config *cfg)
 {
@@ -263,6 +280,24 @@ scene_terminal *scene_terminal_new(scene_app *app, scene_node_id content_id,
     term->content_id = content_id;
     if (cfg) term->cfg = *cfg;
     else scene_terminal_config_defaults(&term->cfg);
+
+    /* Block cursor node: a child of the content node, far outside the
+     * app's window id range (windows take 5 ids each from next_id).     */
+    term->cursor_on = term->cfg.block_cursor ? 1 : 0;
+    if (term->cursor_on) {
+        term->cursor_id = content_id + 1000u;
+        term->blink_ms   = term->cfg.cursor_blink_ms ? term->cfg.cursor_blink_ms : 1;
+        term->last_blink_ms = now_ms();
+        term->blink_phase  = 1;
+        term->cur_row_last = -1;
+        term->cur_col_last = -1;
+        term->cur_ox_last  = INT32_MAX;
+        term->cur_oy_last  = INT32_MAX;
+        term->cur_vis_last = -1;
+        scene_client_create_node(scene_app_client(app), content_id, term->cursor_id,
+                                 SCENE_ROLE_CURSOR,
+                                 &(scene_rect){0, 0, 8, 8}, 0);
+    }
 
 #ifdef _WIN32
     if (spawn_shell_win32(term) != 0) { free(term); return NULL; }
@@ -397,6 +432,68 @@ void scene_terminal_input_key(scene_terminal *term, uint32_t key_code,
 #else
         (void)write(term->child_write_fd, seq, len);
 #endif
+    }
+}
+
+/* ---- block cursor ------------------------------------------------------ */
+
+static uint64_t now_ms(void)
+{
+#ifdef _WIN32
+    return (uint64_t)GetTickCount();
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
+#endif
+}
+
+void scene_terminal_tick(scene_terminal *term)
+{
+    if (!term || !term->cursor_on) return;
+
+    uint64_t now = now_ms();
+    if (now - term->last_blink_ms >= term->blink_ms) {
+        term->last_blink_ms = now;
+        term->blink_phase ^= 1;
+    }
+
+    int visible = term->blink_phase && !term->exited;
+    if (visible != term->cur_vis_last) {
+        term->cur_vis_last = visible;
+        scene_client_set_flags(scene_app_client(term->app), term->cursor_id,
+                               visible ? SCENE_FLAG_VISIBLE : 0);
+    }
+    if (term->exited) return;
+
+    /* Position updates emit regardless of visibility so the stored rect
+     * never stalls while the blink hides the cursor; the rect+glyph are
+     * re-asserted on every move (cursor moves are rare, 2 ops each).    */
+    scene_rect r;
+    if (scene_app_window_rect(term->app, term->content_id, &r) != 0)
+        return;
+
+    int32_t col = term->cursor_col;
+    int32_t row = term->cursor_row;
+    if (col != term->cur_col_last || row != term->cur_row_last ||
+        r.x != term->cur_ox_last || r.y != term->cur_oy_last) {
+        term->cur_col_last = col;
+        term->cur_row_last = row;
+        term->cur_ox_last = r.x;
+        term->cur_oy_last = r.y;
+        scene_client_set_rect(scene_app_client(term->app), term->cursor_id,
+            &(scene_rect){r.x + col * 8, r.y + row * 8, 8, 8});
+
+        /* The glyph under the cursor: text slot 0 carries it, so the
+         * block shows the cell's character in the terminal's text color. */
+        char c = ' ';
+        int32_t abs_row = term->view_top + row;
+        if (abs_row < term->line_count && term->lines[abs_row] &&
+            col < term->cfg.cols) {
+            char ch = term->lines[abs_row][col];
+            if (ch >= 32) c = ch;
+        }
+        scene_client_set_text(scene_app_client(term->app), term->cursor_id, 0, &c, 1);
     }
 }
 

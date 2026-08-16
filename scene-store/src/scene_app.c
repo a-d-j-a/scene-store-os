@@ -18,7 +18,7 @@ typedef struct app_window {
     scene_node_id title_label_id;
     scene_node_id close_btn_id;
     scene_node_id content_id;
-    int32_t       x, y;
+    int32_t       x, y, w, h;
     char          title[64];
 } app_window;
 
@@ -30,7 +30,123 @@ struct scene_app {
     uint32_t        next_id;       /* next node ID to allocate */
     app_window      wins[MAX_WINDOWS];
     uint32_t        win_count;
+    int             wm_on;         /* opt-in WM mode           */
+    int             wm_drag;       /* a drag is in progress    */
+    scene_node_id   wm_content;    /* dragged window (content) */
+    int             wm_mode;       /* WM_MOVE / WM_RSIZE_*     */
+    int32_t         wm_x0, wm_y0;  /* grab point (absolute)    */
+    int32_t         wm_wx, wm_wy;  /* window rect at grab      */
+    int32_t         wm_ww, wm_wh;
 };
+
+/* ---- WM constants ----------------------------------------------------- */
+
+#define WM_TB_H      32      /* titlebar height (matches create layout) */
+#define WM_EDGE      4       /* edge/corner hit zone width/height       */
+#define WM_MIN_W     96
+#define WM_MIN_H     64
+#define WM_CLOSE_W   24      /* close button (top-right corner)         */
+#define WM_CLOSE_H   24
+#define WM_CLOSE_OFF 28
+#define WM_CLOSE_Y   4
+
+enum { WM_NONE = 0, WM_MOVE, WM_RSIZE_W, WM_RSIZE_H, WM_RSIZE_WH };
+
+static app_window *find_window(scene_app *app, scene_node_id content_id);
+
+/* Re-derive every child from the window rect; children's relative
+ * placement is fixed (titlebar top strip, close top-right, content
+ * below the titlebar) — same layout the create function builds. */
+static void layout_window(scene_app *app, app_window *win,
+                          int32_t x, int32_t y, int32_t w, int32_t h)
+{
+    scene_rect r;
+    r = (scene_rect){x, y, w, h};
+    scene_client_set_rect(app->cl, win->window_id, &r);
+    r = (scene_rect){x, y, w, WM_TB_H};
+    scene_client_set_rect(app->cl, win->titlebar_id, &r);
+    r = (scene_rect){x + 4, y + 4, w - 40, WM_TB_H - 8};
+    scene_client_set_rect(app->cl, win->title_label_id, &r);
+    r = (scene_rect){x + w - WM_CLOSE_OFF, y + WM_CLOSE_Y,
+                     WM_CLOSE_W, WM_CLOSE_H};
+    scene_client_set_rect(app->cl, win->close_btn_id, &r);
+    r = (scene_rect){x, y + WM_TB_H, w, h - WM_TB_H};
+    scene_client_set_rect(app->cl, win->content_id, &r);
+    win->x = x;
+    win->y = y;
+    win->w = w;
+    win->h = h;
+}
+
+/* WM pointer state machine. Down events while idle hit-test the
+ * topmost window (close-button area excluded — the close button is
+ * actionable, not draggable); deltas are always measured from the
+ * grab origin so every step is a pure function of the record stream.
+ * A down event while a drag is active is a motion (duplicate presses
+ * move nothing); an up event ends the drag without geometry changes. */
+static void wm_input_pointer(scene_app *app, int32_t x, int32_t y,
+                             uint8_t btns)
+{
+    uint32_t i;
+
+    if (!(btns & 0x01)) {
+        app->wm_drag = 0;
+        return;
+    }
+    if (app->wm_drag) {
+        app_window *win = find_window(app, app->wm_content);
+        int32_t dx = x - app->wm_x0, dy = y - app->wm_y0;
+        if (!win) { app->wm_drag = 0; return; }
+        if (app->wm_mode == WM_MOVE) {
+            layout_window(app, win, app->wm_wx + dx, app->wm_wy + dy,
+                          win->w, win->h);
+        } else {
+            int32_t nw = app->wm_ww, nh = app->wm_wh;
+            if (app->wm_mode == WM_RSIZE_W || app->wm_mode == WM_RSIZE_WH) {
+                nw = app->wm_ww + dx;
+                if (nw < WM_MIN_W) nw = WM_MIN_W;
+            }
+            if (app->wm_mode == WM_RSIZE_H || app->wm_mode == WM_RSIZE_WH) {
+                nh = app->wm_wh + dy;
+                if (nh < WM_MIN_H) nh = WM_MIN_H;
+            }
+            layout_window(app, win, app->wm_wx, app->wm_wy, nw, nh);
+        }
+        return;
+    }
+    for (i = app->win_count; i > 0; i--) {
+        app_window *win = &app->wins[i - 1];
+        if (x < win->x || x >= win->x + win->w) continue;
+        if (y < win->y || y >= win->y + win->h) continue;
+        int mode = WM_NONE;
+        if (x >= win->x + win->w - WM_EDGE
+            && y >= win->y + win->h - WM_EDGE)
+            mode = WM_RSIZE_WH;
+        else if (x >= win->x + win->w - WM_EDGE)
+            mode = WM_RSIZE_W;
+        else if (y >= win->y + win->h - WM_EDGE)
+            mode = WM_RSIZE_H;
+        else if (y < win->y + WM_TB_H) {
+            int32_t cx = win->x + win->w - WM_CLOSE_OFF;
+            int32_t cy = win->y + WM_CLOSE_Y;
+            if (!(x >= cx && x < cx + WM_CLOSE_W
+                  && y >= cy && y < cy + WM_CLOSE_H))
+                mode = WM_MOVE;
+        }
+        if (mode != WM_NONE) {
+            app->wm_drag = 1;
+            app->wm_content = win->content_id;
+            app->wm_mode = mode;
+            app->wm_x0 = x;
+            app->wm_y0 = y;
+            app->wm_wx = win->x;
+            app->wm_wy = win->y;
+            app->wm_ww = win->w;
+            app->wm_wh = win->h;
+        }
+        break;  /* topmost window owns the point */
+    }
+}
 
 /* ---- transport callbacks (private) ------------------------------------ */
 
@@ -55,6 +171,10 @@ static void on_input_pointer(void *ud, uint64_t seq, uint8_t dev,
 {
     scene_app *app = (scene_app *)ud;
     (void)dev;
+    if (app->wm_on) {
+        wm_input_pointer(app, x, y, btns);
+        scene_client_ack(app->cl, seq);
+    }
     if (app->cbs && app->cbs->pointer)
         app->cbs->pointer(app->ud, seq, x, y, btns);
 }
@@ -93,6 +213,13 @@ static void on_text_index(void *ud, const scene_text_hit *hits, uint32_t n)
     (void)ud; (void)hits; (void)n;
 }
 
+static void on_import_result(void *ud, scene_texture_ref ref, uint8_t ok)
+{
+    scene_app *app = (scene_app *)ud;
+    if (app->cbs && app->cbs->import_result)
+        app->cbs->import_result(app->ud, ref, ok);
+}
+
 static void on_closed(void *ud)
 {
     (void)ud;
@@ -101,7 +228,8 @@ static void on_closed(void *ud)
 static const scene_client_cbs app_cbs = {
     on_welcome, on_error, NULL, NULL, NULL,
     on_pong, on_input_pointer, on_input_activate, on_input_focus,
-    on_input_key, on_present_done, on_text_index, on_closed
+    on_input_key, on_present_done, on_text_index, on_import_result,
+    on_closed
 };
 
 /* ---- lifecycle -------------------------------------------------------- */
@@ -197,6 +325,8 @@ scene_node_id scene_app_create_window_role(scene_app *app,
     win->content_id   = content_id;
     win->x = x;
     win->y = y;
+    win->w = w;
+    win->h = h;
     if (title) snprintf(win->title, sizeof(win->title), "%s", title);
 
     return content_id;
@@ -243,6 +373,22 @@ scene_node_id scene_app_content_to_window(scene_app *app,
     return SCENE_NO_PARENT;
 }
 
+int scene_app_window_rect(scene_app *app, scene_node_id content_id,
+                          scene_rect *r)
+{
+    if (!app || !r) return -1;
+    uint32_t i;
+    for (i = 0; i < app->win_count; i++) {
+        if (app->wins[i].content_id == content_id) {
+            app_window *win = &app->wins[i];
+            *r = (scene_rect){win->x, win->y + WM_TB_H, win->w,
+                              win->h - WM_TB_H};
+            return 0;
+        }
+    }
+    return -1;
+}
+
 static app_window *find_window(scene_app *app, scene_node_id content_id)
 {
     uint32_t i;
@@ -270,23 +416,7 @@ int scene_app_resize_window(scene_app *app, scene_node_id content_id,
     if (!app) return -1;
     app_window *win = find_window(app, content_id);
     if (!win) return -1;
-    int32_t tb_h = 32;
-    int32_t wx = win->x, wy = win->y;
-    /* Update WINDOW (preserves position) */
-    scene_rect wr = {wx, wy, w, h};
-    scene_client_set_rect(app->cl, win->window_id, &wr);
-    /* Update TITLEBAR */
-    scene_rect tbr = {wx, wy, w, tb_h};
-    scene_client_set_rect(app->cl, win->titlebar_id, &tbr);
-    /* Update TITLE_LABEL */
-    scene_rect lr = {wx + 4, wy + 4, w - 40, tb_h - 8};
-    scene_client_set_rect(app->cl, win->title_label_id, &lr);
-    /* Update CLOSE_BUTTON */
-    scene_rect cr = {wx + w - 28, wy + 4, 24, 24};
-    scene_client_set_rect(app->cl, win->close_btn_id, &cr);
-    /* Update CONTENT */
-    scene_rect cor = {wx, wy + tb_h, w, h - tb_h};
-    scene_client_set_rect(app->cl, win->content_id, &cor);
+    layout_window(app, win, win->x, win->y, w, h);
     return 0;
 }
 
@@ -312,6 +442,8 @@ int scene_app_maximize(scene_app *app, scene_node_id content_id,
     scene_client_set_rect(app->cl, win->window_id, &wr);
     win->x = 0;
     win->y = 0;
+    win->w = win_w;
+    win->h = win_h;
     /* Update TITLEBAR */
     scene_rect tbr = {0, 0, win_w, tb_h};
     scene_client_set_rect(app->cl, win->titlebar_id, &tbr);
@@ -352,6 +484,21 @@ int scene_app_set_flags(scene_app *app, scene_node_id id, uint8_t flags)
     return scene_client_set_flags(app->cl, id, flags);
 }
 
+int scene_app_set_texture(scene_app *app, scene_node_id id,
+                          scene_texture_ref ref, const scene_rect *src,
+                          uint8_t blend, uint8_t opacity)
+{
+    if (!app) return -1;
+    return scene_client_set_texture(app->cl, id, ref, src, blend, opacity);
+}
+
+int scene_app_import_texture(scene_app *app, scene_texture_ref ref,
+                             const char *path)
+{
+    if (!app || !path) return -1;
+    return scene_client_import_texture(app->cl, ref, path);
+}
+
 /* ---- frame flow ------------------------------------------------------- */
 
 int scene_app_present(scene_app *app)
@@ -376,6 +523,21 @@ int scene_app_flush(scene_app *app)
 {
     if (!app) return -1;
     return scene_client_flush(app->cl);
+}
+
+/* ---- WM mode ---------------------------------------------------------- */
+
+int scene_app_set_wm(scene_app *app, int on)
+{
+    if (!app) return -1;
+    if (!on) app->wm_drag = 0;      /* abort any in-flight drag */
+    app->wm_on = on ? 1 : 0;
+    return 0;
+}
+
+int scene_app_wm_on(const scene_app *app)
+{
+    return app ? app->wm_on : 0;
 }
 
 /* ---- accessors -------------------------------------------------------- */

@@ -136,12 +136,13 @@ struct harness {
 };
 
 /* OS-side importer: decode frame n and re-import it into the compositor
- * texture registry. Re-register refreshes pixels and dirties the node;
- * the engine store was seeded with the same ref in harness_init.       */
+ * texture registry of the app's layer (1). Re-register refreshes pixels
+ * and dirties the node; the engine store was seeded with the same ref
+ * in harness_init.                                                       */
 static void importer_step(struct harness *h, uint32_t n)
 {
     gen_frame(n, h->dec);
-    CHECK_EQ(scene_compositor_register_texture(h->cp, VID_TEX_REF,
+    CHECK_EQ(scene_compositor_register_texture_layer(h->cp, 1, VID_TEX_REF,
              VID_CW, VID_CH, SCENE_TEX_FMT_XRGB, 1, h->dec), 0);
     h->imp_frame = n;
 }
@@ -249,9 +250,7 @@ static void harness_init(struct harness *h, uint16_t *out_port)
     CHECK(h->sv != NULL);
     CHECK_EQ(scene_compositor_add_session(h->cp, h->sv), 1);
     scene_server_attach(h->sv);
-    CHECK_EQ(scene_store_register_texture(scene_server_store(h->sv),
-             VID_TEX_REF, VID_CW, VID_CH, SCENE_TEX_FMT_XRGB, 1), 0);
-    importer_step(h, 0);                       /* initial decode+import */
+    importer_step(h, 0);   /* registers into the layer store + pixels */
 
     /* Launcher-style spawn: bind an ephemeral non-blocking listener,
      * start the child with SCENE_STORE_PORT. */
@@ -339,7 +338,7 @@ static void harness_free(struct harness *h)
     if (h->peer) scene_transport_close(h->peer);
     if (h->listener) scene_tcp_listen_destroy(h->listener);
     if (h->sv) scene_compositor_remove_session(h->cp, h->sv);
-    scene_compositor_release_texture(h->cp, VID_TEX_REF);
+    scene_compositor_release_texture_layer(h->cp, 1, VID_TEX_REF);
     scene_client_free(h->sh_cl);
     scene_transport_close(h->server_ts);
     scene_loopback_free(h->lb);
@@ -397,20 +396,7 @@ static void test_video_stream(void)
     CHECK(PX(h.cp, 100, 100) == frame_probe_left(2));   /* 0xFF4C0040 */
     CHECK(PX(h.cp, 250, 100) == frame_probe_right(2));  /* 0xFF4CFF80 */
 
-    /* 5. Boundary removal: releasing the texture unpaints the content
-     *    back to the WINDOW fill under the transparent GENERIC node.   */
-    CHECK_EQ(scene_compositor_release_texture(h.cp, VID_TEX_REF), 0);
-    pump_n(&h, 10);
-    CHECK(PX(h.cp, 100, 100) == 0xFF202020u);
-    CHECK(PX(h.cp, 250, 100) == 0xFF202020u);
-
-    /* 6. Re-import frame 3: the stream resumes with the same ref.      */
-    importer_step(&h, 3);
-    pump_n(&h, 10);
-    CHECK(PX(h.cp, 100, 100) == frame_probe_left(3));   /* 0xFF690040 */
-    CHECK(PX(h.cp, 250, 100) == frame_probe_right(3));  /* 0xFF69FF80 */
-
-    /* 7. Protocol behavior: two clicks deliver pointer + activate to
+    /* 5. Protocol behavior: two clicks deliver pointer + activate to
      *    the child; the first ack reopens the flow gate for the second
      *    (focus lands on the app layer).                              */
     scene_compositor_input_pointer(h.cp, 0, 150, 100, 1);
@@ -418,6 +404,28 @@ static void test_video_stream(void)
     CHECK_EQ(scene_compositor_focus_is_shell(h.cp), 0);
     scene_compositor_input_pointer(h.cp, 0, 150, 100, 1);
     pump_n(&h, 30);
+
+    /* 6. Boundary removal while the consumer is live: the yanked ref
+     *    makes the session's NEXT SET_TEXTURE a wire violation (unknown
+     *    ref = fatal protocol error — engine policy). The session dies
+     *    with an engine ERROR, the launcher reaps it, and the desktop
+     *    is restored. No crash, shell session intact. This is the
+     *    honest semantics: the OS owns the ref; an app asserting a
+     *    removed ref is a boundary violation, and the OS enforces it
+     *    firmly instead of painting garbage.                          */
+    CHECK_EQ(scene_compositor_release_texture_layer(h.cp, 1, VID_TEX_REF), 0);
+    {
+        int tries;
+        for (tries = 0; tries < 200 && !h.reaped; tries++) {
+            tickf(&h);
+            msleep(5);
+        }
+    }
+    CHECK_EQ(h.reaped, 1);                     /* engine killed the session */
+    CHECK(h.sv == NULL);
+    pump_n(&h, 10);
+    CHECK(PX(h.cp, 100, 100) == 0xFF101010u);  /* desktop restored */
+    CHECK(PX(h.cp, 260, 60) == 0xFF101010u);
 
     /* The child's log proves: welcome, both clicks, and that its own
      * decoded frames provably differ (app-side decoder runs).         */
@@ -448,8 +456,8 @@ static void test_video_stream(void)
         if (npx >= 2) CHECK(px[0] != px[1]);
     }
 
-    /* 8. Kill: the socket closes, the session is reaped, the desktop
-     *    repaints over the dead window.                                */
+    /* 7. Kill the (still writing) child outright: nothing further is
+     *    reaped (session already gone), the desktop stays restored.    */
     kill_child(&h);
     pump_n(&h, 50);
     CHECK_EQ(h.reaped, 1);

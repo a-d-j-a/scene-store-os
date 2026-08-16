@@ -12,14 +12,31 @@
 #include <stdio.h>
 #include <time.h>
 
+#if !defined(_WIN32)
+#include <dirent.h>
+#endif
+
 /* ---- internal IDs ---------------------------------------------------- */
 #define ID_BACKGROUND  10000u
 #define ID_PANEL       10001u
 #define ID_START_BTN   10002u
 #define ID_CLOCK       10003u
 #define ID_MENU        10004u
+#define ID_TRAY        10005u   /* network tray label (right of clock)    */
 #define ID_MENU_BASE   20000u   /* menu items: ID_MENU_BASE + i */
 #define ID_TASK_BASE   30000u   /* task buttons: ID_TASK_BASE + seq */
+#define ID_APP_TASK_BASE 40000u /* app task buttons: base + slot */
+#define APP_TASK_MAX   64u      /* app task slots (fixed-size array) */
+
+/* Cross-app search overlay (Super+S). Backdrop + query label + up to
+ * 8 hit rows, all shell-session nodes (layer 0). */
+#define ID_OVL_BG      50000u
+#define ID_OVL_QUERY   50001u
+#define ID_OVL_HITS    50010u   /* hit rows: ID_OVL_HITS + i */
+#define SCENE_SHELL_OVL_HITS 8u
+#define SCENE_SHELL_OVL_W    480
+#define SCENE_SHELL_OVL_H    320
+#define OVL_HOTKEY_CODE 31u     /* set-1 scancode of 's' (Super+S) */
 
 /* Compositor style slots owned by the shell theme. Slots 1 (hover) and
  * 2 (active) belong to iso_drm (scene_compositor_setup_hover_style /
@@ -43,11 +60,32 @@
 /* ---- internal state -------------------------------------------------- */
 #define MAX_TASKS 256
 
+/* One cross-app search hit: layer + node + a copy of the matched text
+ * (scene_store_node_texts views point into store memory, so the hit
+ * keeps its own copy for the row label). */
+typedef struct ovl_hit {
+    int           layer;
+    scene_node_id node_id;
+    scene_text_id text_id;
+    char          text[64];
+} ovl_hit;
+
 typedef struct task_entry {
     scene_node_id window_id;    /* the WINDOW node in the store            */
     scene_node_id button_id;    /* the BUTTON node in the panel            */
     uint8_t       active;       /* 1 = present in current reconciliation   */
 } task_entry;
+
+/* App-layer task entry: one per (layer, WINDOW) on layers 1..n. The
+ * window stays in the taskbar while minimized (hidden), so it can be
+ * restored. button_id is always ID_APP_TASK_BASE + slot.                */
+typedef struct app_task_entry {
+    uint8_t       used;         /* slot occupied (freed slots reused)      */
+    uint8_t       active;       /* present in current reconciliation       */
+    int           layer;        /* app layer index (>= 1)                 */
+    scene_node_id window_id;
+    scene_node_id button_id;
+} app_task_entry;
 
 struct scene_shell {
     scene_client        *client;
@@ -60,6 +98,8 @@ struct scene_shell {
     /* task list reconciliation */
     task_entry           tasks[MAX_TASKS];
     uint32_t             task_count;
+    /* app-layer task buttons (ID_APP_TASK_BASE + slot) */
+    app_task_entry       app_tasks[APP_TASK_MAX];
 
     /* launcher state */
     uint8_t              menu_open;
@@ -87,6 +127,19 @@ struct scene_shell {
     scene_wallpaper     *wp;
     uint32_t             wp_tex_ref;      /* texture ref for bg wallpaper */
     int                  wp_tex_registered;
+
+    /* network tray label */
+    char                 tray_text[16];   /* cached label text            */
+    time_t               last_tray_probe; /* 0 = probe immediately        */
+
+    /* cross-app search overlay (Super+S) */
+    uint8_t              ovl_open;        /* overlay showing              */
+    uint8_t              ovl_built;       /* overlay nodes created        */
+    int32_t              ovl_y;           /* overlay top (centered)       */
+    char                 ovl_query[64];
+    uint32_t             ovl_hit_count;   /* live hits (<= 8)             */
+    uint32_t             ovl_sel;         /* selected hit row             */
+    ovl_hit              ovl_hits[SCENE_SHELL_OVL_HITS];
 };
 
 /* ---- helpers --------------------------------------------------------- */
@@ -122,6 +175,44 @@ static int emit_destroy(scene_shell *sh, scene_node_id id)
 {
     return scene_client_destroy_node(sh->client, id);
 }
+
+/* ---- network tray probe ------------------------------------------------ */
+
+#if !defined(_WIN32)
+/* Linux: any non-loopback interface with carrier = up. */
+static const char *shell_tray_probe_impl(void)
+{
+    static char res[8];
+    DIR *d = opendir("/sys/class/net");
+    if (!d) return "no net";
+    struct dirent *e;
+    int up = 0;
+    while ((e = readdir(d)) && !up) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0 ||
+            strcmp(e->d_name, "lo") == 0)
+            continue;
+        char path[256];
+        snprintf(path, sizeof(path), "/sys/class/net/%s/carrier",
+                 e->d_name);
+        FILE *f = fopen(path, "r");
+        if (f) {
+            int c = fgetc(f);
+            fclose(f);
+            if (c == '1') up = 1;
+        }
+    }
+    closedir(d);
+    strcpy(res, up ? "net" : "no net");
+    return res;
+}
+#else
+static const char *shell_tray_probe_impl(void)
+{
+    return "NA";
+}
+#endif
+
+const char *(*scene_shell_tray_probe)(void) = shell_tray_probe_impl;
 
 /* ---- config ---------------------------------------------------------- */
 
@@ -355,6 +446,7 @@ static void apply_theme(scene_shell *sh)
     scene_client_set_style(sh->client, ID_PANEL, SHELL_STYLE_PANEL);
     scene_client_set_style(sh->client, ID_START_BTN, SHELL_STYLE_BUTTON);
     scene_client_set_style(sh->client, ID_CLOCK, SHELL_STYLE_LABEL);
+    scene_client_set_style(sh->client, ID_TRAY, SHELL_STYLE_LABEL);
     scene_client_set_style(sh->client, ID_MENU, SHELL_STYLE_MENU);
     uint32_t i;
     for (i = 0; i < sh->cfg.launcher_app_count && i < SCENE_SHELL_MAX_APPS; i++)
@@ -399,6 +491,15 @@ int scene_shell_build(scene_shell *sh, int32_t width, int32_t height)
                     SCENE_ROLE_LABEL, width - 100, panel_y + 2,
                     96, (int32_t)ph - 4,
                     SCENE_FLAG_VISIBLE);
+    if (r != 0) return -1;
+
+    /* Network tray label — just left of the clock (not interactive) */
+    r = emit_create(sh, ID_PANEL, ID_TRAY,
+                    SCENE_ROLE_LABEL, width - 100 - 56, panel_y + 2,
+                    52, (int32_t)ph - 4,
+                    SCENE_FLAG_VISIBLE);
+    if (r != 0) return -1;
+    r = emit_text(sh, ID_TRAY, 1, "NA", 2);
     if (r != 0) return -1;
 
     /* Launcher menu — initially hidden, positioned above start button */
@@ -458,6 +559,13 @@ int scene_shell_build(scene_shell *sh, int32_t width, int32_t height)
 
     sh->built = 1;
     apply_theme(sh);
+
+    /* OS key grab: Super+S opens the cross-app search overlay from
+     * anywhere, even while an app session has keyboard focus. Grabs are
+     * registered once at build time, not per open. */
+    if (sh->cp)
+        scene_compositor_key_grab(sh->cp, OVL_HOTKEY_CODE,
+                                  SCENE_MOD_SUPER);
     return 0;
 }
 
@@ -498,6 +606,52 @@ static int walk_cb(scene_node_id id, void *ud)
     return 0;
 }
 
+/* ---- app-layer task reconciliation ------------------------------------ */
+
+struct app_walk_ctx {
+    scene_shell     *sh;
+    app_task_entry  *tasks;
+    int              layer;
+};
+
+/* Track every WINDOW node of one app layer. Unlike layer-0 windows,
+ * minimized (hidden) ones stay tracked so their task button persists
+ * and can restore the window. */
+static int app_walk_cb(scene_node_id id, void *ud)
+{
+    struct app_walk_ctx *aw = ud;
+    /* App layers live in their own session namespace (scene_app windows
+     * are id >= 40000); the shell's own ids (>= ID_BACKGROUND) exist only
+     * in layer 0, so no id filter applies here — every WINDOW role in the
+     * layer is a tracked task (stale nodes are filtered by node_vis).   */
+    scene_store *lst = NULL;
+    if (aw->sh->cp)
+        lst = scene_compositor_layer_store(aw->sh->cp, aw->layer);
+    if (!lst) return 0;
+    scene_node_vis v;
+    if (scene_store_node_vis(lst, id, &v) != 0) return 0;
+    if (v.stale) return 0;
+    if (v.role != SCENE_ROLE_WINDOW) return 0;
+    uint32_t k;
+    for (k = 0; k < APP_TASK_MAX; k++) {
+        if (aw->tasks[k].used && aw->tasks[k].window_id == id) {
+            aw->tasks[k].active = 1;
+            return 0;
+        }
+    }
+    for (k = 0; k < APP_TASK_MAX; k++) {
+        if (!aw->tasks[k].used) {
+            aw->tasks[k].used = 1;
+            aw->tasks[k].active = 1;
+            aw->tasks[k].layer = aw->layer;
+            aw->tasks[k].window_id = id;
+            aw->tasks[k].button_id = 0;   /* the tick's create phase owns */
+            return 0;                     /* the button id, as layer 0   */
+        }
+    }
+    return 0;
+}
+
 int scene_shell_tick(scene_shell *sh)
 {
     if (!sh || !sh->built) return -1;
@@ -522,6 +676,22 @@ int scene_shell_tick(scene_shell *sh)
         sh->last_clock_min = cur_min;
     }
 
+    /* --- Network tray text (probe at most every 2 s, emit on change) --- */
+    if (sh->last_tray_probe == 0 || now - sh->last_tray_probe >= 2) {
+        sh->last_tray_probe = now;
+        const char *probe = scene_shell_tray_probe ?
+            scene_shell_tray_probe() : "NA";
+        size_t plen = strlen(probe);
+        if (plen >= sizeof(sh->tray_text))
+            plen = sizeof(sh->tray_text) - 1;
+        if (plen != strlen(sh->tray_text) ||
+            memcmp(sh->tray_text, probe, plen) != 0) {
+            memcpy(sh->tray_text, probe, plen);
+            sh->tray_text[plen] = '\0';
+            emit_text(sh, ID_TRAY, 1, sh->tray_text, (uint32_t)plen);
+        }
+    }
+
     /* --- Task list reconciliation --- */
     /* Mark all existing tasks inactive, then walk store to find windows */
     uint32_t i;
@@ -535,6 +705,22 @@ int scene_shell_tick(scene_shell *sh)
     ctx.task_cap   = MAX_TASKS;
     scene_store_walk(sh->store, walk_cb, &ctx);
     sh->task_count = ctx.task_count;
+
+    /* App-layer reconciliation: walk every attached app layer store. */
+    uint32_t j;
+    for (j = 0; j < APP_TASK_MAX; j++)
+        sh->app_tasks[j].active = 0;
+    if (sh->cp) {
+        int nlay = scene_compositor_layer_count(sh->cp);
+        for (i = 1; i < (uint32_t)nlay; i++) {
+            struct app_walk_ctx aw;
+            aw.sh    = sh;
+            aw.tasks = sh->app_tasks;
+            aw.layer = (int)i;
+            scene_store_walk(scene_compositor_layer_store(sh->cp, (int)i),
+                             app_walk_cb, &aw);
+        }
+    }
 
     /* Create buttons for new windows, destroy buttons for gone windows,
      * and refresh text for existing buttons (window title may change). */
@@ -575,6 +761,47 @@ int scene_shell_tick(scene_shell *sh)
         }
     }
 
+    /* App task buttons: position after the layer-0 buttons; a minimized
+     * (hidden) window keeps its button so it can be restored. */
+    uint32_t app_off = sh->task_count;
+    for (j = 0; j < APP_TASK_MAX; j++) {
+        app_task_entry *at = &sh->app_tasks[j];
+        if (!at->used) continue;
+        if (!at->active) {
+            if (at->button_id != 0) {
+                emit_destroy(sh, at->button_id);
+                at->button_id = 0;
+            }
+            at->used = 0;   /* slot is free for reuse */
+            continue;
+        }
+        if (at->button_id == 0) {
+            at->button_id = ID_APP_TASK_BASE + j;
+            int32_t bx = (int32_t)btn_x +
+                         (int32_t)(app_off * (uint32_t)(100 + 4));
+            int32_t panel_y = sh->height - (int32_t)sh->cfg.panel_height;
+            emit_create(sh, ID_PANEL, at->button_id,
+                        SCENE_ROLE_BUTTON, bx, panel_y + 2, 100,
+                        (int32_t)ph - 4,
+                        SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
+            scene_client_set_style(sh->client, at->button_id,
+                                   SHELL_STYLE_BUTTON);
+        }
+        app_off++;
+        /* Refresh button text from the window title on the app layer */
+        scene_store *lst = sh->cp ?
+            scene_compositor_layer_store(sh->cp, at->layer) : NULL;
+        if (lst) {
+            scene_node_text_vis tv[16];
+            int nt = scene_store_node_texts(lst, at->window_id, tv, 16);
+            if (nt > 0 && tv[0].len > 0) {
+                uint32_t len = tv[0].len;
+                if (len > 30) len = 30;
+                emit_text(sh, at->button_id, 1, tv[0].data, len);
+            }
+        }
+    }
+
     /* --- Active task highlighting --- */
     if (sh->active_style != 0) {
         scene_node_id focused = scene_store_focus(sh->store);
@@ -584,6 +811,19 @@ int scene_shell_tick(scene_shell *sh)
                 sh->tasks[i].button_id != 0) {
                 new_active_btn = sh->tasks[i].button_id;
                 break;
+            }
+        }
+        /* App layers: focus is per-layer engine state (host WM) */
+        if (new_active_btn == 0 && sh->cp) {
+            for (j = 0; j < APP_TASK_MAX; j++) {
+                app_task_entry *at = &sh->app_tasks[j];
+                if (!at->used || at->button_id == 0) continue;
+                scene_store *lst =
+                    scene_compositor_layer_store(sh->cp, at->layer);
+                if (lst && scene_store_focus(lst) == at->window_id) {
+                    new_active_btn = at->button_id;
+                    break;
+                }
             }
         }
         if (new_active_btn != sh->active_task_id) {
@@ -616,6 +856,322 @@ int scene_shell_tick(scene_shell *sh)
     }
 
     return 0;
+}
+
+/* ---- cross-app search overlay ------------------------------------------
+ *
+ * Super+S (OS key grab, registered at build) opens a shell-session
+ * search overlay. Typing searches committed texts LIVE across every
+ * layer (layer ascending, then the engine's document order); Enter or a
+ * click on a hit row activates the hit through the host WM APIs on that
+ * layer's store (host_focus, host_set_visible after restore) — zero
+ * wire bytes into the app session. Escape closes; Backspace edits the
+ * query; Up/Down move the selection (highlighted with the hover style
+ * slot when one is set).                                         ---------- */
+
+/* set-1 scancode -> lowercase letter; 0 = not a letter. */
+static char ovl_letter(uint32_t code)
+{
+    switch (code) {
+    case 30: return 'a'; case 48: return 'b'; case 46: return 'c';
+    case 32: return 'd'; case 18: return 'e'; case 33: return 'f';
+    case 34: return 'g'; case 35: return 'h'; case 23: return 'i';
+    case 36: return 'j'; case 37: return 'k'; case 38: return 'l';
+    case 50: return 'm'; case 49: return 'n'; case 24: return 'o';
+    case 25: return 'p'; case 16: return 'q'; case 19: return 'r';
+    case 31: return 's'; case 20: return 't'; case 22: return 'u';
+    case 47: return 'v'; case 17: return 'w'; case 45: return 'x';
+    case 21: return 'y'; case 44: return 'z';
+    default: return 0;
+    }
+}
+
+/* Printable scancodes for the query: letters/digits/space/period; shift
+ * maps letters to uppercase. Returns 0 when the key is not printable. */
+static char ovl_printable_char(uint32_t code, uint8_t mods)
+{
+    char c;
+
+    if (code >= 2 && code <= 10) c = (char)('1' + (code - 2));
+    else if (code == 11) c = '0';
+    else if (code == 57) c = ' ';
+    else if (code == 52) c = '.';
+    else {
+        c = ovl_letter(code);
+        if (c == 0) return 0;
+        if (mods & SCENE_MOD_SHIFT) c = (char)(c - 'a' + 'A');
+    }
+    return c;
+}
+
+/* Lazily create the overlay nodes (hidden until the first open). */
+static int ovl_build(scene_shell *sh)
+{
+    int32_t x = (sh->width - SCENE_SHELL_OVL_W) / 2;
+    int r;
+    uint32_t i;
+
+    sh->ovl_y = (sh->height - SCENE_SHELL_OVL_H) / 2;
+    r = emit_create(sh, SCENE_NO_PARENT, ID_OVL_BG, SCENE_ROLE_MENU,
+                    x, sh->ovl_y, SCENE_SHELL_OVL_W, SCENE_SHELL_OVL_H, 0);
+    if (r != 0) return -1;
+    scene_client_set_style(sh->client, ID_OVL_BG, SHELL_STYLE_MENU);
+
+    r = emit_create(sh, ID_OVL_BG, ID_OVL_QUERY, SCENE_ROLE_LABEL,
+                    x + 16, sh->ovl_y + 14, SCENE_SHELL_OVL_W - 32, 24, 0);
+    if (r != 0) return -1;
+    scene_client_set_style(sh->client, ID_OVL_QUERY, SHELL_STYLE_LABEL);
+
+    for (i = 0; i < SCENE_SHELL_OVL_HITS; i++) {
+        r = emit_create(sh, ID_OVL_BG, ID_OVL_HITS + i, SCENE_ROLE_BUTTON,
+                        x + 16, sh->ovl_y + 44 + (int32_t)i * 28,
+                        SCENE_SHELL_OVL_W - 32, 24, 0);
+        if (r != 0) return -1;
+        scene_client_set_style(sh->client, ID_OVL_HITS + i,
+                               SHELL_STYLE_BUTTON);
+    }
+    return 0;
+}
+
+/* Reposition the overlay nodes (output resize). */
+static void ovl_layout(scene_shell *sh)
+{
+    int32_t x = (sh->width - SCENE_SHELL_OVL_W) / 2;
+    uint32_t i;
+
+    sh->ovl_y = (sh->height - SCENE_SHELL_OVL_H) / 2;
+    emit_rect(sh, ID_OVL_BG, x, sh->ovl_y, SCENE_SHELL_OVL_W,
+              SCENE_SHELL_OVL_H);
+    emit_rect(sh, ID_OVL_QUERY, x + 16, sh->ovl_y + 14,
+              SCENE_SHELL_OVL_W - 32, 24);
+    for (i = 0; i < SCENE_SHELL_OVL_HITS; i++)
+        emit_rect(sh, ID_OVL_HITS + i, x + 16,
+                  sh->ovl_y + 44 + (int32_t)i * 28,
+                  SCENE_SHELL_OVL_W - 32, 24);
+}
+
+/* Selected row gets the hover style slot, the others their base theme.
+ * Without a hover style (slot unset) no highlighting is applied. */
+static void ovl_highlight(scene_shell *sh)
+{
+    uint32_t i;
+
+    if (!sh->hover_style) return;
+    for (i = 0; i < SCENE_SHELL_OVL_HITS; i++) {
+        int sel = (sh->ovl_open && sh->ovl_hit_count > 0
+                   && i == sh->ovl_sel);
+        scene_client_set_style(sh->client, ID_OVL_HITS + i,
+                               sel ? sh->hover_style
+                                   : base_style_for(ID_OVL_HITS + i));
+    }
+}
+
+/* Search every layer's committed texts for the current query and rebuild
+ * the hit rows. Deterministic: layer ascending, then the engine's
+ * document order. App-layer rows are labelled "[L%d] <text>", layer-0
+ * rows carry no prefix. */
+static void ovl_search(scene_shell *sh)
+{
+    uint32_t i;
+    uint32_t qlen = (uint32_t)strlen(sh->ovl_query);
+    int nlay = sh->cp ? scene_compositor_layer_count(sh->cp) : 1;
+    char buf[96];
+
+    sh->ovl_hit_count = 0;
+    sh->ovl_sel = 0;
+    for (i = 0; i < (uint32_t)nlay
+         && sh->ovl_hit_count < SCENE_SHELL_OVL_HITS; i++) {
+        scene_store *st = (i == 0) ? sh->store
+            : scene_compositor_layer_store(sh->cp, (int)i);
+        scene_node_id ids[48];
+        scene_text_id tids[48];
+        size_t cap = sizeof(ids) / sizeof(ids[0]);
+        size_t tcap = cap;
+        size_t n;
+        uint32_t k;
+
+        if (!st || qlen == 0) continue;
+        n = scene_store_search(st, sh->ovl_query, qlen, ids, cap, tids,
+                               &tcap);
+        for (k = 0; k < n && k < cap
+             && sh->ovl_hit_count < SCENE_SHELL_OVL_HITS; k++) {
+            ovl_hit *hit = &sh->ovl_hits[sh->ovl_hit_count];
+            scene_node_text_vis tv[16];
+            int nt, ti;
+
+            /* The overlay's own nodes (backdrop, query label, hit rows)
+             * are not search targets: their committed texts would echo
+             * back into the rows on the next keystroke. Layer 0
+             * contributes only interactive nodes — passive labels
+             * (clock, tray status) are not activatable targets. */
+            if (ids[k] >= ID_OVL_BG) continue;
+            if (i == 0) {
+                scene_node_vis nv;
+                if (scene_store_node_vis(st, ids[k], &nv) != 0) continue;
+                if (!(nv.flags & SCENE_FLAG_FOCUSABLE)) continue;
+            }
+
+            hit->layer = (int)i;
+            hit->node_id = ids[k];
+            hit->text_id = tids[k];
+            hit->text[0] = '\0';
+            nt = scene_store_node_texts(st, ids[k], tv, 16);
+            for (ti = 0; ti < nt; ti++) {
+                if (tv[ti].text_id == tids[k] && tv[ti].len > 0) {
+                    size_t cl = tv[ti].len;
+                    if (cl >= sizeof(hit->text)) cl = sizeof(hit->text) - 1;
+                    memcpy(hit->text, tv[ti].data, cl);
+                    hit->text[cl] = '\0';
+                    break;
+                }
+            }
+            sh->ovl_hit_count++;
+        }
+    }
+    for (i = 0; i < SCENE_SHELL_OVL_HITS; i++) {
+        if (i < sh->ovl_hit_count) {
+            const ovl_hit *hit = &sh->ovl_hits[i];
+
+            if (hit->layer == 0)
+                snprintf(buf, sizeof(buf), "%s", hit->text);
+            else
+                snprintf(buf, sizeof(buf), "[L%d] %s", hit->layer,
+                         hit->text);
+            emit_text(sh, ID_OVL_HITS + i, 1, buf, (uint32_t)strlen(buf));
+            emit_flags(sh, ID_OVL_HITS + i,
+                       SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
+        } else {
+            emit_flags(sh, ID_OVL_HITS + i, 0);
+        }
+    }
+    ovl_highlight(sh);
+}
+
+static void ovl_query_changed(scene_shell *sh)
+{
+    char buf[68];
+    size_t qlen = strlen(sh->ovl_query);
+    size_t take = qlen;
+
+    if (take > 62) take = 62;
+    buf[0] = '>';
+    buf[1] = ' ';
+    memcpy(buf + 2, sh->ovl_query, take);
+    buf[2 + take] = '\0';
+    emit_text(sh, ID_OVL_QUERY, 1, buf, (uint32_t)strlen(buf));
+    ovl_search(sh);
+}
+
+static int ovl_open_shell(scene_shell *sh)
+{
+    uint32_t i;
+
+    if (sh->ovl_open) return 1;
+    sh->ovl_open = 1;
+    sh->ovl_query[0] = '\0';
+    sh->ovl_hit_count = 0;
+    sh->ovl_sel = 0;
+    if (!sh->ovl_built) {
+        if (ovl_build(sh) != 0) {
+            sh->ovl_open = 0;
+            return 0;
+        }
+        sh->ovl_built = 1;
+    }
+    ovl_layout(sh);
+    emit_flags(sh, ID_OVL_BG, SCENE_FLAG_VISIBLE);
+    emit_flags(sh, ID_OVL_QUERY, SCENE_FLAG_VISIBLE);
+    emit_text(sh, ID_OVL_QUERY, 1, "> ", 2);
+    for (i = 0; i < SCENE_SHELL_OVL_HITS; i++)
+        emit_flags(sh, ID_OVL_HITS + i, 0);
+    ovl_search(sh);
+    /* The overlay owns the keyboard: route keys to the shell session
+     * even if a click left focus on an app layer. */
+    if (sh->cp)
+        scene_compositor_set_focus_layer(sh->cp, 0);
+    scene_store_host_focus(sh->store, ID_BACKGROUND);
+    return 1;
+}
+
+static void ovl_close(scene_shell *sh)
+{
+    uint32_t i;
+
+    if (!sh->ovl_open) return;
+    sh->ovl_open = 0;
+    emit_flags(sh, ID_OVL_BG, 0);
+    emit_flags(sh, ID_OVL_QUERY, 0);
+    for (i = 0; i < SCENE_SHELL_OVL_HITS; i++)
+        emit_flags(sh, ID_OVL_HITS + i, 0);
+    sh->ovl_query[0] = '\0';
+    sh->ovl_hit_count = 0;
+    sh->ovl_sel = 0;
+}
+
+static void ovl_sel_move(scene_shell *sh, int dir)
+{
+    int32_t s;
+
+    if (sh->ovl_hit_count == 0) return;
+    s = (int32_t)sh->ovl_sel + dir;
+    if (s < 0) s = 0;
+    if (s >= (int32_t)sh->ovl_hit_count) s = (int32_t)sh->ovl_hit_count - 1;
+    sh->ovl_sel = (uint32_t)s;
+    ovl_highlight(sh);
+}
+
+/* Activate the chosen hit: restore visibility + focus on ITS layer's
+ * store (host WM, no wire bytes). Layer 0 hits only need the focus. */
+static void ovl_activate(scene_shell *sh, uint32_t idx)
+{
+    const ovl_hit *hit;
+    scene_store *lst;
+
+    if (!sh->ovl_open || idx >= sh->ovl_hit_count) return;
+    hit = &sh->ovl_hits[idx];
+    lst = (hit->layer == 0) ? sh->store
+        : (sh->cp ? scene_compositor_layer_store(sh->cp, hit->layer)
+                  : NULL);
+    if (lst) {
+        if (hit->layer != 0)
+            scene_store_host_set_visible(lst, hit->node_id, 1);
+        scene_store_host_focus(lst, hit->node_id);
+    }
+    ovl_close(sh);
+}
+
+static void ovl_enter(scene_shell *sh)
+{
+    uint32_t idx;
+
+    if (sh->ovl_hit_count == 0) return;
+    idx = sh->ovl_sel < sh->ovl_hit_count ? sh->ovl_sel : 0;
+    ovl_activate(sh, idx);
+}
+
+static void ovl_backspace(scene_shell *sh)
+{
+    size_t len = strlen(sh->ovl_query);
+
+    if (len == 0) return;
+    sh->ovl_query[len - 1] = '\0';
+    ovl_query_changed(sh);
+}
+
+/* Append a printable key to the query. Returns 1 when the key was
+ * printable (consumed), 0 otherwise. */
+static int ovl_printable(scene_shell *sh, uint32_t code, uint8_t mods)
+{
+    char c = ovl_printable_char(code, mods);
+    size_t len;
+
+    if (c == 0) return 0;
+    len = strlen(sh->ovl_query);
+    if (len + 1 >= sizeof(sh->ovl_query)) return 1;  /* full: consumed */
+    sh->ovl_query[len] = c;
+    sh->ovl_query[len + 1] = '\0';
+    ovl_query_changed(sh);
+    return 1;
 }
 
 /* ---- input handling -------------------------------------------------- */
@@ -663,6 +1219,42 @@ int scene_shell_handle_activate(scene_shell *sh, scene_node_id activated_id)
                 (void)system(cmd);
             }
         }
+        return 1;
+    }
+
+    /* App task button — host WM: focus / minimize / restore the window
+     * on its own layer's store (an OS intervention: direct host API, no
+     * wire bytes into the app session). */
+    if (activated_id >= ID_APP_TASK_BASE &&
+        activated_id < ID_APP_TASK_BASE + APP_TASK_MAX) {
+        uint32_t slot = activated_id - ID_APP_TASK_BASE;
+        app_task_entry *at = &sh->app_tasks[slot];
+        if (!at->used || !sh->cp) return 0;
+        scene_store *lst = scene_compositor_layer_store(sh->cp, at->layer);
+        if (!lst) return 0;
+        scene_node_vis v;
+        int visible = (scene_store_node_vis(lst, at->window_id, &v) == 0 &&
+                       (v.flags & SCENE_FLAG_VISIBLE));
+        if (!visible) {
+            /* Minimized: restore and focus. */
+            scene_store_host_set_visible(lst, at->window_id, 1);
+            scene_store_host_focus(lst, at->window_id);
+        } else if (scene_store_focus(lst) == at->window_id) {
+            /* Focused: minimize (button stays in the taskbar). */
+            scene_store_host_set_visible(lst, at->window_id, 0);
+        } else {
+            /* Visible, not focused: focus the window. */
+            scene_store_host_focus(lst, at->window_id);
+        }
+        return 1;
+    }
+
+    /* Search overlay hit row — activate the chosen cross-app hit. */
+    if (activated_id >= ID_OVL_HITS &&
+        activated_id < ID_OVL_HITS + SCENE_SHELL_OVL_HITS) {
+        uint32_t idx = activated_id - ID_OVL_HITS;
+        if (idx < sh->ovl_hit_count)
+            ovl_activate(sh, idx);
         return 1;
     }
 
@@ -1002,7 +1594,20 @@ int scene_shell_load_config(scene_shell *sh, const char *path)
         }
         sh->task_count = 0;
         emit_destroy(sh, ID_MENU);
+        /* Destroy the search overlay (lazily created, may not exist) */
+        if (sh->ovl_built) {
+            for (i = 0; i < SCENE_SHELL_OVL_HITS; i++)
+                emit_destroy(sh, ID_OVL_HITS + i);
+            emit_destroy(sh, ID_OVL_QUERY);
+            emit_destroy(sh, ID_OVL_BG);
+        }
+        sh->ovl_built = 0;
+        sh->ovl_open = 0;
+        sh->ovl_hit_count = 0;
+        sh->ovl_sel = 0;
+        sh->ovl_query[0] = '\0';
         emit_destroy(sh, ID_CLOCK);
+        emit_destroy(sh, ID_TRAY);
         emit_destroy(sh, ID_START_BTN);
         emit_destroy(sh, ID_PANEL);
         emit_destroy(sh, ID_BACKGROUND);
@@ -1021,6 +1626,9 @@ int scene_shell_load_config(scene_shell *sh, const char *path)
         sh->active_task_id = 0;
         sh->moving_titlebar = 0;
         sh->resizing_window = 0;
+        memset(sh->app_tasks, 0, sizeof(sh->app_tasks));
+        sh->tray_text[0] = '\0';
+        sh->last_tray_probe = 0;
         /* Rebuild with new config */
         return scene_shell_build(sh, sh->width, sh->height);
     }
@@ -1041,6 +1649,18 @@ int scene_shell_apply_config(scene_shell *sh, const scene_shell_config *cfg)
         }
         sh->task_count = 0;
         emit_destroy(sh, ID_MENU);
+        /* Destroy the search overlay (lazily created, may not exist) */
+        if (sh->ovl_built) {
+            for (i = 0; i < SCENE_SHELL_OVL_HITS; i++)
+                emit_destroy(sh, ID_OVL_HITS + i);
+            emit_destroy(sh, ID_OVL_QUERY);
+            emit_destroy(sh, ID_OVL_BG);
+        }
+        sh->ovl_built = 0;
+        sh->ovl_open = 0;
+        sh->ovl_hit_count = 0;
+        sh->ovl_sel = 0;
+        sh->ovl_query[0] = '\0';
         emit_destroy(sh, ID_CLOCK);
         emit_destroy(sh, ID_START_BTN);
         emit_destroy(sh, ID_PANEL);
@@ -1088,8 +1708,16 @@ int scene_shell_resize(scene_shell *sh, int32_t width, int32_t height)
     /* Reposition clock (right-aligned, absolute coords) */
     emit_rect(sh, ID_CLOCK, width - 100, height - (int32_t)ph + 2, 96, (int32_t)ph - 4);
 
+    /* Reposition tray (left of clock, absolute coords) */
+    emit_rect(sh, ID_TRAY, width - 100 - 56, height - (int32_t)ph + 2,
+              52, (int32_t)ph - 4);
+
     /* Reposition menu */
     emit_rect(sh, ID_MENU, 0, height - (int32_t)ph - 160, 160, 160);
+
+    /* Reposition the search overlay (if built) */
+    if (sh->ovl_built)
+        ovl_layout(sh);
 
     /* Resize wallpaper */
     if (sh->wp) {
@@ -1138,6 +1766,28 @@ int scene_shell_handle_key(scene_shell *sh, uint32_t key_code,
 
     int alt = (modifiers & SCENE_MOD_ALT) != 0;
     int shift = (modifiers & SCENE_MOD_SHIFT) != 0;
+    int super = (modifiers & SCENE_MOD_SUPER) != 0;
+
+    /* Super+S: toggle the cross-app search overlay (OS key grab —
+     * the chord reaches the shell regardless of keyboard focus). */
+    if (super && key_code == OVL_HOTKEY_CODE) {
+        if (sh->ovl_open)
+            ovl_close(sh);
+        else
+            ovl_open_shell(sh);
+        return 1;
+    }
+
+    /* While the overlay is open it owns the keyboard. */
+    if (sh->ovl_open) {
+        if (key_code == SCENE_KEY_ESC) { ovl_close(sh); return 1; }
+        if (key_code == SCENE_KEY_BACKSPACE) { ovl_backspace(sh); return 1; }
+        if (key_code == SCENE_KEY_ENTER) { ovl_enter(sh); return 1; }
+        if (key_code == SCENE_KEY_UP) { ovl_sel_move(sh, -1); return 1; }
+        if (key_code == SCENE_KEY_DOWN) { ovl_sel_move(sh, 1); return 1; }
+        if (ovl_printable(sh, key_code, modifiers)) return 1;
+        return 0;
+    }
 
     /* Escape: close start menu if open. */
     if (key_code == SCENE_KEY_ESC && sh->menu_open) {

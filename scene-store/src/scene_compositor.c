@@ -33,11 +33,12 @@
  */
 #include "scene_compositor.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define SCENE_COMPOSITOR_MAX_DAMAGE   32u
-#define SCENE_COMPOSITOR_TEXT_CAP     16u
+#define SCENE_COMPOSITOR_TEXT_CAP     48u
 #define SCENE_COMPOSITOR_ANIM_TICKS   8u
 #define SCENE_COMPOSITOR_ANIM_SLIDE   6
 #define SCENE_COMPOSITOR_ANIM_CAP     64u
@@ -107,15 +108,29 @@ typedef struct scene_layer {
     anim_ent      anims[SCENE_COMPOSITOR_ANIM_CAP];
     uint32_t      anim_used;
 
+    /* Texture registry: per-layer, because refs are per-session store
+     * ids — two sessions may both use ref 1 and must not collide.      */
+    scene_tex_ent *tex_ents;
+    uint32_t      tex_cap;
+
     uint64_t      rendered_seq;
     int           dead;     /* session in fatal state: skip render/input   */
 } scene_layer;
+
+/* One OS-level key grab: (key_code, mods) chords routed to the shell
+ * session no matter where keyboard focus sits (Super+S search, ...). */
+typedef struct scene_key_grab {
+    uint32_t key_code;
+    uint8_t  mods;
+    uint8_t  used;
+} scene_key_grab;
 
 struct scene_compositor {
     scene_layer  *ly;       /* array; ly[0] = shell session (never empty)  */
     uint32_t      ly_count;
     uint32_t      ly_cap;
     uint32_t      focus_layer;  /* keyboard focus (0 = shell)              */
+    scene_key_grab grabs[SCENE_COMPOSITOR_KEY_GRABS]; /* OS key grabs      */
 
     scene_fb      fb;
     uint32_t      clear;
@@ -127,9 +142,6 @@ struct scene_compositor {
 
     scene_style  *styles;
     uint32_t      style_count;
-
-    scene_tex_ent *tex_ents;
-    uint32_t      tex_cap;
 
     scene_rect    pending[SCENE_COMPOSITOR_MAX_DAMAGE];
     uint32_t      pending_count;
@@ -171,7 +183,7 @@ static const scene_style role_defaults[32] = {
     /* CANVAS     */ {0xFF101010u, 0x00000000u, 0xFFFFFFFFu, 0, 0, 0, 0},
     /* TEXTBLOCK  */ {0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0, 0, 0, 0},
     /* SELECTION  */ {0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0, 0, 0, 0},
-    /* CURSOR     */ {0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0, 0, 0, 0},
+    /* CURSOR     */ {0xFFCCCCCCu, 0x00000000u, 0xFF0C0C0Cu, 0, 0, 0, 0},
     /* LINK       */ {0x00000000u, 0x00000000u, 0xFF66B2FFu, 0, 0, 0, 0},
 };
 
@@ -564,13 +576,13 @@ static void clip_intersect(scene_rect *out, const scene_rect *a,
     out->h = (int32_t)(y1 - y0);
 }
 
-static scene_tex_ent *tex_find(scene_compositor *cp, scene_texture_ref ref)
+static scene_tex_ent *tex_find(const scene_layer *ly, scene_texture_ref ref)
 {
     uint32_t i;
 
-    for (i = 0; i < cp->tex_cap; i++)
-        if (cp->tex_ents[i].used && cp->tex_ents[i].ref == ref)
-            return &cp->tex_ents[i];
+    for (i = 0; i < ly->tex_cap; i++)
+        if (ly->tex_ents[i].used && ly->tex_ents[i].ref == ref)
+            return &ly->tex_ents[i];
     return NULL;
 }
 
@@ -653,7 +665,7 @@ static void paint_node(scene_compositor *cp, const scene_layer *ly,
     if (st->fill || (st->border_w && st->border))
         style_chrome(&cp->fb, &rc, st, eff, &c);
     if (v->tex != SCENE_NO_TEXTURE) {
-        scene_tex_ent *te = tex_find(cp, v->tex);
+        scene_tex_ent *te = tex_find(ly, v->tex);
         if (te) {
             scene_rect src;
             src.x = v->tex_src[0];
@@ -704,8 +716,8 @@ static int paint_cb(scene_node_id id, void *out)
 
 /* Draw the fading visual of a deleted node (its texts and colors were
  * snapshotted at destroy time; the store no longer knows it).          */
-static void paint_phantom(scene_compositor *cp, const anim_ent *an,
-                          const scene_rect *clip)
+static void paint_phantom(scene_compositor *cp, const scene_layer *ly,
+                          const anim_ent *an, const scene_rect *clip)
 {
     scene_rect rc, c;
     uint32_t alpha;
@@ -736,7 +748,7 @@ static void paint_phantom(scene_compositor *cp, const anim_ent *an,
         style_chrome(&cp->fb, &rc, &st, alpha, &c);
     }
     if (an->tex != SCENE_NO_TEXTURE) {
-        scene_tex_ent *te = tex_find(cp, an->tex);
+        scene_tex_ent *te = tex_find(ly, an->tex);
         if (te) {
             scene_rect src;
             src.x = 0;
@@ -767,7 +779,7 @@ static void anim_paint_exits(scene_compositor *cp, const scene_layer *ly,
     if (!cp->effects_on) return;
     for (i = 0; i < SCENE_COMPOSITOR_ANIM_CAP; i++)
         if (ly->anims[i].active && ly->anims[i].kind == SCENE_ANIM_EXIT)
-            paint_phantom(cp, &ly->anims[i], clip);
+            paint_phantom(cp, ly, &ly->anims[i], clip);
 }
 
 static void repaint_rect(scene_compositor *cp, const scene_rect *r)
@@ -968,6 +980,11 @@ static void layer_free(scene_layer *ly)
     ly->map_cap = 0;
     for (i = 0; i < SCENE_COMPOSITOR_ANIM_CAP; i++)
         free(ly->anims[i].tbuf);
+    for (i = 0; i < ly->tex_cap; i++)
+        free(ly->tex_ents[i].px);
+    free(ly->tex_ents);
+    ly->tex_ents = NULL;
+    ly->tex_cap = 0;
     if (ly->sv) scene_server_free(ly->sv);
     ly->sv = NULL;
     ly->store = NULL;
@@ -1031,9 +1048,6 @@ void scene_compositor_free(scene_compositor *cp)
     uint32_t i;
 
     if (!cp) return;
-    for (i = 0; i < cp->tex_cap; i++)
-        free(cp->tex_ents[i].px);
-    free(cp->tex_ents);
     free(cp->styles);
     for (i = 0; i < cp->ly_count; i++)
         layer_free(&cp->ly[i]);
@@ -1056,6 +1070,17 @@ scene_store *scene_compositor_layer_store(scene_compositor *cp, int layer)
 {
     if (!cp || layer <= 0 || (uint32_t)layer >= cp->ly_count) return NULL;
     return cp->ly[layer].store;
+}
+
+scene_server *scene_compositor_layer_server(scene_compositor *cp, int layer)
+{
+    if (!cp || layer <= 0 || (uint32_t)layer >= cp->ly_count) return NULL;
+    return cp->ly[layer].sv;
+}
+
+int scene_compositor_layer_count(scene_compositor *cp)
+{
+    return cp ? (int)cp->ly_count : 0;
 }
 
 int scene_compositor_add_session(scene_compositor *cp, scene_server *sv)
@@ -1101,6 +1126,50 @@ int scene_compositor_focus_is_shell(scene_compositor *cp)
     return cp ? (cp->focus_layer == 0) : 1;
 }
 
+int scene_compositor_key_grab(scene_compositor *cp, uint32_t key_code,
+                              uint8_t mods)
+{
+    uint32_t i, free_slot = SCENE_COMPOSITOR_KEY_GRABS;
+
+    if (!cp) return -1;
+    for (i = 0; i < SCENE_COMPOSITOR_KEY_GRABS; i++) {
+        if (cp->grabs[i].used && cp->grabs[i].key_code == key_code) {
+            cp->grabs[i].mods = mods;   /* re-register refreshes mods */
+            return 0;
+        }
+        if (!cp->grabs[i].used && free_slot == SCENE_COMPOSITOR_KEY_GRABS)
+            free_slot = i;
+    }
+    if (free_slot == SCENE_COMPOSITOR_KEY_GRABS) return -1;  /* table full */
+    cp->grabs[free_slot].key_code = key_code;
+    cp->grabs[free_slot].mods = mods;
+    cp->grabs[free_slot].used = 1;
+    return 0;
+}
+
+int scene_compositor_ungrab(scene_compositor *cp, uint32_t key_code,
+                            uint8_t mods)
+{
+    uint32_t i;
+
+    if (!cp) return -1;
+    for (i = 0; i < SCENE_COMPOSITOR_KEY_GRABS; i++) {
+        if (cp->grabs[i].used && cp->grabs[i].key_code == key_code
+            && cp->grabs[i].mods == mods) {
+            cp->grabs[i].used = 0;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+int scene_compositor_set_focus_layer(scene_compositor *cp, int layer)
+{
+    if (!cp || layer < 0 || (uint32_t)layer >= cp->ly_count) return -1;
+    cp->focus_layer = (uint32_t)layer;
+    return 0;
+}
+
 void scene_compositor_resize(scene_compositor *cp, uint32_t w, uint32_t h)
 {
     if (!cp) return;
@@ -1118,41 +1187,39 @@ void scene_compositor_set_clear(scene_compositor *cp, uint32_t color)
     cp->force = 1;
 }
 
-int scene_compositor_register_texture(scene_compositor *cp,
-                                      scene_texture_ref ref,
-                                      uint32_t w, uint32_t h, uint16_t fmt,
-                                      uint8_t opaque, const uint32_t *pixels)
+static int register_tex_at(scene_compositor *cp, scene_layer *ly,
+                           scene_texture_ref ref, uint32_t w, uint32_t h,
+                           uint16_t fmt, uint8_t opaque,
+                           const uint32_t *pixels)
 {
     scene_tex_ent *te;
-    uint32_t n, i, li;
+    uint32_t n, i;
 
-    if (!cp || !pixels || w == 0 || h == 0) return -1;
-    if (fmt != SCENE_TEX_FMT_XRGB && fmt != SCENE_TEX_FMT_ARGB) return -1;
     n = (uint64_t)w * h > SIZE_MAX / sizeof(uint32_t) ? 0 : w * h;
     if (n == 0) return -1;
 
-    te = tex_find(cp, ref);
+    te = tex_find(ly, ref);
     if (!te) {
-        if (cp->tex_cap == 0) {
-            cp->tex_cap = 8u;
-            cp->tex_ents = calloc(cp->tex_cap, sizeof(*cp->tex_ents));
-            if (!cp->tex_ents) return -1;
-            te = &cp->tex_ents[0];
+        if (ly->tex_cap == 0) {
+            ly->tex_cap = 8u;
+            ly->tex_ents = calloc(ly->tex_cap, sizeof(*ly->tex_ents));
+            if (!ly->tex_ents) return -1;
+            te = &ly->tex_ents[0];
         } else {
-            uint32_t cap = cp->tex_cap;
+            uint32_t cap = ly->tex_cap;
             scene_tex_ent *ne;
 
-            for (i = 0; i < cp->tex_cap; i++)
-                if (!cp->tex_ents[i].used) break;
-            if (i == cp->tex_cap) {
-                ne = realloc(cp->tex_ents, cap * 2u * sizeof(*cp->tex_ents));
+            for (i = 0; i < ly->tex_cap; i++)
+                if (!ly->tex_ents[i].used) break;
+            if (i == ly->tex_cap) {
+                ne = realloc(ly->tex_ents, cap * 2u * sizeof(*ly->tex_ents));
                 if (!ne) return -1;
-                cp->tex_ents = ne;
-                memset(&cp->tex_ents[cap], 0, cap * sizeof(*cp->tex_ents));
-                cp->tex_cap = cap * 2u;
-                te = &cp->tex_ents[cp->tex_cap - 1u];
+                ly->tex_ents = ne;
+                memset(&ly->tex_ents[cap], 0, cap * sizeof(*ly->tex_ents));
+                ly->tex_cap = cap * 2u;
+                te = &ly->tex_ents[ly->tex_cap - 1u];
             } else {
-                te = &cp->tex_ents[i];
+                te = &ly->tex_ents[i];
             }
         }
     }
@@ -1173,51 +1240,87 @@ int scene_compositor_register_texture(scene_compositor *cp,
     te->opaque = opaque;
     te->used = 1;
     if (!te->store_registered) {
-        if (scene_store_register_texture(cp->ly[0].store, ref, w, h, fmt,
-                                         opaque) != 0)
-            return -1;
+        /* Idempotent vs an earlier explicit seed of the same session
+         * store (the ISO grabs: cb_session_added pre-seeds the ref so
+         * a child's first SET_TEXTURE can never race the importer).   */
+        if (!scene_store_texture_registered(ly->store, ref)) {
+            if (scene_store_register_texture(ly->store, ref, w, h, fmt,
+                                             opaque) != 0)
+                return -1;
+        }
         te->store_registered = 1;
     }
 
     /* New pixels may change what the scene shows: dirty referencing
-     * model entries in every layer (server-owned texture update).       */
-    for (li = 0; li < cp->ly_count; li++) {
-        scene_layer *ly = &cp->ly[li];
-        for (i = 0; i < ly->map_cap; i++) {
-            scene_rnode *rn = &ly->map[i];
-            if (rn->used && rn->tex == ref
-                && (rn->flags & SCENE_FLAG_VISIBLE)
-                && rn->rect[2] > 0 && rn->rect[3] > 0)
-                pending_rect(cp, rn->rect);
-        }
+     * model entries in the OWNING layer (server-owned texture update).
+     * Other layers never share this ref — refs are per-session.        */
+    for (i = 0; i < ly->map_cap; i++) {
+        scene_rnode *rn = &ly->map[i];
+        if (rn->used && rn->tex == ref
+            && (rn->flags & SCENE_FLAG_VISIBLE)
+            && rn->rect[2] > 0 && rn->rect[3] > 0)
+            pending_rect(cp, rn->rect);
     }
     return 0;
+}
+
+int scene_compositor_register_texture_layer(scene_compositor *cp, int layer,
+                                            scene_texture_ref ref,
+                                            uint32_t w, uint32_t h,
+                                            uint16_t fmt, uint8_t opaque,
+                                            const uint32_t *pixels)
+{
+    if (!cp || !pixels || w == 0 || h == 0) return -1;
+    if (fmt != SCENE_TEX_FMT_XRGB && fmt != SCENE_TEX_FMT_ARGB) return -1;
+    if (layer < 0 || (uint32_t)layer >= cp->ly_count) return -1;
+    return register_tex_at(cp, &cp->ly[layer], ref, w, h, fmt, opaque,
+                           pixels);
+}
+
+int scene_compositor_register_texture(scene_compositor *cp,
+                                      scene_texture_ref ref,
+                                      uint32_t w, uint32_t h, uint16_t fmt,
+                                      uint8_t opaque, const uint32_t *pixels)
+{
+    if (!cp || !pixels || w == 0 || h == 0) return -1;
+    return register_tex_at(cp, &cp->ly[0], ref, w, h, fmt, opaque, pixels);
+}
+
+static int release_tex_at(scene_compositor *cp, scene_layer *ly,
+                          scene_texture_ref ref)
+{
+    scene_tex_ent *te;
+    uint32_t i;
+
+    te = tex_find(ly, ref);
+    if (!te) return -1;
+    for (i = 0; i < ly->map_cap; i++) {
+        scene_rnode *rn = &ly->map[i];
+        if (rn->used && rn->tex == ref
+            && (rn->flags & SCENE_FLAG_VISIBLE)
+            && rn->rect[2] > 0 && rn->rect[3] > 0)
+            pending_rect(cp, rn->rect);
+    }
+    if (te->store_registered)
+        scene_store_release_texture(ly->store, ref);
+    free(te->px);
+    memset(te, 0, sizeof(*te));
+    return 0;
+}
+
+int scene_compositor_release_texture_layer(scene_compositor *cp, int layer,
+                                           scene_texture_ref ref)
+{
+    if (!cp) return -1;
+    if (layer < 0 || (uint32_t)layer >= cp->ly_count) return -1;
+    return release_tex_at(cp, &cp->ly[layer], ref);
 }
 
 int scene_compositor_release_texture(scene_compositor *cp,
                                      scene_texture_ref ref)
 {
-    scene_tex_ent *te;
-    uint32_t i, li;
-
     if (!cp) return -1;
-    te = tex_find(cp, ref);
-    if (!te) return -1;
-    for (li = 0; li < cp->ly_count; li++) {
-        scene_layer *ly = &cp->ly[li];
-        for (i = 0; i < ly->map_cap; i++) {
-            scene_rnode *rn = &ly->map[i];
-            if (rn->used && rn->tex == ref
-                && (rn->flags & SCENE_FLAG_VISIBLE)
-                && rn->rect[2] > 0 && rn->rect[3] > 0)
-                pending_rect(cp, rn->rect);
-        }
-    }
-    if (te->store_registered)
-        scene_store_release_texture(cp->ly[0].store, ref);
-    free(te->px);
-    memset(te, 0, sizeof(*te));
-    return 0;
+    return release_tex_at(cp, &cp->ly[0], ref);
 }
 
 void scene_compositor_set_style_count(scene_compositor *cp, uint32_t n)
@@ -1290,8 +1393,23 @@ int scene_compositor_input_key(scene_compositor *cp, uint32_t key_code,
                                uint8_t state, uint8_t modifiers)
 {
     scene_layer *ly;
+    uint32_t i;
 
     if (!cp) return -1;
+    /* OS-level grabs: a grabbed chord routes to the shell session
+     * (layer 0) no matter where keyboard focus sits — e.g. Super+S
+     * opens the search overlay while an app has focus. Matching is
+     * exact on (key_code, modifiers). */
+    for (i = 0; i < SCENE_COMPOSITOR_KEY_GRABS; i++) {
+        if (cp->grabs[i].used && cp->grabs[i].key_code == key_code
+            && cp->grabs[i].mods == modifiers) {
+            ly = &cp->ly[0];
+            if (!ly->dead && !scene_server_dead(ly->sv))
+                return scene_server_input_key(ly->sv, key_code, state,
+                                              modifiers);
+            return 0;
+        }
+    }
     ly = &cp->ly[0];
     if (cp->focus_layer < cp->ly_count && !cp->ly[cp->focus_layer].dead
         && !scene_server_dead(cp->ly[cp->focus_layer].sv))

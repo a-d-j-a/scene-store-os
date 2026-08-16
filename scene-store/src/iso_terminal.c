@@ -36,7 +36,7 @@ static void msleep(unsigned m)
 #endif
 
 #define COLS 80
-#define ROWS 16
+#define ROWS 40
 #define WIN_X 60
 #define WIN_Y 40
 #define WIN_W (COLS * 8 + 8)
@@ -155,6 +155,7 @@ int main(int argc, char **argv)
     for (;;) {
         scene_app_pump(g_app);
         scene_terminal_pump(g_term);
+        scene_terminal_tick(g_term);
         render_screen();
         scene_app_flush(g_app);
         msleep(5);

@@ -100,7 +100,18 @@ enum {
     SCENE_OP_PING          = 0x0014,
     SCENE_OP_SET_INPUT_MODE = 0x0015,
     SCENE_OP_SEEK          = 0x0016,
+    SCENE_OP_IMPORT_TEXTURE = 0x0017,
 }; /* constants only; no storage */
+
+/* 0x0017 IMPORT_TEXTURE payload (after the leading seq u64):
+ *   texture_ref u32   — server-issued-style handle, chosen by the client
+ *   UTF-8 path        — file the OS-side importer must decode
+ * Semantics: a REQUEST (not a scene mutation). The host importer decodes
+ * the file at the OS seam (honest boundary: pixels never cross the wire)
+ * and registers the ref into THIS session's store + the compositor; a
+ * subsequent SET_TEXTURE referencing it validates only if the import
+ * succeeded. No reply record: failure surfaces at SET_TEXTURE time
+ * (SCENE_ERR_PROTOCOL "ref"). Not replayable, not scene-affecting.     */
 
 /* ---- Server -> client (section 5) ----------------------------------- */
 enum scene_srv_op {
@@ -116,7 +127,14 @@ enum scene_srv_op {
     SCENE_SRV_PRESENT_DONE   = 0x800A,
     SCENE_SRV_TEXT_INDEX     = 0x800B,
     SCENE_SRV_INPUT_KEY      = 0x800C,
+    SCENE_SRV_IMPORT_RESULT  = 0x800D,
 };
+
+/* 0x800D IMPORT_RESULT payload (no leading seq):
+ *   texture_ref u32 — the ref named in IMPORT_TEXTURE
+ *   ok u8           — 1 = decoded + registered; 0 = decode failed.
+ * Emitted exactly once per accepted IMPORT_TEXTURE (the host replies
+ * via scene_server_import_result; a failed cb receives ok=0).         */
 
 /* ---- Error codes (0x8002) -------------------------------------------- */
 enum scene_errno {
@@ -164,7 +182,7 @@ typedef struct scene_limits {
 
 #define SCENE_DEFAULT_NODES          UINT32_C(262144)
 #define SCENE_DEFAULT_TEXT_BYTES     (UINT32_C(1024) * UINT32_C(1024))
-#define SCENE_DEFAULT_TEXT_SLOTS     UINT32_C(16)
+#define SCENE_DEFAULT_TEXT_SLOTS     UINT32_C(48)
 #define SCENE_DEFAULT_RECORD_LENGTH  (UINT32_C(16) * UINT32_C(1024) * UINT32_C(1024))
 #define SCENE_DEFAULT_LATENCY_US     UINT64_C(16667)
 

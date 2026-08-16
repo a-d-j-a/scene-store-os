@@ -12,6 +12,7 @@
 #include "scene_client.h"
 #include "scene_server.h"
 #include "scene_transport.h"
+#include "scene_fb.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,6 +67,8 @@ struct harness {
     int foc_calls; uint64_t foc_seq[MAXE]; uint32_t foc_id[MAXE]; uint8_t foc_state[MAXE];
     int pd_calls; uint64_t pd_seq[MAXE], pd_token[MAXE], pd_lat[MAXE];
     int ti_calls; int ti_total; scene_text_hit ti[64];
+    int imp_calls; scene_texture_ref imp_ref; uint8_t imp_ok;
+    int imp_cb_calls; scene_texture_ref imp_cb_ref; char imp_cb_path[256];
     int closed_calls;
 };
 
@@ -205,6 +208,14 @@ static void cb_closed(void *ud)
     h->closed_calls++;
 }
 
+static void cb_import_result(void *ud, scene_texture_ref ref, uint8_t ok)
+{
+    struct harness *h = (struct harness *)ud;
+    h->imp_ref = ref;
+    h->imp_ok = ok;
+    h->imp_calls++;
+}
+
 static void cb_input_key(void *ud, uint64_t seq, uint32_t key_code,
                           uint8_t state, uint8_t modifiers)
 {
@@ -214,7 +225,7 @@ static void cb_input_key(void *ud, uint64_t seq, uint32_t key_code,
 static const scene_client_cbs g_cbs = {
     cb_welcome, cb_error, cb_snapshot, cb_search_result, cb_capture,
     cb_pong, cb_input_pointer, cb_input_activate, cb_input_focus,
-    cb_input_key, cb_present_done, cb_text_index, cb_closed
+    cb_input_key, cb_present_done, cb_text_index, cb_import_result, cb_closed
 };
 
 /* ---- harness plumbing --------------------------------------------------- */
@@ -788,6 +799,68 @@ static void test_wire_macro(void)
     printf("test_wire_macro: ok\n");
 }
 
+/* Host-side importer (the OS seam): decodes the file, registers the ref
+ * into the session store, then reports success. missing path = decode
+ * failure: returns nonzero, server replies IMPORT_RESULT ok=0. */
+static int imp_host_cb(void *ud, scene_server *sv, scene_texture_ref ref,
+                       const char *path)
+{
+    struct harness *h = (struct harness *)ud;
+    h->imp_cb_calls++;
+    h->imp_cb_ref = ref;
+    snprintf(h->imp_cb_path, sizeof(h->imp_cb_path), "%s", path);
+    if (strcmp(path, "/data/missing.bmp") == 0) return -1;
+    if (scene_store_register_texture(scene_server_store(sv), ref, 4, 2,
+                                     SCENE_TEX_FMT_XRGB, 1) != 0)
+        return -1;
+    return scene_server_import_result(sv, ref, 1);
+}
+
+static void test_wire_import_texture(void)
+{
+    struct harness h;
+    harness_init(&h);
+    scene_server_set_import_cb(h.sv, imp_host_cb, &h);
+    tick(&h);
+    static const scene_rect r_img = {10, 10, 40, 24};
+    op_ok(&h, scene_client_create_node(h.cl, SCENE_NO_PARENT, 100,
+                                       SCENE_ROLE_IMAGE, &r_img,
+                                       SCENE_FLAG_VISIBLE), "create 100");
+    op_ok(&h, scene_client_import_texture(h.cl, 77u, "/data/pic.bmp"),
+          "import 77");
+    tick(&h);
+    CHECK_EQ(h.imp_cb_calls, 1);       /* host saw the request */
+    CHECK_EQ(h.imp_cb_ref, 77u);
+    CHECK(strcmp(h.imp_cb_path, "/data/pic.bmp") == 0);
+    CHECK_EQ(h.imp_calls, 1);          /* ok=1 result echoed */
+    CHECK_EQ(h.imp_ref, 77u);
+    CHECK_EQ(h.imp_ok, 1);
+    /* the registered ref now validates SET_TEXTURE end-to-end */
+    static const scene_rect r_src = {0, 0, 4, 2};
+    op_ok(&h, scene_client_set_texture(h.cl, 100, 77u, &r_src, 0, 255),
+          "set texture 77");
+    tick(&h);
+    CHECK_EQ(h.err_called, 0);         /* accepted, no ERROR */
+    /* decode failure: ok=0 flows back, session stays alive */
+    op_ok(&h, scene_client_import_texture(h.cl, 78u, "/data/missing.bmp"),
+          "import 78");
+    tick(&h);
+    CHECK_EQ(h.imp_calls, 2);
+    CHECK_EQ(h.imp_ref, 78u);
+    CHECK_EQ(h.imp_ok, 0);
+    CHECK_EQ(h.err_called, 0);         /* not fatal */
+    /* a later SET_TEXTURE of the unregistered ref is rejected by the
+     * engine: ERROR + dead session (engine policy: op errors are fatal) */
+    op_ok(&h, scene_client_set_texture(h.cl, 100, 78u, &r_src, 0, 255),
+          "set texture 78");
+    tick(&h);
+    CHECK_EQ(h.err_called, 1);         /* engine rejected the unknown ref */
+    CHECK_EQ(h.err_code, SCENE_ERR_PROTOCOL);
+    CHECK_EQ(scene_server_dead(h.sv), 1);
+    harness_free(&h);
+    printf("test_wire_import_texture: ok\n");
+}
+
 #if defined(_WIN32)
 /* ---- TCP round trip (threaded listener) ---------------------------------- */
 
@@ -1009,6 +1082,7 @@ int main(void)
     test_wire_fresh_session_rebuild();
     test_wire_replay();
     test_wire_macro();
+    test_wire_import_texture();
 #if defined(_WIN32)
     test_tcp_roundtrip();
     test_tcp_silent_server_flush();

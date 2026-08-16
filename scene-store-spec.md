@@ -161,7 +161,7 @@ per texture:      tex TextureRef, w u32, h u32, fmt u16, opaque u8
 ```
 max_nodes_per_session     u32   default 262144
 max_text_bytes_per_slot   u32   default 1 MiB
-max_text_slots_per_node   u32   default 16
+max_text_slots_per_node   u32   default 48
 max_record_length         u32   default 16 MiB
 input_latency_budget_us   u64   default 16667 (one frame at 60 Hz)
 ```

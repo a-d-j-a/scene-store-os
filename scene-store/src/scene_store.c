@@ -1597,6 +1597,15 @@ int scene_store_fail(scene_store *s, uint16_t code, const char *msg)
     return 0;
 }
 
+int scene_store_emit_record(scene_store *s, uint16_t opcode,
+                            const uint8_t *payload, uint32_t plen)
+{
+    if (!s) return -1;
+    if (opcode < 0x8000 || opcode > 0x8FFF) return -1;
+    if (plen > s->lim.max_record_length) return -1;
+    return emit(s, opcode, payload, plen);
+}
+
 int scene_store_register_texture(scene_store *s, scene_texture_ref ref,
                                  uint32_t w, uint32_t h,
                                  uint16_t fmt, uint8_t opaque)
@@ -1630,6 +1639,15 @@ int scene_store_release_texture(scene_store *s, scene_texture_ref ref)
         return 0;
     }
     return -1;
+}
+
+int scene_store_texture_registered(const scene_store *s, scene_texture_ref ref)
+{
+    uint32_t i;
+    if (!s) return 0;
+    for (i = 0; i < s->tex_count; i++)
+        if (s->textures[i].ref == ref) return 1;
+    return 0;
 }
 
 void scene_store_set_style_count(scene_store *s, uint32_t n) { s->style_count = n; }
@@ -1806,7 +1824,8 @@ size_t scene_store_search(const scene_store *s, const char *term,
                 if (t->len < term_len) continue;
                 if (!ascii_ci_find(t->data, t->len, term, term_len)) continue;
                 if (hits < out_cap) out_nodes[hits] = nd->id;
-                if (out_texts && hits < *out_text_cap) out_texts[hits] = t->text_id;
+                if (out_texts && out_text_cap && hits < *out_text_cap)
+                    out_texts[hits] = t->text_id;
                 hits++;
             }
             c = s->nodes[c].first_child;
@@ -2018,6 +2037,18 @@ int scene_store_ingest(scene_store *s, uint16_t opcode,
         return 0;
     }
 
+    case SCENE_OP_IMPORT_TEXTURE: {
+        /* Host-side request (OS importer decodes the file; the engine's
+         * only duty is strict length validation + seq advancement). The
+         * ref becomes valid for SET_TEXTURE only after the host calls
+         * scene_store_register_texture on this session's store.       */
+        if (plen < 16) return fatal_error(s, SCENE_ERR_PROTOCOL, "imp len");
+        uint32_t tlen = scene_get_u32(payload + 12);
+        if (plen != 16 + tlen)
+            return fatal_error(s, SCENE_ERR_PROTOCOL, "imp path");
+        return 0;
+    }
+
     case SCENE_OP_SNAPSHOT: {
         if (plen != 12) return fatal_error(s, SCENE_ERR_PROTOCOL, "snap len");
         uint32_t req_id = scene_get_u32(payload + 8);
@@ -2142,6 +2173,96 @@ int scene_store_ingest(scene_store *s, uint16_t opcode,
     default:
         return fatal_error(s, SCENE_ERR_PROTOCOL, "unknown opcode");
     }
+}
+
+/* ---- host-side WM service ---------------------------------------------- */
+
+/* Apply one host mutation through the engine's own commit path: the
+ * mutation hits the live arena via apply_op (same op handlers as wire
+ * records), then the committed seq advances so the compositor's per-layer
+ * diff fires. The peer's stream counter is NOT consumed (no wire bytes;
+ * the fabricated seq in the payload is an audit tag only, never compared
+ * against s->next_seq). The op log is intentionally left untouched:
+ * replay/seek reconstructs the client's own committed input history, and
+ * host WM interventions are OS actions outside that history. */
+static int host_mutate(scene_store *s, uint16_t opcode,
+                       const uint8_t *payload, uint32_t plen)
+{
+    if (!s || s->dead) return -1;
+    if (s->mode == SCENE_MODE_REPLAY) return -1;
+    apply_ctx a;
+    a.s = s;
+    a.arena = s->nodes;
+    a.arena_back = &s->nodes;
+    a.idm = &s->by_id;
+    a.count = &s->node_count;
+    a.cap = &s->node_cap;
+    a.free_head = &s->node_free;
+    a.focus = &s->focus;
+    a.texes = s->textures;
+    a.tex_count = s->tex_count;
+    a.events = 0;      /* host interventions: no wire bytes to the peer */
+    a.replay = 0;
+    uint16_t fe = 0;
+    int r = apply_op(&a, opcode, payload, plen, &fe);
+    if (r == 1) return -1;   /* user error (unknown/stale node, etc.) */
+    if (r < 0) return -1;    /* internal failure                       */
+    s->scene_seq++;          /* one committed seq, no wire seq consumed */
+    return 0;
+}
+
+int scene_store_host_focus(scene_store *s, scene_node_id id)
+{
+    if (!s || s->dead) return -1;
+    if (s->mode == SCENE_MODE_REPLAY) return -1;
+    uint32_t slot = idmap_get(&s->by_id, id);
+    if (!slot) return -1;
+    node *n = &s->nodes[slot];
+    if (n->stale) return -1;      /* ghost-crashed node: no-op would skip */
+    if (scene_store_focus(s) == id) return 0;   /* already the focus */
+    uint8_t p[12];
+    scene_put_u64(p, s->scene_seq);   /* audit tag; not a wire seq */
+    scene_put_u32(p + 8, id);
+    return host_mutate(s, SCENE_OP_FOCUS, p, sizeof(p));
+}
+
+int scene_store_host_set_visible(scene_store *s, scene_node_id id, int on)
+{
+    if (!s || s->dead) return -1;
+    if (s->mode == SCENE_MODE_REPLAY) return -1;
+    uint32_t slot = idmap_get(&s->by_id, id);
+    if (!slot) return -1;
+    node *n = &s->nodes[slot];
+    if (n->stale) return -1;
+    uint8_t want = on ? 1 : 0;
+    if (((n->flags & SCENE_FLAG_VISIBLE) != 0) == want) return 0;
+    uint8_t p[13];
+    scene_put_u64(p, s->scene_seq);   /* audit tag; not a wire seq */
+    scene_put_u32(p + 8, id);
+    p[12] = (uint8_t)(want ? (n->flags | SCENE_FLAG_VISIBLE)
+                           : (n->flags & ~SCENE_FLAG_VISIBLE));
+    return host_mutate(s, SCENE_OP_SET_FLAGS, p, sizeof(p));
+}
+
+int scene_store_host_set_rect(scene_store *s, scene_node_id id,
+                              int32_t x, int32_t y, int32_t w, int32_t h)
+{
+    if (!s || s->dead) return -1;
+    if (s->mode == SCENE_MODE_REPLAY) return -1;
+    uint32_t slot = idmap_get(&s->by_id, id);
+    if (!slot) return -1;
+    node *n = &s->nodes[slot];
+    if (n->stale) return -1;
+    if (n->rect[0] == x && n->rect[1] == y &&
+        n->rect[2] == w && n->rect[3] == h) return 0;   /* no change */
+    uint8_t p[28];
+    scene_put_u64(p, s->scene_seq);   /* audit tag; not a wire seq */
+    scene_put_u32(p + 8, id);
+    scene_put_i32(p + 12, x);
+    scene_put_i32(p + 16, y);
+    scene_put_i32(p + 20, w);
+    scene_put_i32(p + 24, h);
+    return host_mutate(s, SCENE_OP_SET_RECT, p, sizeof(p));
 }
 
 /* ---- internal-consumer mode transitions -------------------------------- */

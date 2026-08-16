@@ -14,7 +14,7 @@ else
   SOCKLIB =
 endif
 
-all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE) build/iso_demo$(EXE) build/test_video_app$(EXE) build/iso_video$(EXE)
+all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE) build/iso_demo$(EXE) build/test_video_app$(EXE) build/iso_video$(EXE) build/test_app_wm$(EXE) build/test_hostwm$(EXE) build/test_shellwm$(EXE) build/iso_play$(EXE) build/test_play_app$(EXE) build/iso_files$(EXE) build/test_files_app$(EXE) build/iso_photo$(EXE) build/test_photo_app$(EXE) build/test_searchoverlay$(EXE) build/iso_edit$(EXE) build/test_edit_app$(EXE)
 
 build:
 	mkdir -p build
@@ -199,6 +199,126 @@ build/test_video_app$(EXE): tests/test_video_app.c build/scene_fmt.o \
 		build/scene_font_data.o build/scene_compositor.o \
 		$(SOCKLIB) -o $@
 
+# App-side WM suite (titlebar drag move + edge/corner resize)
+build/test_app_wm$(EXE): tests/test_app_wm.c build/scene_fmt.o \
+	build/scene_store.o build/scene_transport.o build/scene_client.o \
+	build/scene_server.o build/scene_fb.o build/scene_font.o \
+	build/scene_font_data.o build/scene_compositor.o build/scene_app.o | build
+	$(CC) $(CFLAGS) tests/test_app_wm.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_server.o build/scene_fb.o build/scene_font.o \
+		build/scene_font_data.o build/scene_compositor.o build/scene_app.o \
+		$(SOCKLIB) -o $@
+
+# Host-side WM service suite (engine host APIs, no wire bytes)
+build/test_hostwm$(EXE): tests/test_hostwm.c build/scene_fmt.o \
+	build/scene_store.o | build
+	$(CC) $(CFLAGS) tests/test_hostwm.c build/scene_fmt.o \
+		build/scene_store.o -o $@
+
+# Shell WM + network tray suite (taskbar over app layers)
+build/test_shellwm$(EXE): tests/test_shellwm.c build/scene_fmt.o \
+	build/scene_store.o build/scene_transport.o build/scene_client.o \
+	build/scene_server.o build/scene_fb.o build/scene_font.o \
+	build/scene_font_data.o build/scene_compositor.o build/scene_a11y.o \
+	build/scene_shell.o build/scene_wallpaper.o build/scene_image.o | build
+	$(CC) $(CFLAGS) tests/test_shellwm.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_server.o build/scene_fb.o build/scene_font.o \
+		build/scene_font_data.o build/scene_compositor.o build/scene_a11y.o \
+		build/scene_shell.o build/scene_wallpaper.o build/scene_image.o \
+		$(SOCKLIB) -o $@
+
+# First-party audio player guest app (raw ALSA PCM UAPI on the ISO;
+# _WIN32 guards compile a null sink on Windows for the test suite).
+# -lm: the SYN generator uses sin()/fabs() (musl keeps libm separate).
+build/iso_play$(EXE): src/iso_play.c build/scene_fmt.o \
+	build/scene_transport.o build/scene_client.o build/scene_app.o | build
+	$(CC) $(CFLAGS) src/iso_play.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_app.o $(SOCKLIB) -lm -o $@
+
+build/test_play_app$(EXE): tests/test_play_app.c build/scene_fmt.o \
+	build/scene_store.o build/scene_transport.o build/scene_client.o \
+	build/scene_server.o build/scene_fb.o build/scene_font.o \
+	build/scene_font_data.o build/scene_compositor.o build/scene_app.o \
+	build/scene_launcher.o build/scene_a11y.o build/scene_shell.o \
+	build/scene_wallpaper.o build/scene_image.o | build
+	$(CC) $(CFLAGS) tests/test_play_app.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_server.o build/scene_fb.o build/scene_font.o \
+		build/scene_font_data.o build/scene_compositor.o build/scene_app.o \
+	build/scene_launcher.o build/scene_a11y.o build/scene_shell.o \
+	build/scene_wallpaper.o build/scene_image.o \
+	$(SOCKLIB) -o $@
+
+# First-party file browser guest app (POSIX dirent/stat; ships on the ISO)
+build/iso_files$(EXE): src/iso_files.c build/scene_fmt.o \
+	build/scene_transport.o build/scene_client.o build/scene_app.o | build
+	$(CC) $(CFLAGS) src/iso_files.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_app.o $(SOCKLIB) -o $@
+
+# First-party text editor guest app (open-with target for text files)
+build/iso_edit$(EXE): src/iso_edit.c build/scene_fmt.o \
+	build/scene_transport.o build/scene_client.o build/scene_app.o | build
+	$(CC) $(CFLAGS) src/iso_edit.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_app.o $(SOCKLIB) -o $@
+
+# Editor proof: real iso_edit.exe child over real TCP
+build/test_edit_app$(EXE): tests/test_edit_app.c build/scene_fmt.o \
+	build/scene_store.o build/scene_transport.o build/scene_client.o \
+	build/scene_server.o build/scene_fb.o build/scene_font.o \
+	build/scene_font_data.o build/scene_compositor.o | build
+	$(CC) $(CFLAGS) tests/test_edit_app.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_server.o build/scene_fb.o build/scene_font.o \
+		build/scene_font_data.o build/scene_compositor.o \
+		$(SOCKLIB) -o $@
+
+# File browser proof: real child over real TCP against a deterministic fixture
+build/test_files_app$(EXE): tests/test_files_app.c build/scene_fmt.o \
+	build/scene_store.o build/scene_transport.o build/scene_client.o \
+	build/scene_server.o build/scene_fb.o build/scene_font.o \
+	build/scene_font_data.o build/scene_compositor.o build/scene_image.o | build
+	$(CC) $(CFLAGS) tests/test_files_app.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_server.o build/scene_fb.o build/scene_font.o \
+		build/scene_font_data.o build/scene_compositor.o build/scene_image.o \
+		$(SOCKLIB) -o $@
+
+# First-party photo viewer guest app (texture seam: refs on the wire only)
+build/iso_photo$(EXE): src/iso_photo.c build/scene_fmt.o \
+	build/scene_transport.o build/scene_client.o build/scene_app.o | build
+	$(CC) $(CFLAGS) src/iso_photo.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_app.o $(SOCKLIB) -o $@
+
+# Photo proof: harness plays the OS importer (decodes fixture BMP, seeds ref 2)
+build/test_photo_app$(EXE): tests/test_photo_app.c build/scene_fmt.o \
+	build/scene_store.o build/scene_transport.o build/scene_client.o \
+	build/scene_server.o build/scene_fb.o build/scene_font.o \
+	build/scene_font_data.o build/scene_compositor.o build/scene_image.o | build
+	$(CC) $(CFLAGS) tests/test_photo_app.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_server.o build/scene_fb.o build/scene_font.o \
+		build/scene_font_data.o build/scene_compositor.o build/scene_image.o \
+		$(SOCKLIB) -o $@
+
+# Cross-app search overlay (Super+S) suite — the OS-layer flagship consumer
+build/test_searchoverlay$(EXE): tests/test_searchoverlay.c build/scene_fmt.o \
+	build/scene_store.o build/scene_transport.o build/scene_client.o \
+	build/scene_server.o build/scene_fb.o build/scene_font.o \
+	build/scene_font_data.o build/scene_compositor.o build/scene_a11y.o \
+	build/scene_shell.o build/scene_wallpaper.o build/scene_image.o | build
+	$(CC) $(CFLAGS) tests/test_searchoverlay.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_server.o build/scene_fb.o build/scene_font.o \
+		build/scene_font_data.o build/scene_compositor.o build/scene_a11y.o \
+		build/scene_shell.o build/scene_wallpaper.o build/scene_image.o \
+		$(SOCKLIB) -o $@
+
 build/test_settings$(EXE): tests/test_settings.c build/scene_fmt.o build/scene_store.o \
 	build/scene_transport.o build/scene_client.o build/scene_server.o \
 	build/scene_fb.o build/scene_font.o build/scene_font_data.o \
@@ -306,6 +426,27 @@ test-wallpaper: build/test_wallpaper$(EXE)
 test-video: build/test_video_app$(EXE) build/iso_video$(EXE)
 	./build/test_video_app$(EXE)
 
+test-appwm: build/test_app_wm$(EXE)
+	./build/test_app_wm$(EXE)
+
+test-hostwm: build/test_hostwm$(EXE)
+	./build/test_hostwm$(EXE)
+
+test-shellwm: build/test_shellwm$(EXE)
+	./build/test_shellwm$(EXE)
+
+test-play: build/test_play_app$(EXE) build/iso_play$(EXE)
+	./build/test_play_app$(EXE)
+
+test-files: build/test_files_app$(EXE) build/iso_files$(EXE)
+	./build/test_files_app$(EXE)
+
+test-photo: build/test_photo_app$(EXE) build/iso_photo$(EXE)
+	./build/test_photo_app$(EXE)
+
+test-searchoverlay: build/test_searchoverlay$(EXE)
+	./build/test_searchoverlay$(EXE)
+
 bench: build/bench$(EXE)
 	./build/bench$(EXE)
 
@@ -368,4 +509,4 @@ endif
 clean:
 	rm -rf build
 
-.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-sessions test-launcher test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm iso-terminal test-video clean
+.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-sessions test-launcher test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm iso-terminal test-video test-appwm test-hostwm test-shellwm test-play clean

@@ -62,4 +62,20 @@ int  scene_server_dead(const scene_server *sv);
 /* The wrapped store (tests, compositor consumers).                     */
 scene_store *scene_server_store(scene_server *sv);
 
+/* 0x0017 IMPORT_TEXTURE host hook. `path` is the exact payload bytes
+ * (NUL-terminated copy; NULs cannot appear in the payload). The host
+ * decodes the file at the OS seam (scene_image / real codecs) and, on
+ * success, registers the ref into THIS session's store
+ * (scene_store_register_texture) and the compositor's registry for the
+ * session's layer. Return 0 on success; nonzero = failed (no ref made
+ * valid; the client's SET_TEXTURE will then fail with ref unknown).     */
+typedef int (*scene_import_fn)(void *ud, scene_server *sv,
+                               scene_texture_ref ref, const char *path);
+void scene_server_set_import_cb(scene_server *sv, scene_import_fn fn,
+                                void *ud);
+
+/* Emit 0x800D IMPORT_RESULT for the given ref (host-side success path). */
+int scene_server_import_result(scene_server *sv, scene_texture_ref ref,
+                               uint8_t ok);
+
 #endif /* SCENE_SERVER_H */

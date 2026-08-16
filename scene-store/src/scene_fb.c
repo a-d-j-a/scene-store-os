@@ -331,6 +331,7 @@ void scene_fb_blit(scene_fb *fb, int32_t dx, int32_t dy,
 {
     int64_t sx0, sx1, sy0, sy1;
     int64_t ddx0, ddx1, ddy0, ddy1;
+    int64_t dox, doy;
     uint32_t y;
 
     if (!fb || !fb->px || !src || !src_rc) return;
@@ -349,9 +350,11 @@ void scene_fb_blit(scene_fb *fb, int32_t dx, int32_t dy,
     if (sx0 >= sx1 || sy0 >= sy1) return;
 
     /* Destination rect is the clamped source region, translated.       */
-    ddx0 = (int64_t)dx + sx0 - src_rc->x;
+    dox = (int64_t)dx + sx0 - src_rc->x;   /* TRUE dest origin: the      */
+    doy = (int64_t)dy + sy0 - src_rc->y;   /* source mapping anchors     */
+    ddx0 = dox;                            /* here, NOT at the clip edge */
     ddx1 = (int64_t)dx + sx1 - src_rc->x;
-    ddy0 = (int64_t)dy + sy0 - src_rc->y;
+    ddy0 = doy;
     ddy1 = (int64_t)dy + sy1 - src_rc->y;
 
     /* Clip destination to fb bounds, then to the caller's clip.        */
@@ -371,17 +374,17 @@ void scene_fb_blit(scene_fb *fb, int32_t dx, int32_t dy,
         /* Opaque src: out = (src_c*op + dst_c*(255-op)) / 255, A = 255. */
         for (y = (uint32_t)ddy0; y < (uint32_t)ddy1; y++) {
             const uint32_t *srow =
-                src + (size_t)((int64_t)sy0 + y - ddy0) * src_w;
+                src + (size_t)((int64_t)sy0 + y - doy) * src_w;
             uint32_t *drow = fb->px + (size_t)y * fb->pitch;
             uint32_t x;
             if (opacity == 255) {
                 for (x = (uint32_t)ddx0; x < (uint32_t)ddx1; x++)
-                    drow[x] = (srow[(size_t)((int64_t)sx0 + x - ddx0)]
+                    drow[x] = (srow[(size_t)((int64_t)sx0 + x - dox)]
                                & UINT32_C(0x00FFFFFF)) | UINT32_C(0xFF000000);
             } else {
                 uint32_t inv = 255u - opacity;
                 for (x = (uint32_t)ddx0; x < (uint32_t)ddx1; x++) {
-                    uint32_t sc = srow[(size_t)((int64_t)sx0 + x - ddx0)];
+                    uint32_t sc = srow[(size_t)((int64_t)sx0 + x - dox)];
                     uint32_t dc = drow[x];
                     uint32_t a, r, g, b;
                     a = UINT32_C(0xFF000000);
@@ -400,11 +403,11 @@ void scene_fb_blit(scene_fb *fb, int32_t dx, int32_t dy,
          * out_c = (src_c*op)/255 + (dst_c*(255-t))/255, per channel.    */
         for (y = (uint32_t)ddy0; y < (uint32_t)ddy1; y++) {
             const uint32_t *srow =
-                src + (size_t)((int64_t)sy0 + y - ddy0) * src_w;
+                src + (size_t)((int64_t)sy0 + y - doy) * src_w;
             uint32_t *drow = fb->px + (size_t)y * fb->pitch;
             uint32_t x;
             for (x = (uint32_t)ddx0; x < (uint32_t)ddx1; x++) {
-                uint32_t sc = srow[(size_t)((int64_t)sx0 + x - ddx0)];
+                uint32_t sc = srow[(size_t)((int64_t)sx0 + x - dox)];
                 uint32_t dc = drow[x];
                 uint32_t t = ((sc >> 24) & 0xFFu) * opacity / 255u;
                 uint32_t invt = 255u - t;

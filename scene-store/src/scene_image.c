@@ -1,14 +1,24 @@
 /*
- * scene_image.c — image file loader (BMP, TGA).
+ * scene_image.c — image file loader (BMP, TGA in-house; PNG, JPEG, GIF
+ * via vendored stb_image at the OS seam).
  *
  * BMP: 24-bit or 32-bit uncompressed, bottom-up or top-down.
  * TGA: 24-bit or 32-bit, uncompressed or RLE, top-left or bottom-left.
+ * PNG/JPEG/GIF: stb_image v2.30 (third_party/stb — see its LICENSE.md
+ * for the written adoption justification). stb runs ONLY host-side,
+ * never on the wire, never in an app process.
  */
 #include "scene_image.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+
+/* Real-media seam: PNG/JPEG/GIF decoding (zlib, DCT/huffman, LZW) is a
+ * codec boundary per the apps policy; stb is the vendor, vendored
+ * verbatim and used only here.                                             */
+#define STB_IMAGE_IMPLEMENTATION
+#include "../third_party/stb/stb_image.h"
 
 static char err_buf[256];
 
@@ -20,6 +30,52 @@ const char *scene_image_error(void)
 void scene_image_free(uint32_t *pixels)
 {
     free(pixels);
+}
+
+/* ---- STB loader (PNG / JPEG / GIF) -------------------------------------- */
+
+/* stb returns straight RGBA; the compositor's ARGB contract is
+ * premultiplied, so premultiply here (opaque pixels are unaffected).   */
+static int load_stb(const char *path, int *out_w, int *out_h,
+                    uint32_t **out_px)
+{
+    int w = 0, h = 0, ch = 0;
+    stbi_uc *rgba = stbi_load(path, &w, &h, &ch, 4);
+    if (!rgba) {
+        const char *r = stbi_failure_reason();
+        snprintf(err_buf, sizeof(err_buf), "stb: %s",
+                 r ? r : "decode failed");
+        return -1;
+    }
+    if (w <= 0 || h <= 0) {
+        stbi_image_free(rgba);
+        snprintf(err_buf, sizeof(err_buf), "stb: invalid dimensions");
+        return -1;
+    }
+    uint64_t n = (uint64_t)w * h;
+    uint32_t *px = NULL;
+    if (n != 0) px = (uint32_t *)malloc((size_t)n * sizeof(uint32_t));
+    if (!px) {
+        stbi_image_free(rgba);
+        snprintf(err_buf, sizeof(err_buf), "stb: out of memory");
+        return -1;
+    }
+    size_t i;
+    for (i = 0; i < (size_t)n; i++) {
+        uint32_t r = rgba[4 * i + 0];
+        uint32_t g = rgba[4 * i + 1];
+        uint32_t b = rgba[4 * i + 2];
+        uint32_t a = rgba[4 * i + 3];
+        px[i] = (a << 24)
+              | (((r * a / 255u) & 0xFFu) << 16)
+              | (((g * a / 255u) & 0xFFu) << 8)
+              | ((b * a / 255u) & 0xFFu);
+    }
+    stbi_image_free(rgba);
+    *out_w = w;
+    *out_h = h;
+    *out_px = px;
+    return 0;
 }
 
 /* ---- BMP loader ------------------------------------------------------- */
@@ -234,23 +290,32 @@ int scene_image_load(const char *path, int *w, int *h, uint32_t **pixels)
     if (!path || !w || !h || !pixels) return -1;
     *w = 0; *h = 0; *pixels = NULL;
 
-    /* Detect by extension */
+    /* Detect by extension: in-house decoders keep BMP/TGA; the real
+     * media formats go to stb.                                            */
     size_t len = strlen(path);
     if (len >= 4 && strcasecmp(&path[len - 4], ".bmp") == 0)
         return load_bmp(path, w, h, pixels);
     if (len >= 4 && strcasecmp(&path[len - 4], ".tga") == 0)
         return load_tga(path, w, h, pixels);
+    if (len >= 4 && strcasecmp(&path[len - 4], ".png") == 0)
+        return load_stb(path, w, h, pixels);
+    if (len >= 4 && strcasecmp(&path[len - 4], ".jpg") == 0)
+        return load_stb(path, w, h, pixels);
+    if (len >= 5 && strcasecmp(&path[len - 5], ".jpeg") == 0)
+        return load_stb(path, w, h, pixels);
+    if (len >= 4 && strcasecmp(&path[len - 4], ".gif") == 0)
+        return load_stb(path, w, h, pixels);
 
-    /* Try BMP magic first, then TGA */
+    /* Extension-less: sniff magic. BMP stays in-house; anything stb
+     * recognizes (PNG/JPEG/GIF/TGA) goes to stb.                          */
     FILE *f = fopen(path, "rb");
     if (!f) { snprintf(err_buf, sizeof(err_buf), "cannot open %s", path); return -1; }
-    uint8_t magic[2];
-    int ok = (fread(magic, 1, 2, f) == 2);
+    uint8_t magic[8];
+    int got = (int)fread(magic, 1, 8, f);
     fclose(f);
-    if (!ok) { snprintf(err_buf, sizeof(err_buf), "cannot read %s", path); return -1; }
+    if (got < 2) { snprintf(err_buf, sizeof(err_buf), "cannot read %s", path); return -1; }
 
     if (magic[0] == 'B' && magic[1] == 'M')
         return load_bmp(path, w, h, pixels);
-    /* TGA has no reliable magic; try it */
-    return load_tga(path, w, h, pixels);
+    return load_stb(path, w, h, pixels);
 }

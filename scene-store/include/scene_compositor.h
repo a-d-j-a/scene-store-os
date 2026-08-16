@@ -96,20 +96,58 @@ int  scene_compositor_remove_session(scene_compositor *cp, scene_server *sv);
  * layer does not exist. The host uses this to run OS-side services on
  * app stores (e.g. the media importer registering texture refs).      */
 scene_store *scene_compositor_layer_store(scene_compositor *cp, int layer);
+/* The session server of a layer, or NULL. The host uses this to hook
+ * per-session services (e.g. scene_server_set_import_cb on join).     */
+scene_server *scene_compositor_layer_server(scene_compositor *cp,
+                                            int layer);
+/* Number of attached layers (>= 1; layer 0 = shell always present).      */
+int  scene_compositor_layer_count(scene_compositor *cp);
 /* 1 = keyboard focus is on the shell session (layer 0). The host uses
  * this to keep OS-level key grabs (shell hotkeys) away from apps.      */
 int  scene_compositor_focus_is_shell(scene_compositor *cp);
 
+/* OS-level key grabs: a grabbed (key_code, mods) chord routes to the
+ * shell session (layer 0) regardless of keyboard focus. The table is a
+ * small fixed array; grabs are registered once at shell build time, not
+ * per gesture. Matching is exact on (key_code, modifiers).             */
+#define SCENE_COMPOSITOR_KEY_GRABS 8u
+int scene_compositor_key_grab(scene_compositor *cp, uint32_t key_code,
+                              uint8_t mods);
+int scene_compositor_ungrab(scene_compositor *cp, uint32_t key_code,
+                            uint8_t mods);
+
+/* Set the keyboard-focus layer index (0 = shell). scene_compositor_
+ * input_key routes to it when no grab matches. This is how the search
+ * overlay keeps typing after it opens (the pointer hit-test may have
+ * left focus on an app layer). Returns 0 on success, -1 on an invalid
+ * layer index. */
+int  scene_compositor_set_focus_layer(scene_compositor *cp, int layer);
+
 void scene_compositor_resize(scene_compositor *cp, uint32_t w, uint32_t h);
 void scene_compositor_set_clear(scene_compositor *cp, uint32_t color);
 
-/* Texture pixels: w*h of premultiplied ARGB or XRGB per fmt.            */
+/* Texture pixels: w*h of premultiplied ARGB or XRGB per fmt. Refs are
+ * per-layer: each session's store owns its own ref space, so two app
+ * sessions may both use ref 1 without colliding in the compositor
+ * (the engine validates SET_TEXTURE against the session's own store).
+ * The layer-0 variants below are the shell/wallpaper path.           */
 int scene_compositor_register_texture(scene_compositor *cp,
                                       scene_texture_ref ref,
                                       uint32_t w, uint32_t h, uint16_t fmt,
                                       uint8_t opaque, const uint32_t *pixels);
 int scene_compositor_release_texture(scene_compositor *cp,
                                      scene_texture_ref ref);
+/* Layer-aware variants: register into the app session's layer (the
+ * media importer path; layer comes from a scene_launcher session_added
+ * callback). Registers the ref into the layer's store (validation)
+ * and the layer's pixel registry. */
+int scene_compositor_register_texture_layer(scene_compositor *cp, int layer,
+                                            scene_texture_ref ref,
+                                            uint32_t w, uint32_t h,
+                                            uint16_t fmt, uint8_t opaque,
+                                            const uint32_t *pixels);
+int scene_compositor_release_texture_layer(scene_compositor *cp, int layer,
+                                           scene_texture_ref ref);
 
 /* Server-owned style table; ref must be < style_count (set it first).   */
 void scene_compositor_set_style_count(scene_compositor *cp, uint32_t n);

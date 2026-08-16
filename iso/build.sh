@@ -367,13 +367,17 @@ build_scene_store() {
     # Force full rebuild: stale .o files from previous commits cause
     # subtle alpha/rendering bugs (seen live: 87% opacity on themed elements).
     rm -f build/*.o
-    make build/iso_drm build/iso_demo build/iso_terminal build/iso_video CC="$MUSL_GCC" \
+    make build/iso_drm build/iso_demo build/iso_terminal build/iso_video \
+        build/iso_photo build/iso_files build/iso_edit CC="$MUSL_GCC" \
         CFLAGS="-std=c11 -Wall -Wextra -O2 -Iinclude" || die "iso_drm build failed"
     mkdir -p "$SYSROOT/usr/bin"
     cp build/iso_drm "$SYSROOT/usr/bin/iso-drm"
     cp build/iso_demo "$SYSROOT/usr/bin/iso-demo"
     cp build/iso_terminal "$SYSROOT/usr/bin/iso-terminal"
     cp build/iso_video "$SYSROOT/usr/bin/iso-video"
+    cp build/iso_photo "$SYSROOT/usr/bin/iso-photo"
+    cp build/iso_files "$SYSROOT/usr/bin/iso-files"
+    cp build/iso_edit "$SYSROOT/usr/bin/iso-edit"
     cd -
     msg "scene-store done."
 }
@@ -489,7 +493,7 @@ menu_border=0xFF444466
 menu_item_color=0xFF2A2A4E
 menu_item_text=0xFFE8E8E8
 clock_12h=0
-launcher_apps=iso-terminal,iso-demo,iso-video
+launcher_apps=iso-terminal,iso-files,iso-demo,iso-video
 CONF
 
     # Package manager: official Alpine repositories + CA trust bundle

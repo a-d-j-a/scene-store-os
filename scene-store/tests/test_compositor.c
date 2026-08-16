@@ -132,7 +132,7 @@ static void cb_input_key(void *ud, uint64_t seq, uint32_t key_code,
 static const scene_client_cbs g_cbs = {
     cb_welcome, cb_error, NULL, NULL, NULL, NULL,
     cb_input_pointer, cb_input_activate, NULL, cb_input_key, cb_present_done, NULL,
-    cb_closed
+    NULL, cb_closed
 };
 
 /* ---- harness plumbing --------------------------------------------------- */

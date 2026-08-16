@@ -1,0 +1,21 @@
+--- a/iso/build.sh
++++ b/iso/build.sh
+@@ -207,4 +207,17 @@
+     scripts/config --enable SERIO_I8042
+ 
++    # Audio: ALSA PCM - SND/SND_TIMER/SND_PCM core, AC97 + Intel8x0
++    # for the QEMU -device AC97 test sound card, HD-audio (Realtek/
++    # generic/HDMI codecs) for real hardware. SND_MTPAV not needed.
++    scripts/config --enable SND
++    scripts/config --enable SND_TIMER
++    scripts/config --enable SND_PCM
++    scripts/config --enable SND_AC97_CODEC
++    scripts/config --enable SND_INTEL8X0
++    scripts/config --enable SND_HDA_INTEL
++    scripts/config --enable SND_HDA_CODEC_REALTEK
++    scripts/config --enable SND_HDA_CODEC_GENERIC
++    scripts/config --enable SND_HDA_CODEC_HDMI
++    scripts/config --enable SND_PROC_FS
++
+     # Filesystems / misc
+     scripts/config --enable EXT4_FS

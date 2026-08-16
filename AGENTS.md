@@ -7,8 +7,9 @@
 - **No asking what was already answered.** Do not stop for clarification when the path is clear; continue with next steps instead.
 - **No compromises on the project.** Full-fledged desktop. Nothing is stripped or scoped away to make it easier.
 - **Create our own unless absolutely necessary.** Build every layer ourselves instead of reusing existing ones. Adopt someone else's code only when there is no way to build it ourselves (e.g. kernel boundaries, hardware drivers) — and justify it in writing each time.
+- **Apps policy: reuse-first.** For end-user applications, prefer existing real software over custom code: ship apk/busybox/CLI tools (they run in the real PTY terminal), adopt real codecs/engines at the OS seam (honest boundary), run vi/nano instead of a custom editor. Write custom app code ONLY where no existing software can speak the scene protocol (thin protocol consumers — files browser, media viewers, search overlay) or where the app exists to prove/improve the OS layer itself. Never write an app just because integration is harder. Justify each first-party app in one line.
 - **Never hallucinate.** No invented facts, fabricated sources, fake findings, or empty promises. Everything claimed must be verified or explicitly marked as unverified; never state something as done when it isn't.
-- **Use parallel sub-agents.** Delegate independent work to as many sub-agents as possible, in parallel, to boost efficiency. Do not duplicate their work while they run.
+- **Use parallel sub-agents.** Delegate independent work to as many sub-agents as possible, in parallel, to boost efficiency. Do not duplicate their work while they run. When a task has multiple phases or a lot of work, split it across multiple sub-agents (one per phase or per independent unit) instead of doing it all sequentially myself.
 - **Use maximum amount of focus.** Apply the highest level of attention and rigor on the task at hand; no half-effort, no distractions, no drifting.
 
 ## Project: semantic scene engine (OS layer, not re-skin)
