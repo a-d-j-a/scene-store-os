@@ -191,7 +191,9 @@ static const char *shell_tray_probe_impl(void)
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0 ||
             strcmp(e->d_name, "lo") == 0)
             continue;
-        char path[256];
+        char path[300];
+        if (strlen(e->d_name) > 240)
+            continue;
         snprintf(path, sizeof(path), "/sys/class/net/%s/carrier",
                  e->d_name);
         FILE *f = fopen(path, "r");

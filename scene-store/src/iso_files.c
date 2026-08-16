@@ -173,11 +173,12 @@ static const char *open_app_for(const char *name)
 }
 
 /* Inject `path` (relative) into the directory `dir` of the running
- * executable. Returns -1 when the sibling does not exist.              */
+ * executable. Returns -1 when the sibling does not exist. Windows-only:
+ * POSIX spawns resolve through PATH.                                  */
+#if defined(_WIN32)
 static int sibling_cmdline(const char *exe, const char *arg,
                            char *out, size_t cap)
 {
-#if defined(_WIN32)
     char self[1024];
     char dir[1024];
     const char *sep;
@@ -194,11 +195,8 @@ static int sibling_cmdline(const char *exe, const char *arg,
     if (strlen(dir) + strlen(exe) + strlen(arg) + 8 >= cap) return -1;
     snprintf(out, cap, "\"%s%s.exe\" \"%s\"", dir, exe, arg);
     return 0;
-#else
-    snprintf(out, cap, "%s %s", exe, arg);
-    return 0;
-#endif
 }
+#endif /* _WIN32 */
 
 static int spawn_opener(const char *exe, const char *arg)
 {
