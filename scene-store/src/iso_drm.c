@@ -50,6 +50,7 @@
 #include "scene_fb.h"
 #include "scene_store.h"
 #include "scene_image.h"
+#include "scene_codec.h"
 
 /* Kernel connector status (enum drm_connector_status): 1 = connected.
  * Not exposed as a UAPI constant — this is the uapi-visible value the
@@ -290,11 +291,14 @@ static const scene_client_cbs shell_cbs = {
 
 /* ---- OS-side media importer (honest boundary) --------------------------
  * The v0 wire carries only texture REFERENCEs; the pixels live here, in
- * the OS. This demo importer re-runs the demo decoder (the same formula
- * as iso_video.c: frame n colors row y with (n*29+y)&0xFF, left half
- * G=0 B=0x40, right half G=0xFF B=0x80) into the app session's store
- * every compositor frame. A real system would decode the shared media
- * stream at this same seam. ------------------------------------------- */
+ * the OS. The importer decodes the shared demo clip (mpeg1video in
+ * MPEG-PS; /usr/share/scene/demo.mpg by default, --videoclip=PATH to
+ * override) with the vendored ffmpeg build (scene_codec — see
+ * third_party/ffmpeg/LICENSE.md) into the app session's store, one
+ * frame per compositor frame; at end of stream the clip loops. If the
+ * clip cannot be opened the importer falls back to the in-house
+ * synthetic generator (iso_video's own formula) — a missing media file
+ * never takes the desktop down. -------------------------------------- */
 #define IMP_REF  1u
 #define IMP_W    240u
 #define IMP_H    128u
@@ -302,20 +306,56 @@ static scene_compositor *g_imp_cp;
 static scene_store      *g_imp_store;
 static int               g_imp_layer = -1;
 static uint32_t          g_imp_frame;
+static const char       *g_imp_clip = "/usr/share/scene/demo.mpg";
+static scene_codec      *g_imp_codec;
+static int               g_imp_synth;      /* 1 = fallback generator   */
 static uint32_t          g_imp_tex[IMP_W * IMP_H];
+
+static void importer_open(void)
+{
+    uint32_t w = 0, h = 0;
+
+    if (g_imp_codec) { scene_codec_close(g_imp_codec); g_imp_codec = NULL; }
+    g_imp_codec = scene_codec_open(g_imp_clip, &w, &h, NULL, NULL);
+    if (g_imp_codec && (w != IMP_W || h != IMP_H)) {
+        fprintf(stderr, "iso-drm: clip %s %ux%u != %ux%u, falling back\n",
+                g_imp_clip, w, h, IMP_W, IMP_H);
+        scene_codec_close(g_imp_codec);
+        g_imp_codec = NULL;
+    }
+    g_imp_synth = g_imp_codec == NULL;
+    g_imp_frame = 0;
+    if (g_imp_synth)
+        fprintf(stderr, "iso-drm: importer: synthetic fallback (%s)\n",
+                g_imp_clip);
+    else
+        fprintf(stderr, "iso-drm: importer: clip %s %ux%u\n", g_imp_clip,
+                w, h);
+}
 
 static void importer_tick(void)
 {
     uint32_t x, y, n;
+
     if (!g_imp_cp || !g_imp_store || g_imp_layer < 0) return;
     n = g_imp_frame++;
-    for (y = 0; y < IMP_H; y++) {
-        uint32_t R = (n * 29u + y) & 0xFFu;
-        for (x = 0; x < IMP_W; x++) {
-            uint32_t c = UINT32_C(0xFF000000) | (R << 16);
-            if (x < IMP_W / 2u) c |= UINT32_C(0x00000040);  /* left  */
-            else                c |= UINT32_C(0x0000FF80);  /* right */
-            g_imp_tex[y * IMP_W + x] = c;
+    if (!g_imp_synth) {
+        int r = scene_codec_frame(g_imp_codec, g_imp_tex);
+        if (r <= 0) {                    /* EOF or error: loop the clip */
+            importer_open();
+            if (!g_imp_synth)
+                scene_codec_frame(g_imp_codec, g_imp_tex);
+        }
+    }
+    if (g_imp_synth) {
+        for (y = 0; y < IMP_H; y++) {
+            uint32_t R = (n * 29u + y) & 0xFFu;
+            for (x = 0; x < IMP_W; x++) {
+                uint32_t c = UINT32_C(0xFF000000) | (R << 16);
+                if (x < IMP_W / 2u) c |= UINT32_C(0x00000040);  /* left  */
+                else                c |= UINT32_C(0x0000FF80);  /* right */
+                g_imp_tex[y * IMP_W + x] = c;
+            }
         }
     }
     scene_compositor_register_texture_layer(g_imp_cp, g_imp_layer,
@@ -394,6 +434,7 @@ static void cb_session_added(void *ud, int layer, uint32_t pid)
      * compositor register refreshes pixels per frame).              */
     scene_store_register_texture(g_imp_store, IMP_REF, IMP_W, IMP_H,
                                  SCENE_TEX_FMT_XRGB, 1);
+    importer_open();
 }
 
 static void cb_session_exited(void *ud, int layer, uint32_t pid)
@@ -565,6 +606,8 @@ int main(int argc, char **argv)
                 g_autolaunch[g_autolaunch_n++] = argv[i] + 13;
         } else if (strcmp(argv[i], "--debug") == 0) {
             g_dbg = 1;
+        } else if (strncmp(argv[i], "--videoclip=", 12) == 0) {
+            g_imp_clip = argv[i] + 12;
         }
     }
 

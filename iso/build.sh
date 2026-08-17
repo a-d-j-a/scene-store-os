@@ -357,19 +357,58 @@ build_apk() {
     msg "apk done."
 }
 
+# ---- phase 5a: build ffmpeg (static musl, minimal + parser) ----------------
+# The lock for this configure lives in scene-store/third_party/ffmpeg/
+# LICENSE.md. --enable-parser=mpegvideo is REQUIRED: --disable-everything
+# does not auto-enable parsers, and without it the mpegvideo decoder
+# corrupts every packetized stream (root-caused Aug 2026; proven by
+# tests/test_codec.c, 100/100 frames byte-exact).
+build_ffmpeg() {
+    msg "=== Phase 5a: Building ffmpeg ==="
+    setup_musl_gcc
+    local FSRC="$SRC/ffmpeg-n7.1"
+    local FOUT="$BUILDDIR/ffmpeg/out"
+    if [ ! -f "$FSRC/configure" ]; then
+        fetch "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n7.1.tar.gz" \
+              "$SRC/ffmpeg-n7.1.tar.gz"
+        extract "$SRC/ffmpeg-n7.1.tar.gz" "$FSRC"
+    fi
+    cd "$FSRC"
+    make distclean >/dev/null 2>&1 || true
+    ./configure --cc="$MUSL_GCC" \
+        --disable-everything --disable-asm --disable-x86asm \
+        --disable-network --disable-debug --disable-doc \
+        --enable-static --disable-shared --enable-ffmpeg \
+        --enable-decoder=mpeg1video,mpeg2video,rawvideo \
+        --enable-encoder=mpeg1video,mpeg2video,rawvideo \
+        --enable-parser=mpegvideo \
+        --enable-demuxer=mpegvideo,mpegps,mpeg,rawvideo \
+        --enable-muxer=mpeg1system,mpeg1video,mpeg2video,image2,rawvideo,null \
+        --enable-protocol=file --enable-swscale \
+        --enable-filter=scale,format --prefix="$FOUT" \
+        || die "ffmpeg configure failed"
+    make -j"$JOBS" || die "ffmpeg build failed"
+    make install || die "ffmpeg install failed"
+    cd -
+    ls "$FOUT/lib/"libavcodec.a >/dev/null 2>&1 || die "ffmpeg libs missing"
+    msg "ffmpeg done ($FOUT)."
+}
+
 # ---- phase 5: build scene-store (engine + DRM compositor) ------------------
 build_scene_store() {
     msg "=== Phase 5: Building scene-store ==="
     setup_musl_gcc
     local SSRC="$(cd "$(dirname "$0")/.." && pwd)/scene-store"
     [ -d "$SSRC" ] || die "scene-store source not found at $SSRC"
+    build_ffmpeg
     cd "$SSRC"
     # Force full rebuild: stale .o files from previous commits cause
     # subtle alpha/rendering bugs (seen live: 87% opacity on themed elements).
     rm -f build/*.o
     make build/iso_drm build/iso_demo build/iso_terminal build/iso_video \
         build/iso_photo build/iso_files build/iso_edit CC="$MUSL_GCC" \
-        CFLAGS="-std=c11 -Wall -Wextra -O2 -Iinclude" || die "iso_drm build failed"
+        CFLAGS="-std=c11 -Wall -Wextra -O2 -Iinclude" \
+        FFMPEG_DIR="$BUILDDIR/ffmpeg/out" || die "iso_drm build failed"
     mkdir -p "$SYSROOT/usr/bin"
     cp build/iso_drm "$SYSROOT/usr/bin/iso-drm"
     cp build/iso_demo "$SYSROOT/usr/bin/iso-demo"
@@ -462,12 +501,14 @@ export TERM=xterm-256color
 chvt 7 2>/dev/null || chvt 1 2>/dev/null || true
 if [ -x /usr/bin/iso-drm ]; then
     echo "Starting iso-drm compositor..."
-    # Forward autolaunch=NAME kernel cmdline tokens to iso-drm so apps
-    # can be started at login (headless test path: no input needed).
+    # Forward autolaunch=NAME / videoclip=PATH kernel cmdline tokens to
+    # iso-drm so apps and the importer clip can be set at login
+    # (headless test path: no input needed).
     AUTOLAUNCH=""
     for tok in $(cat /proc/cmdline); do
         case "$tok" in
             autolaunch=*) AUTOLAUNCH="$AUTOLAUNCH --autolaunch=${tok#autolaunch=}" ;;
+            videoclip=*)  AUTOLAUNCH="$AUTOLAUNCH --videoclip=${tok#videoclip=}" ;;
         esac
     done
     exec /usr/bin/iso-drm $AUTOLAUNCH
@@ -661,7 +702,7 @@ case "${1:-}" in
     musl)      install_prereqs; fetch_sources; build_musl ;;
     kernel)    install_prereqs; fetch_sources; build_musl; build_kernel ;;
     busybox)   install_prereqs; fetch_sources; build_musl; build_kernel; build_busybox; build_zlib; build_openssl; build_apk ;;
-    scene)     build_scene_store ;;
+    scene)     build_ffmpeg; build_scene_store ;;
     rootfs)    assemble_rootfs ;;
     initramfs) build_initramfs ;;
     iso)       shift 2>/dev/null || true; build_iso "$1" "$2" ;;
@@ -680,7 +721,7 @@ case "${1:-}" in
         msg "ISO: $OUTPUT/iso-custom-${KVER}.iso"
         ;;
     *)
-        echo "Usage: $0 [all|clean|prereqs|fetch|musl|kernel|busybox|scene|rootfs|initramfs|iso]"
+        echo "Usage: $0 [all|clean|prereqs|fetch|musl|kernel|busybox|scene|ffmpeg|rootfs|initramfs|iso]"
         exit 1
         ;;
 esac
