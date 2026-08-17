@@ -16,21 +16,6 @@ for i in $(seq 1 10); do
     sleep 0.5
 done
 
-# HDA codec probe: snd_hda_intel probes the codec once at boot and can
-# fail under QEMU TCG (the emulated codec reset races the TCG clock).
-# Rebind the PCI function to re-run the probe; keep retrying until the
-# PCM device exists or we give up after 18s.
-HC=0
-for i in 1 2 3 4 5 6; do
-    [ -e /dev/snd/pcmC0D0p ] && HC=1 && break
-    for d in /sys/bus/pci/drivers/snd_hda_intel/*/; do
-        b=$(basename "$d")
-        case "$b" in module|bind|unbind|uevent|new_id|remove_id) continue ;; esac
-        echo "$b" > /sys/bus/pci/drivers/snd_hda_intel/unbind 2>/dev/null
-        echo "$b" > /sys/bus/pci/drivers/snd_hda_intel/bind 2>/dev/null
-    done
-    sleep 3
-done
 # DRM/KMS compositor (own code, kernel UAPI — the boot path)
 # /dev/console maps to ttyS0 (last console= param), so iso-drm's
 # stdout/stderr land on the serial log automatically.
