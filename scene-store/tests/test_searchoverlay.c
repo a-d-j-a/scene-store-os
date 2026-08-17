@@ -117,7 +117,8 @@ static void cb_sh_focus(void *ud, uint64_t seq, scene_node_id id,
 
 static const scene_client_cbs g_sh_cbs = {
     cb_sh_welcome, NULL, NULL, NULL, NULL, NULL,
-    cb_sh_pointer, cb_sh_activate, cb_sh_focus, cb_sh_key, NULL, NULL, NULL, NULL
+    cb_sh_pointer, cb_sh_activate, cb_sh_focus, cb_sh_key,
+    NULL, NULL, NULL, NULL, NULL
 };
 
 /* ---- app client callbacks: counters only ------------------------------ */
@@ -160,7 +161,8 @@ static void cb_ap_key(void *ud, uint64_t seq, uint32_t code, uint8_t state,
 
 static const scene_client_cbs g_app_cbs = {
     cb_ap_welcome, NULL, NULL, NULL, NULL, NULL,
-    cb_ap_pointer, cb_ap_activate, cb_ap_focus, cb_ap_key, NULL, NULL, NULL, NULL
+    cb_ap_pointer, cb_ap_activate, cb_ap_focus, cb_ap_key,
+    NULL, NULL, NULL, NULL, NULL
 };
 
 /* Pump both sessions' links (4 rounds), then one compositor frame.

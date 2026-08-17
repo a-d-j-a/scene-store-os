@@ -132,6 +132,10 @@ struct scene_compositor {
     uint32_t      focus_layer;  /* keyboard focus (0 = shell)              */
     scene_key_grab grabs[SCENE_COMPOSITOR_KEY_GRABS]; /* OS key grabs      */
 
+    char         *clip;      /* OS clipboard (Super+C copies focused text,
+                                Super+V pastes as INPUT_TEXT)             */
+    uint32_t      clip_len;
+
     scene_fb      fb;
     uint32_t      clear;
     int           force;
@@ -1049,6 +1053,7 @@ void scene_compositor_free(scene_compositor *cp)
 
     if (!cp) return;
     free(cp->styles);
+    free(cp->clip);
     for (i = 0; i < cp->ly_count; i++)
         layer_free(&cp->ly[i]);
     free(cp->ly);
@@ -1368,6 +1373,84 @@ int scene_compositor_set_style(scene_compositor *cp, scene_style_ref ref,
     return 0;
 }
 
+int scene_compositor_copy(scene_compositor *cp)
+{
+    scene_layer *ly;
+    scene_node_id id;
+    char *copy = NULL;
+    uint32_t copy_len = 0;
+
+    if (!cp || cp->focus_layer >= cp->ly_count) return 0;
+    ly = &cp->ly[cp->focus_layer];
+    if (ly->dead || scene_server_dead(ly->sv)) return 0;
+    id = scene_store_focus(ly->store);
+    /* The focused node's text, or the nearest ancestor that has text
+     * (e.g. a search-field node inside a window whose title label is
+     * the first text carrier).                                        */
+    while (id != SCENE_NO_PARENT) {
+        scene_node_vis v;
+        if (scene_store_node_vis(ly->store, id, &v) != 0) break;
+        if (v.text_count > 0) {
+            scene_node_text_vis t;
+            if (scene_store_node_texts(ly->store, id, &t, 1) > 0
+                && t.len > 0 && t.data) {
+                copy = (char *)malloc((size_t)t.len + 1u);
+                if (!copy) return 0;
+                memcpy(copy, t.data, t.len);
+                copy[t.len] = 0;
+                copy_len = t.len;
+            }
+            break;
+        }
+        if (v.parent == id || v.parent == SCENE_NO_PARENT) break;
+        id = v.parent;
+    }
+    if (!copy) return 0;
+    free(cp->clip);
+    cp->clip = copy;
+    cp->clip_len = copy_len;
+    return 1;
+}
+
+int scene_compositor_paste(scene_compositor *cp)
+{
+    scene_layer *ly;
+
+    if (!cp || !cp->clip || cp->clip_len == 0) return 0;
+    if (cp->focus_layer >= cp->ly_count) return 0;
+    ly = &cp->ly[cp->focus_layer];
+    if (ly->dead || scene_server_dead(ly->sv)) return 0;
+    return scene_server_input_text(ly->sv, cp->clip, cp->clip_len);
+}
+
+const char *scene_compositor_clipboard(const scene_compositor *cp)
+{
+    return cp ? cp->clip : NULL;
+}
+
+uint32_t scene_compositor_clipboard_len(const scene_compositor *cp)
+{
+    return cp ? cp->clip_len : 0;
+}
+
+void scene_compositor_clipboard_set(scene_compositor *cp,
+                                    const char *text, uint32_t len)
+{
+    char *c;
+
+    if (!cp) return;
+    free(cp->clip);
+    cp->clip = NULL;
+    cp->clip_len = 0;
+    if (!len || !text) return;
+    c = (char *)malloc((size_t)len + 1u);
+    if (!c) return;
+    memcpy(c, text, len);
+    c[len] = 0;
+    cp->clip = c;
+    cp->clip_len = len;
+}
+
 int scene_compositor_input_pointer(scene_compositor *cp, uint8_t device,
                                    int32_t x, int32_t y, uint8_t buttons)
 {
@@ -1396,6 +1479,13 @@ int scene_compositor_input_key(scene_compositor *cp, uint32_t key_code,
     uint32_t i;
 
     if (!cp) return -1;
+    /* OS clipboard: Super+C copies the focused node's text, Super+V
+     * pastes it into the focused session as INPUT_TEXT. Consumed at
+     * the OS layer like the grabs below — the app never sees the keys. */
+    if (state && (modifiers & SCENE_MOD_SUPER)) {
+        if (key_code == SCENE_KEY_C) { scene_compositor_copy(cp); return 0; }
+        if (key_code == SCENE_KEY_V) { scene_compositor_paste(cp); return 0; }
+    }
     /* OS-level grabs: a grabbed chord routes to the shell session
      * (layer 0) no matter where keyboard focus sits — e.g. Super+S
      * opens the search overlay while an app has focus. Matching is

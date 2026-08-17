@@ -28,6 +28,10 @@ typedef struct scene_app_cbs {
     void (*activate)(void *ud, uint64_t seq, scene_node_id id);
     void (*key)(void *ud, uint64_t seq, uint32_t key_code,
                 uint8_t state, uint8_t modifiers);
+    /* 0x800E: OS-originated text insertion (clipboard paste). The app
+     * inserts the text into its focused input (PTY, editor buffer,
+     * search field). `text` is valid only during the callback. */
+    void (*text)(void *ud, uint64_t seq, const char *text, uint32_t len);
     void (*focus)(void *ud, uint64_t seq, scene_node_id id, uint8_t state);
     void (*import_result)(void *ud, scene_texture_ref ref, uint8_t ok);
 } scene_app_cbs;

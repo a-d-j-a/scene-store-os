@@ -191,6 +191,12 @@ int scene_server_input_key(scene_server *sv, uint32_t key_code,
     return scene_store_input_key(sv->s, key_code, state, modifiers);
 }
 
+int scene_server_input_text(scene_server *sv, const char *text,
+                            uint32_t len)
+{
+    return scene_store_input_text(sv->s, text, len);
+}
+
 int scene_server_dead(const scene_server *sv)
 {
     return sv->dead;

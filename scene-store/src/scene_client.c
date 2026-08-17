@@ -610,6 +610,16 @@ static void dispatch(scene_client *c, uint16_t opcode,
         return;
     }
 
+    case SCENE_SRV_INPUT_TEXT: {
+        if (plen < 12) { cli_violation(c, "text len"); return; }
+        uint64_t seq = scene_get_u64(p + 0);
+        uint32_t len = scene_get_u32(p + 8);
+        if ((uint64_t)plen - 12 < len) { cli_violation(c, "text bytes"); return; }
+        if (cb && cb->input_text)
+            cb->input_text(c->ud, seq, (const char *)p + 12, len);
+        return;
+    }
+
     case SCENE_SRV_PRESENT_DONE: {
         if (plen != 24) { cli_violation(c, "present len"); return; }
         uint64_t seq = scene_get_u64(p + 0);

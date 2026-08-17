@@ -128,7 +128,18 @@ enum scene_srv_op {
     SCENE_SRV_TEXT_INDEX     = 0x800B,
     SCENE_SRV_INPUT_KEY      = 0x800C,
     SCENE_SRV_IMPORT_RESULT  = 0x800D,
+    SCENE_SRV_INPUT_TEXT     = 0x800E,
 };
+
+/* 0x800E INPUT_TEXT payload (no leading seq in the struct):
+ *   seq u64          — scene seq stamped like every other input record
+ *   UTF-8 field      — u32 len + bytes; the OS-provided text to insert
+ *                       (clipboard paste), not raw keycodes
+ * Emitted by the compositor's clipboard service into the focused
+ * session. Flow-controlled on the SAME un-acked gate as INPUT_POINTER
+ * and INPUT_KEY: dropped (return 0, no record) while a previous input
+ * is unacked. Not region-resolved: text targets the focused node's
+ * consumer (terminal PTY, editor buffer, search field).               */
 
 /* 0x800D IMPORT_RESULT payload (no leading seq):
  *   texture_ref u32 — the ref named in IMPORT_TEXTURE
@@ -161,6 +172,17 @@ enum scene_errno {
 #define SCENE_MOD_ALT     0x04u
 #define SCENE_MOD_SUPER   0x08u
 
+/* ---- Pointer button bits (bitmask in INPUT_POINTER payload) ----------
+ * LEFT/RIGHT/MIDDLE are persistent state (held while down). WHEEL_UP/
+ * WHEEL_DOWN are TRANSIENT: they appear only on the record carrying the
+ * wheel tick and are cleared on the next input event. Wheel bits never
+ * trigger InputActivate (only LEFT does).                             */
+#define SCENE_BTN_LEFT      0x01u
+#define SCENE_BTN_RIGHT     0x02u
+#define SCENE_BTN_WHEEL_UP  0x04u
+#define SCENE_BTN_WHEEL_DOWN 0x08u
+#define SCENE_BTN_MIDDLE    0x10u
+
 /* ---- Key codes (Linux evdev KEY_* values) --------------------------- */
 #define SCENE_KEY_ESC       1u
 #define SCENE_KEY_BACKSPACE 14u
@@ -170,6 +192,8 @@ enum scene_errno {
 #define SCENE_KEY_RIGHT     106u
 #define SCENE_KEY_UP        103u
 #define SCENE_KEY_DOWN      108u
+#define SCENE_KEY_C         46u    /* evdev; clipboard copy grab          */
+#define SCENE_KEY_V         47u    /* evdev; clipboard paste grab         */
 
 /* ---- Limits (section 8), defaulted in WELCOME ------------------------ */
 typedef struct scene_limits {

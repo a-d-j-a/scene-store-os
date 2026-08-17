@@ -162,6 +162,22 @@ int scene_compositor_input_pointer(scene_compositor *cp, uint8_t device,
 int scene_compositor_input_key(scene_compositor *cp, uint32_t key_code,
                                uint8_t state, uint8_t modifiers);
 
+/* ---- clipboard (OS service) ------------------------------------------ */
+/* Super+C is consumed OS-side in scene_compositor_input_key and copies
+ * the focused node's text (or its nearest ancestor's, via
+ * scene_store_node_texts) into the compositor-owned clipboard;
+ * Super+V pastes it to the focused layer's session as a flow-controlled
+ * INPUT_TEXT record. Programmatic variants for tests/host UI:           */
+/* 1 when text was captured, 0 otherwise (no focus, no text anywhere).   */
+int scene_compositor_copy(scene_compositor *cp);
+/* Returns the server feeder result (0 = empty clipboard / dropped by
+ * flow control, <0 = server error, 1 = delivered).                     */
+int scene_compositor_paste(scene_compositor *cp);
+const char *scene_compositor_clipboard(const scene_compositor *cp);
+uint32_t    scene_compositor_clipboard_len(const scene_compositor *cp);
+void scene_compositor_clipboard_set(scene_compositor *cp,
+                                    const char *text, uint32_t len);
+
 /* One composition cycle. Returns 0 on success, -1 on internal failure.  */
 int  scene_compositor_frame(scene_compositor *cp);
 const scene_fb *scene_compositor_fb(scene_compositor *cp);

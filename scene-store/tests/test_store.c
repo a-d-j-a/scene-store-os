@@ -422,6 +422,57 @@ static void test_present_and_ack_flow(void)
     printf("test_present_and_ack_flow: ok\n");
 }
 
+static void test_input_text_and_wheel(void)
+{
+    scene_store *s = scene_store_new(NULL);
+    build_app(s);
+    drain_out(s);
+    const uint8_t *p; uint32_t n;
+
+    /* Wheel-only record: buttons carry the TRANSIENT bit verbatim; wheel
+     * never resolves to an InputActivate. */
+    CHECK_EQ(scene_store_input_pointer(s, 0, 150, 55, SCENE_BTN_WHEEL_UP), 0);
+    CHECK_EQ(out_next(s, &p, &n), SCENE_SRV_INPUT_POINTER);
+    CHECK_EQ(scene_get_u64(p), 11);
+    CHECK_EQ(p[8], 0);                 /* device */
+    CHECK_EQ(p[17], SCENE_BTN_WHEEL_UP);
+    CHECK_EQ(out_next(s, &p, &n), 0);  /* no ACTIVATE for a wheel tick */
+    CHECK_EQ(ack(s, 11, 0), 0);
+
+    /* Left + wheel together: both bits ride the record; LEFT still
+     * triggers the semantic activation. */
+    CHECK_EQ(scene_store_input_pointer(s, 0, 150, 55,
+                                       SCENE_BTN_LEFT | SCENE_BTN_WHEEL_DOWN), 0);
+    CHECK_EQ(out_next(s, &p, &n), SCENE_SRV_INPUT_POINTER);
+    CHECK_EQ(p[17], SCENE_BTN_LEFT | SCENE_BTN_WHEEL_DOWN);
+    CHECK_EQ(out_next(s, &p, &n), SCENE_SRV_INPUT_ACTIVATE);
+    CHECK_EQ(scene_get_u32(p + 8), 201);
+    CHECK_EQ(ack(s, 11, 0), 0);
+
+    /* INPUT_TEXT: seq + UTF-8 field (u32 len + bytes); no activation. */
+    CHECK_EQ(scene_store_input_text(s, "hello", 5), 0);
+    CHECK_EQ(out_next(s, &p, &n), SCENE_SRV_INPUT_TEXT);
+    CHECK_EQ(scene_get_u64(p), 11);
+    CHECK_EQ(scene_get_u32(p + 8), 5);
+    CHECK(memcmp(p + 12, "hello", 5) == 0);
+    CHECK_EQ(out_next(s, &p, &n), 0);
+    /* the text record holds the gate: next input is dropped */
+    CHECK_EQ(scene_store_input_text(s, "y", 1), 0);
+    CHECK_EQ(out_next(s, &p, &n), 0);
+    /* NULL text with len > 0 is a protocol error (gate open) */
+    CHECK_EQ(ack(s, 11, 0), 0);
+    CHECK_EQ(scene_store_input_text(s, NULL, 3), -(int)SCENE_ERR_PROTOCOL);
+    CHECK_EQ(out_next(s, &p, &n), 0);
+    /* after the gate reopens, a wheel-down record delivers again */
+    CHECK_EQ(scene_store_input_pointer(s, 0, 150, 55, SCENE_BTN_WHEEL_DOWN), 0);
+    CHECK_EQ(out_next(s, &p, &n), SCENE_SRV_INPUT_POINTER);
+    CHECK_EQ(p[17], SCENE_BTN_WHEEL_DOWN);
+    CHECK_EQ(out_next(s, &p, &n), 0);
+
+    scene_store_free(s);
+    printf("test_input_text_and_wheel: ok\n");
+}
+
 static void test_snapshot_and_capture(void)
 {
     scene_store *s = scene_store_new(NULL);
@@ -669,6 +720,8 @@ int main(void)
     test_unknown_opcode();
     seq_counter = 0;
     test_present_and_ack_flow();
+    seq_counter = 0;
+    test_input_text_and_wheel();
     seq_counter = 0;
     test_snapshot_and_capture();
     seq_counter = 0;

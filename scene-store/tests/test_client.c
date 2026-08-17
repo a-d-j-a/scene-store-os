@@ -69,6 +69,7 @@ struct harness {
     int ti_calls; int ti_total; scene_text_hit ti[64];
     int imp_calls; scene_texture_ref imp_ref; uint8_t imp_ok;
     int imp_cb_calls; scene_texture_ref imp_cb_ref; char imp_cb_path[256];
+    int txt_calls; uint64_t txt_seq; uint32_t txt_len; char txt_buf[256];
     int closed_calls;
 };
 
@@ -222,10 +223,24 @@ static void cb_input_key(void *ud, uint64_t seq, uint32_t key_code,
     (void)ud; (void)seq; (void)key_code; (void)state; (void)modifiers;
 }
 
+static void cb_input_text(void *ud, uint64_t seq, const char *text,
+                          uint32_t len)
+{
+    struct harness *h = (struct harness *)ud;
+    h->txt_calls++;
+    h->txt_seq = seq;
+    h->txt_len = len;
+    if (len < sizeof(h->txt_buf)) {
+        memcpy(h->txt_buf, text, len);
+        h->txt_buf[len] = 0;
+    }
+}
+
 static const scene_client_cbs g_cbs = {
     cb_welcome, cb_error, cb_snapshot, cb_search_result, cb_capture,
     cb_pong, cb_input_pointer, cb_input_activate, cb_input_focus,
-    cb_input_key, cb_present_done, cb_text_index, cb_import_result, cb_closed
+    cb_input_key, cb_input_text, cb_present_done, cb_text_index,
+    cb_import_result, cb_closed
 };
 
 /* ---- harness plumbing --------------------------------------------------- */
@@ -526,6 +541,36 @@ static void test_wire_input_flow_and_activation(void)
     CHECK_EQ(scene_store_focus(scene_server_store(h.sv)), 202);
     harness_free(&h);
     printf("test_wire_input_flow_and_activation: ok\n");
+}
+
+static void test_wire_input_text_dispatch(void)
+{
+    struct harness h;
+    harness_init(&h);
+    tick(&h);
+
+    /* deliver an INPUT_TEXT record over the wire; cb sees seq + bytes */
+    CHECK_EQ(scene_server_input_text(h.sv, "hello world", 11), 0);
+    tick(&h);
+    CHECK_EQ(h.txt_calls, 1);
+    CHECK_EQ(h.txt_seq, 0);               /* scene untouched: no ops */
+    CHECK_EQ(h.txt_len, 11);
+    CHECK(strcmp(h.txt_buf, "hello world") == 0);
+    CHECK_EQ(h.ptr_calls, 0);             /* no pointer generated */
+    /* the record gates the next input like pointer/key */
+    CHECK_EQ(scene_server_input_pointer(h.sv, 0, 150, 55, 0x01), 0);
+    tick(&h);
+    CHECK_EQ(h.ptr_calls, 0);
+    CHECK_EQ(h.txt_calls, 1);
+    /* ack reopens the gate */
+    scene_client_ack(h.cl, h.txt_seq);
+    tick(&h);
+    CHECK_EQ(scene_server_input_text(h.sv, "xy", 2), 0);
+    tick(&h);
+    CHECK_EQ(h.txt_calls, 2);
+    CHECK(strcmp(h.txt_buf, "xy") == 0);
+    harness_free(&h);
+    printf("test_wire_input_text_dispatch: ok\n");
 }
 
 static void test_wire_error_fatal(void)
@@ -1077,6 +1122,7 @@ int main(void)
     test_wire_build_present_snapshot();
     test_wire_search_capture_textindex();
     test_wire_input_flow_and_activation();
+    test_wire_input_text_dispatch();
     test_wire_error_fatal();
     test_wire_ghost_reconnect();
     test_wire_fresh_session_rebuild();

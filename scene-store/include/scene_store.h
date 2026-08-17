@@ -78,6 +78,13 @@ int  scene_store_input_pointer(scene_store *s, uint8_t device,
 int  scene_store_input_key(scene_store *s, uint32_t key_code,
                            uint8_t state, uint8_t modifiers);
 
+/* Text input feeder (compositor clipboard service calls this; engine
+ * emits SCENE_SRV_INPUT_TEXT to the client). The text is the OS-
+ * provided string to insert (paste content), NOT keycodes. Flow-
+ * controlled: shares the un-acked gate with pointer/key input (dropped
+ * silently while a previous input is unacked).                          */
+int  scene_store_input_text(scene_store *s, const char *text, uint32_t len);
+
 /* Ghost-crash: mark every retained live node stale (client died).
  * On reconnect the client re-issues its ops; the engine diffs against
  * the retained scene and applies only deltas (CreateNode resurrects).  */

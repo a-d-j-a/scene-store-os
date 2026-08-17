@@ -56,6 +56,11 @@ int  scene_server_input_pointer(scene_server *sv, uint8_t device,
 int  scene_server_input_key(scene_server *sv, uint32_t key_code,
                             uint8_t state, uint8_t modifiers);
 
+/* Text input feeder (clipboard paste; flow-controlled, shares the same
+ * gate as pointer/key input).                                           */
+int  scene_server_input_text(scene_server *sv, const char *text,
+                             uint32_t len);
+
 /* 1 = session closed by a fatal error (or never attached).             */
 int  scene_server_dead(const scene_server *sv);
 

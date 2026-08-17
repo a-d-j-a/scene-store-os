@@ -112,7 +112,20 @@ Server → client:
 0x8009 InputFocus    seq u64, id NodeId, state u8 (1=gained, 0=lost)
 0x800A PresentDone   seq u64, token u64, latency_us u64
 0x800B TextIndex     delta u32 count, then per entry: TextId u32, id NodeId, utf8 UTF-8
+0x800C InputKey      seq u64, key_code u32, state u8, modifiers u8
+0x800D ImportResult  texture_ref u32, ok u8
+0x800E InputText     seq u64, utf8 UTF-8 field (OS text insertion, paste)
 ```
+
+- `buttons` in InputPointer is a bitmask: 0x01 LEFT (held), 0x02 RIGHT (held),
+  0x10 MIDDLE (held); 0x04 WHEEL_UP and 0x08 WHEEL_DOWN are TRANSIENT — they
+  appear only on the record carrying the wheel tick and are cleared on the next
+  event. Only LEFT (0x01) triggers InputActivate; wheel bits never resolve to a
+  semantic node.
+- InputText carries a UTF-8 field, not keycodes: the compositor's clipboard
+  service (OS layer) delivers paste content to the focused session. Flow-
+  controlled on the same un-acked gate as InputPointer/InputKey (dropped while
+  a previous input is unacked); not region-resolved.
 
 ## 6. Snapshots and dumps (shared payload layout)
 
@@ -167,8 +180,9 @@ input_latency_budget_us   u64   default 16667 (one frame at 60 Hz)
 ```
 
 - The server may raise limits; it never silently lowers them.
-- Flow control: client must Ack each input seq before the server will deliver the next
-  `InputPointer`. Latency budget is a deadline, not a suggestion.
+- Flow control: client must Ack each input seq before the server will deliver the
+  next input record (`InputPointer`, `InputKey`, `InputText` all share one
+  un-acked gate). Latency budget is a deadline, not a suggestion.
 
 ## 9. Boundaries (honest, stated, not hidden)
 

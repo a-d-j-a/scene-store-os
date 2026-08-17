@@ -75,6 +75,10 @@ typedef struct scene_client_cbs {
                         uint8_t state);
     void (*input_key)(void *ud, uint64_t seq, uint32_t key_code,
                       uint8_t state, uint8_t modifiers);
+    /* 0x800E: OS-originated text insertion (clipboard paste). `text`
+     * points INTO the record payload; valid only during the callback. */
+    void (*input_text)(void *ud, uint64_t seq, const char *text,
+                       uint32_t len);
     void (*present_done)(void *ud, uint64_t seq, uint64_t token,
                          uint64_t latency_us);
     void (*text_index)(void *ud, const scene_text_hit *entries,

@@ -202,6 +202,14 @@ static void on_input_key(void *ud, uint64_t seq, uint32_t key_code,
         app->cbs->key(app->ud, seq, key_code, state, modifiers);
 }
 
+static void on_input_text(void *ud, uint64_t seq, const char *text,
+                          uint32_t len)
+{
+    scene_app *app = (scene_app *)ud;
+    if (app->cbs && app->cbs->text)
+        app->cbs->text(app->ud, seq, text, len);
+}
+
 static void on_present_done(void *ud, uint64_t seq, uint64_t token,
                             uint64_t lat)
 {
@@ -228,8 +236,8 @@ static void on_closed(void *ud)
 static const scene_client_cbs app_cbs = {
     on_welcome, on_error, NULL, NULL, NULL,
     on_pong, on_input_pointer, on_input_activate, on_input_focus,
-    on_input_key, on_present_done, on_text_index, on_import_result,
-    on_closed
+    on_input_key, on_input_text, on_present_done, on_text_index,
+    on_import_result, on_closed
 };
 
 /* ---- lifecycle -------------------------------------------------------- */

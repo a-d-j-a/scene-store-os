@@ -56,6 +56,8 @@ struct harness {
     int pd_calls; uint64_t pd_seq[MAXE], pd_token[MAXE];
     int key_calls; uint64_t key_seq;
     uint32_t key_code; uint8_t key_state; uint8_t key_mod;
+    int txt_calls; uint64_t txt_seq; uint32_t txt_len;
+    char txt_buf[256];
     int closed_calls;
 };
 
@@ -129,10 +131,23 @@ static void cb_input_key(void *ud, uint64_t seq, uint32_t key_code,
     h->key_calls++;
 }
 
+static void cb_input_text(void *ud, uint64_t seq, const char *text,
+                          uint32_t len)
+{
+    struct harness *h = (struct harness *)ud;
+    h->txt_seq = seq;
+    h->txt_len = len;
+    if (len < sizeof(h->txt_buf)) {
+        memcpy(h->txt_buf, text, len);
+        h->txt_buf[len] = 0;
+    }
+    h->txt_calls++;
+}
+
 static const scene_client_cbs g_cbs = {
     cb_welcome, cb_error, NULL, NULL, NULL, NULL,
-    cb_input_pointer, cb_input_activate, NULL, cb_input_key, cb_present_done, NULL,
-    NULL, cb_closed
+    cb_input_pointer, cb_input_activate, NULL, cb_input_key, cb_input_text,
+    cb_present_done, NULL, NULL, cb_closed
 };
 
 /* ---- harness plumbing --------------------------------------------------- */
@@ -1044,6 +1059,102 @@ static void test_comp_key_flow_control(void)
     printf("test_comp_key_flow_control: ok\n");
 }
 
+static void test_comp_input_text_and_wheel(void)
+{
+    struct harness h;
+    harness_init(&h);
+    tickf(&h);   /* pump WELCOME: cli_emit requires welcomed=1 before ops */
+
+    /* a focused text carrier + a textless node in the shell session */
+    static const scene_rect r_lab = {100, 100, 200, 20};
+    static const scene_rect r_btn = {100, 140, 100, 30};
+    op_ok(&h, scene_client_create_node(h.cl, SCENE_NO_PARENT, 301,
+                                       SCENE_ROLE_LABEL, &r_lab,
+                                       SCENE_FLAG_VISIBLE |
+                                       SCENE_FLAG_FOCUSABLE), "create 301");
+    op_ok(&h, scene_client_set_text(h.cl, 301, 1, "clip this", 9), "text 301");
+    op_ok(&h, scene_client_create_node(h.cl, SCENE_NO_PARENT, 302,
+                                       SCENE_ROLE_BUTTON, &r_btn,
+                                       SCENE_FLAG_VISIBLE |
+                                       SCENE_FLAG_FOCUSABLE), "create 302");
+    tickf(&h);
+    CHECK_EQ(h.key_calls, 0);
+    CHECK_EQ(h.txt_calls, 0);
+
+    /* wheel-only record: delivered with the transient bit, no activate */
+    CHECK_EQ(scene_compositor_input_pointer(h.cp, 0, 120, 110,
+                                            SCENE_BTN_WHEEL_UP), 0);
+    tickf(&h);
+    CHECK_EQ(h.ptr_calls, 1);
+    CHECK_EQ(h.ptr_btn[0], SCENE_BTN_WHEEL_UP);
+    CHECK_EQ(h.act_calls, 0);
+    /* flow control: the next wheel drops until the ack */
+    CHECK_EQ(scene_compositor_input_pointer(h.cp, 0, 120, 110,
+                                            SCENE_BTN_WHEEL_DOWN), 0);
+    tickf(&h);
+    CHECK_EQ(h.ptr_calls, 1);
+    scene_client_ack(h.cl, h.ptr_seq[0]);
+    tickf(&h);   /* ack reaches the server: gate reopens */
+    CHECK_EQ(scene_compositor_input_pointer(h.cp, 0, 120, 110,
+                                            SCENE_BTN_WHEEL_DOWN), 0);
+    tickf(&h);
+    CHECK_EQ(h.ptr_calls, 2);
+    CHECK_EQ(h.ptr_btn[1], SCENE_BTN_WHEEL_DOWN);
+    CHECK_EQ(h.act_calls, 0);
+    scene_client_ack(h.cl, h.ptr_seq[1]);
+
+    /* Super+C on the focused text node feeds the OS clipboard */
+    CHECK_EQ(scene_store_host_focus(scene_compositor_store(h.cp), 301), 0);
+    tickf(&h);
+    CHECK_EQ(scene_compositor_input_key(h.cp, SCENE_KEY_C, 1,
+                                        SCENE_MOD_SUPER), 0);
+    tickf(&h);
+    CHECK_EQ(h.key_calls, 0);   /* the chord never reaches the app */
+    CHECK(scene_compositor_clipboard(h.cp) != NULL);
+    CHECK_EQ(scene_compositor_clipboard_len(h.cp), 9);
+    CHECK(strcmp(scene_compositor_clipboard(h.cp), "clip this") == 0);
+
+    /* Super+V -> INPUT_TEXT into the focused session */
+    CHECK_EQ(scene_compositor_input_key(h.cp, SCENE_KEY_V, 1,
+                                        SCENE_MOD_SUPER), 0);
+    tickf(&h);
+    CHECK_EQ(h.txt_calls, 1);
+    CHECK_EQ(h.txt_len, 9);
+    CHECK(strcmp(h.txt_buf, "clip this") == 0);
+    /* the text record holds the gate: the next paste is dropped */
+    CHECK_EQ(scene_compositor_input_key(h.cp, SCENE_KEY_V, 1,
+                                        SCENE_MOD_SUPER), 0);
+    tickf(&h);
+    CHECK_EQ(h.txt_calls, 1);
+    scene_client_ack(h.cl, h.txt_seq);
+    tickf(&h);   /* ack reaches the server: gate reopens */
+    CHECK_EQ(scene_compositor_input_key(h.cp, SCENE_KEY_V, 1,
+                                        SCENE_MOD_SUPER), 0);
+    tickf(&h);
+    CHECK_EQ(h.txt_calls, 2);
+
+    /* textless focus: copy captures nothing, clipboard keeps its value */
+    CHECK_EQ(scene_store_host_focus(scene_compositor_store(h.cp), 302), 0);
+    tickf(&h);
+    CHECK_EQ(scene_compositor_input_key(h.cp, SCENE_KEY_C, 1,
+                                        SCENE_MOD_SUPER), 0);
+    CHECK_EQ(scene_compositor_clipboard_len(h.cp), 9);
+
+    /* programmatic clipboard + paste */
+    scene_compositor_clipboard_set(h.cp, "prog", 4);
+    CHECK_EQ(scene_compositor_clipboard_len(h.cp), 4);
+    scene_client_ack(h.cl, h.txt_seq);
+    tickf(&h);   /* ack reaches the server: gate reopens */
+    CHECK_EQ(scene_compositor_input_key(h.cp, SCENE_KEY_V, 1,
+                                        SCENE_MOD_SUPER), 0);
+    tickf(&h);
+    CHECK_EQ(h.txt_calls, 3);
+    CHECK(strcmp(h.txt_buf, "prog") == 0);
+
+    harness_free(&h);
+    printf("test_comp_input_text_and_wheel: ok\n");
+}
+
 int main(void)
 {
     test_comp_empty_and_force();
@@ -1063,6 +1174,7 @@ int main(void)
     test_comp_effects_noanim_replay_ghost();
     test_comp_key_input();
     test_comp_key_flow_control();
+    test_comp_input_text_and_wheel();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -1708,6 +1708,27 @@ int scene_store_input_key(scene_store *s, uint32_t key_code,
     return 0;
 }
 
+int scene_store_input_text(scene_store *s, const char *text, uint32_t len)
+{
+    if (s->dead) return -SCENE_ERR_STATE;
+    if (s->mode != SCENE_MODE_LIVE) return -SCENE_ERR_INPUT_MODE;
+    if (s->input_pending) return 0;   /* flow control: drop until acked */
+    if (len && !text) return -SCENE_ERR_PROTOCOL;
+    if (len > s->lim.max_record_length - 12u) return -SCENE_ERR_LIMIT;
+    dynbuf b = {0};
+    int r = -1;
+    if (db_put_u64(&b, s->scene_seq) == 0 &&
+        db_put_u32(&b, len) == 0 &&
+        (len == 0 || db_put(&b, text, len) == 0))
+        r = emit(s, SCENE_SRV_INPUT_TEXT, b.data, b.len);
+    db_free(&b);
+    if (r != 0) return r;
+    s->input_pending = 1;
+    s->last_input_seq = s->scene_seq;
+    s->last_input_us = now_us(s);
+    return 0;
+}
+
 int scene_store_out_next(scene_store *s, uint16_t *opcode,
                          const uint8_t **payload, uint32_t *payload_len)
 {
