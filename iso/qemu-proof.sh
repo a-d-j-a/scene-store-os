@@ -35,7 +35,7 @@ done
 set -- $EXTRA
 
 AUDIO_ARGS=""
-[ -n "$AUDIO" ] && AUDIO_ARGS="-audiodev wav,id=a0,path=$AUDIO -device intel-hda -device hda-output,audiodev=a0"
+[ -n "$AUDIO" ] && AUDIO_ARGS="-audiodev wav,id=a0,path=$AUDIO -device intel-hda -device hda-duplex,audiodev=a0"
 
 APPEND="console=ttyS0 loglevel=7 $*"
 [ -n "$DISK" ] && APPEND="$APPEND persist=/dev/vda"
