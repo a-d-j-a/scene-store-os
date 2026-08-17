@@ -206,6 +206,18 @@ build_kernel() {
     scripts/config --enable SERIO
     scripts/config --enable SERIO_I8042
 
+    # Sound: ALSA core + Intel HDA (QEMU hda-duplex and real HDA codecs).
+    # iso_play talks the raw kernel PCM UAPI (/dev/snd/pcmC0D0p) with no
+    # libasound; SND_HDA_GENERIC covers QEMU's generic codec and most
+    # simple real codecs (specific Realtek/etc. drivers stay off to keep
+    # the image small — a vendor codec config can be added later).
+    scripts/config --enable SND
+    scripts/config --enable SND_PCM
+    scripts/config --enable SND_PCI
+    scripts/config --enable SND_HDA
+    scripts/config --enable SND_HDA_INTEL
+    scripts/config --enable SND_HDA_GENERIC
+
     # Filesystems / misc
     scripts/config --enable EXT4_FS
     scripts/config --enable VFAT_FS
@@ -406,7 +418,8 @@ build_scene_store() {
     # subtle alpha/rendering bugs (seen live: 87% opacity on themed elements).
     rm -f build/*.o
     make build/iso_drm build/iso_demo build/iso_terminal build/iso_video \
-        build/iso_photo build/iso_files build/iso_edit CC="$MUSL_GCC" \
+        build/iso_photo build/iso_files build/iso_edit build/iso_play \
+        CC="$MUSL_GCC" \
         CFLAGS="-std=c11 -Wall -Wextra -O2 -Iinclude" \
         FFMPEG_DIR="$BUILDDIR/ffmpeg/out" || die "iso_drm build failed"
     mkdir -p "$SYSROOT/usr/bin"
@@ -417,6 +430,7 @@ build_scene_store() {
     cp build/iso_photo "$SYSROOT/usr/bin/iso-photo"
     cp build/iso_files "$SYSROOT/usr/bin/iso-files"
     cp build/iso_edit "$SYSROOT/usr/bin/iso-edit"
+    cp build/iso_play "$SYSROOT/usr/bin/iso-play"
     cd -
     msg "scene-store done."
 }
@@ -534,7 +548,7 @@ menu_border=0xFF444466
 menu_item_color=0xFF2A2A4E
 menu_item_text=0xFFE8E8E8
 clock_12h=0
-launcher_apps=iso-terminal,iso-files,iso-demo,iso-video
+launcher_apps=iso-terminal,iso-files,iso-demo,iso-video,iso-play
 CONF
 
     # Package manager: official Alpine repositories + CA trust bundle
