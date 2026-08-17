@@ -346,6 +346,20 @@ static int alsa_setup(void)
             close(fd);
             return -1;
         }
+        {
+            uint32_t im = SCENE_AL_INTERVAL_IDX(SNDRV_PCM_HW_PARAM_RATE);
+            uint32_t ic = SCENE_AL_INTERVAL_IDX(SNDRV_PCM_HW_PARAM_CHANNELS);
+            uint32_t ip = SCENE_AL_INTERVAL_IDX(SNDRV_PCM_HW_PARAM_PERIOD_SIZE);
+            uint32_t in = SCENE_AL_INTERVAL_IDX(SNDRV_PCM_HW_PARAM_PERIODS);
+            uint32_t ib = SCENE_AL_INTERVAL_IDX(SNDRV_PCM_HW_PARAM_BUFFER_SIZE);
+            dlog("iso-play: refine: rate=%u..%u ch=%u..%u"
+                 " period=%u..%u per_n=%u..%u buf=%u..%u\n",
+                 hp.intervals[im].min, hp.intervals[im].max,
+                 hp.intervals[ic].min, hp.intervals[ic].max,
+                 hp.intervals[ip].min, hp.intervals[ip].max,
+                 hp.intervals[in].min, hp.intervals[in].max,
+                 hp.intervals[ib].min, hp.intervals[ib].max);
+        }
     }
 
     /* Ladder: exact ACCESS/FORMAT/CHANNELS/RATE plus a period size and
