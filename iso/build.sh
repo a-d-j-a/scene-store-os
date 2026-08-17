@@ -702,7 +702,7 @@ case "${1:-}" in
     musl)      install_prereqs; fetch_sources; build_musl ;;
     kernel)    install_prereqs; fetch_sources; build_musl; build_kernel ;;
     busybox)   install_prereqs; fetch_sources; build_musl; build_kernel; build_busybox; build_zlib; build_openssl; build_apk ;;
-    scene)     build_ffmpeg; build_scene_store ;;
+    scene)     build_scene_store ;;
     rootfs)    assemble_rootfs ;;
     initramfs) build_initramfs ;;
     iso)       shift 2>/dev/null || true; build_iso "$1" "$2" ;;
