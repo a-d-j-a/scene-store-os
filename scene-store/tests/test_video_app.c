@@ -361,13 +361,14 @@ static void test_video_stream(void)
     int i;
 
     /* 1. The child joins and its window paints: titlebar band exact
-     *    (title conveys no glyphs at x=260), desktop intact.          */
-    for (i = 0; i < 400 && PX(h.cp, 260, 60) != 0xFF1A1A1Au; i++) {
+     *    (title conveys no glyphs at x=200; the chrome buttons start
+     *    at x=256), desktop intact.                                    */
+    for (i = 0; i < 400 && PX(h.cp, 200, 60) != 0xFF1A1A1Au; i++) {
         tickf(&h);
         msleep(5);
     }
     CHECK_EQ(h.joined, 1);
-    CHECK(PX(h.cp, 260, 60) == 0xFF1A1A1Au);       /* titlebar band  */
+    CHECK(PX(h.cp, 200, 60) == 0xFF1A1A1Au);       /* titlebar band  */
     CHECK(PX(h.cp, 60, 60) == 0xFF101010u);        /* desktop        */
     CHECK(PX(h.cp, 700, 500) == 0xFF101010u);      /* desktop        */
 
@@ -491,7 +492,7 @@ static void test_video_fresh_join(void)
     CHECK_EQ(h.joined, 1);
     CHECK(PX(h.cp, 100, 100) == frame_probe_left(0));
     CHECK(PX(h.cp, 250, 100) == frame_probe_right(0));
-    CHECK(PX(h.cp, 260, 60) == 0xFF1A1A1Au);
+    CHECK(PX(h.cp, 200, 60) == 0xFF1A1A1Au);
 
     kill_child(&h);
     pump_n(&h, 50);

@@ -33,8 +33,11 @@ struct harness {
     scene_transport   *server_ts;
     scene_compositor  *cp;
     scene_app         *app;
-    scene_node_id      win, tb, label, close, content;
+    scene_node_id      win, tb, label, close, minb, maxb, content;
 };
+
+static int g_act_calls;
+static void cb_act(void *ud, uint64_t seq, scene_node_id id);
 
 static void tickf(struct harness *h)
 {
@@ -59,12 +62,13 @@ static void tickf(struct harness *h)
 
 static void harness_init(struct harness *h, int wm)
 {
+    static const scene_app_cbs cbs = { NULL, cb_act, NULL, NULL, NULL, NULL };
     memset(h, 0, sizeof(*h));
     h->lb = scene_loopback_new();
     h->server_ts = scene_loopback_server_end(h->lb);
     h->cp = scene_compositor_new(NULL, 800, 600);
     scene_server_attach(scene_compositor_server(h->cp));
-    h->app = scene_app_new(scene_loopback_client_end(h->lb), NULL, NULL);
+    h->app = scene_app_new(scene_loopback_client_end(h->lb), &cbs, NULL);
     tickf(h);
     h->content = scene_app_create_window(h->app, 100, 50, 240, 160, "WM");
     if (wm) CHECK_EQ(scene_app_set_wm(h->app, 1), 0);
@@ -76,6 +80,8 @@ static void harness_init(struct harness *h, int wm)
     h->tb = h->win + 1;
     h->label = h->win + 2;
     h->close = h->win + 3;
+    h->minb = h->win + 5;
+    h->maxb = h->win + 6;
 }
 
 static void harness_destroy(struct harness *h)
@@ -108,8 +114,10 @@ static void check_rels(struct harness *h)
     rh = v.rect[3];
     check_rect(h, h->win,    wx, wy, rw, rh);
     check_rect(h, h->tb,     wx, wy, rw, 32);
-    check_rect(h, h->label,  wx + 4, wy + 4, rw - 40, 24);
+    check_rect(h, h->label,  wx + 4, wy + 4, rw - 100, 24);
     check_rect(h, h->close,  wx + rw - 28, wy + 4, 24, 24);
+    check_rect(h, h->maxb,   wx + rw - 56, wy + 4, 24, 24);
+    check_rect(h, h->minb,   wx + rw - 84, wy + 4, 24, 24);
     check_rect(h, h->content, wx, wy + 32, rw, rh - 32);
 }
 
@@ -135,8 +143,10 @@ static void test_wm_move(void)
     CHECK_EQ((uint32_t)v.role, SCENE_ROLE_BUTTON);
     check_rect(&h, h.win,    100, 50, 240, 160);
     check_rect(&h, h.tb,     100, 50, 240, 32);
-    check_rect(&h, h.label,  104, 54, 200, 24);
+    check_rect(&h, h.label,  104, 54, 140, 24);
     check_rect(&h, h.close,  312, 54, 24, 24);
+    check_rect(&h, h.maxb,   284, 54, 24, 24);
+    check_rect(&h, h.minb,   256, 54, 24, 24);
     check_rect(&h, h.content, 100, 82, 240, 128);
 
     /* Press titlebar at (220,66), move by (+30,+12), release.          */
@@ -170,8 +180,10 @@ static void test_wm_resize(void)
 
     check_rect(&h, h.win,    100, 50, 280, 180);
     check_rect(&h, h.tb,     100, 50, 280, 32);
-    check_rect(&h, h.label,  104, 54, 240, 24);
+    check_rect(&h, h.label,  104, 54, 180, 24);
     check_rect(&h, h.close,  352, 54, 24, 24);
+    check_rect(&h, h.maxb,   324, 54, 24, 24);
+    check_rect(&h, h.minb,   296, 54, 24, 24);
     check_rect(&h, h.content, 100, 82, 280, 148);
 
     harness_destroy(&h);
@@ -354,6 +366,131 @@ static void test_wm_determinism(void)
     harness_destroy(&h2);
 }
 
+static int g_act_calls;
+static void cb_act(void *ud, uint64_t seq, scene_node_id id)
+{
+    (void)ud; (void)seq; (void)id;
+    g_act_calls++;
+}
+
+static void test_chrome_buttons(void)
+{
+    struct harness h;
+    harness_init(&h, 1);
+
+    /* Both chrome buttons exist with the right role, rects, and glyphs. */
+    scene_node_vis v;
+    CHECK(scene_store_node_vis(scene_compositor_store(h.cp), h.minb, &v) == 0);
+    CHECK_EQ((uint32_t)v.role, SCENE_ROLE_BUTTON);
+    check_rect(&h, h.minb, 256, 54, 24, 24);
+    scene_node_text_vis tv;
+    CHECK(scene_store_node_texts(scene_compositor_store(h.cp), h.minb, &tv, 1) >= 1);
+    CHECK(tv.len == 1);
+    CHECK(tv.data[0] == '_');
+
+    CHECK(scene_store_node_vis(scene_compositor_store(h.cp), h.maxb, &v) == 0);
+    CHECK_EQ((uint32_t)v.role, SCENE_ROLE_BUTTON);
+    check_rect(&h, h.maxb, 284, 54, 24, 24);
+    CHECK(scene_store_node_texts(scene_compositor_store(h.cp), h.maxb, &tv, 1) >= 1);
+    CHECK(tv.len == 1);
+    CHECK(tv.data[0] == 0x7F);
+
+    /* Label no longer underlaps the button strip. */
+    check_rect(&h, h.label, 104, 54, 140, 24);
+
+    harness_destroy(&h);
+}
+
+static void test_chrome_activate(void)
+{
+    struct harness h;
+    harness_init(&h, 1);
+    g_act_calls = 0;
+    CHECK_EQ(scene_app_set_screen(h.app, 800, 600, 40), 0);
+
+    /* Click the minimize button: window hides, app cb never called. */
+    scene_compositor_input_pointer(h.cp, 0, 268, 66, 0x01);
+    tickf(&h);
+    scene_compositor_input_pointer(h.cp, 0, 268, 66, 0x00);
+    tickf(&h);
+    scene_node_vis v;
+    CHECK(scene_store_node_vis(scene_compositor_store(h.cp), h.win, &v) == 0);
+    CHECK(!(v.flags & SCENE_FLAG_VISIBLE));
+    CHECK_EQ(g_act_calls, 0);
+
+    /* Click the maximize button: window fills screen minus panel. */
+    scene_compositor_input_pointer(h.cp, 0, 296, 66, 0x01);
+    tickf(&h);
+    scene_compositor_input_pointer(h.cp, 0, 296, 66, 0x00);
+    tickf(&h);
+    scene_store_node_vis(scene_compositor_store(h.cp), h.win, &v);
+    CHECK_EQ((int32_t)v.rect[0], 0);
+    CHECK_EQ((int32_t)v.rect[1], 0);
+    CHECK_EQ((int32_t)v.rect[2], 800);
+    CHECK_EQ((int32_t)v.rect[3], 560);
+    CHECK(v.flags & SCENE_FLAG_VISIBLE);
+    CHECK_EQ(g_act_calls, 0);
+    check_rect(&h, h.close, 772, 4, 24, 24);
+    check_rect(&h, h.maxb,  744, 4, 24, 24);
+    check_rect(&h, h.minb,  716, 4, 24, 24);
+    check_rect(&h, h.content, 0, 32, 800, 528);
+
+    /* Clicking the close button still reaches the app callback. */
+    scene_compositor_input_pointer(h.cp, 0, 784, 16, 0x01);
+    tickf(&h);
+    scene_compositor_input_pointer(h.cp, 0, 784, 16, 0x00);
+    tickf(&h);
+    CHECK_EQ(g_act_calls, 1);
+
+    harness_destroy(&h);
+}
+
+static void test_chrome_no_drag(void)
+{
+    struct harness h;
+    harness_init(&h, 1);
+
+    /* Titlebar drag still works (left area, away from the buttons). */
+    scene_compositor_input_pointer(h.cp, 0, 200, 66, 0x01);
+    tickf(&h);
+    scene_compositor_input_pointer(h.cp, 0, 230, 78, 0x01);
+    tickf(&h);
+    scene_compositor_input_pointer(h.cp, 0, 230, 78, 0x00);
+    tickf(&h);
+    check_rect(&h, h.win, 130, 62, 240, 160);
+
+    /* Press + drag on the maximize button (now at 130+184, 62+4):
+     * it activates (maximize); the drag must NOT move the window
+     * (no drag offset, exact fill). */
+    scene_compositor_input_pointer(h.cp, 0, 326, 78, 0x01);
+    tickf(&h);
+    scene_compositor_input_pointer(h.cp, 0, 366, 108, 0x01);
+    tickf(&h);
+    scene_compositor_input_pointer(h.cp, 0, 366, 108, 0x00);
+    tickf(&h);
+    check_rect(&h, h.win, 0, 0, 1280, 768);
+    check_rect(&h, h.maxb, 1224, 4, 24, 24);
+
+    /* Press + drag on the minimize button (maximized layout, center
+     * (1208,16)): it activates (minimize); the drag must not move
+     * anything. */
+        scene_compositor_input_pointer(h.cp, 0, 1208, 16, 0x01);
+    tickf(&h);
+    scene_compositor_input_pointer(h.cp, 0, 1250, 40, 0x01);
+    tickf(&h);
+    scene_compositor_input_pointer(h.cp, 0, 1250, 40, 0x00);
+    tickf(&h);
+    scene_node_vis v;
+    CHECK(scene_store_node_vis(scene_compositor_store(h.cp), h.win, &v) == 0);
+    CHECK(!(v.flags & SCENE_FLAG_VISIBLE));
+    CHECK_EQ((int32_t)v.rect[0], 0);
+    CHECK_EQ((int32_t)v.rect[1], 0);
+    CHECK_EQ((int32_t)v.rect[2], 1280);
+    CHECK_EQ((int32_t)v.rect[3], 768);
+
+    harness_destroy(&h);
+}
+
 /* ---- main ------------------------------------------------------------ */
 
 int main(void)
@@ -368,6 +505,9 @@ int main(void)
     test_wm_no_phantom();
     test_wm_off();
     test_wm_determinism();
+    test_chrome_buttons();
+    test_chrome_activate();
+    test_chrome_no_drag();
 
     printf("test_app_wm: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

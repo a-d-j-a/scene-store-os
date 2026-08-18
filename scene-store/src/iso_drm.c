@@ -276,13 +276,54 @@ static void cb_welcome(void *ud, uint32_t sid, uint16_t ver,
 static void cb_activate(void *ud, uint64_t seq, scene_node_id id)
 {
     ctx *c = ud;
-    (void)seq;
     if (c->sh) scene_shell_handle_activate(c->sh, id);
+    scene_client_ack(c->cli, seq);
+}
+
+/* Every INPUT record the shell client receives must be acked, or the
+ * engine's flow gate closes after the first event and the shell stops
+ * seeing clicks/keys (observed pre-fix: the menu opened once, then
+ * nothing). Pointer hover tracking runs on the raw event path in
+ * pointer_event() — this cb only keeps the gate open. */
+static void cb_sh_pointer(void *ud, uint64_t seq, uint8_t device,
+                          int32_t x, int32_t y, uint8_t buttons)
+{
+    ctx *c = ud;
+    (void)device; (void)x; (void)y; (void)buttons;
+    scene_client_ack(c->cli, seq);
+}
+
+static void cb_sh_focus(void *ud, uint64_t seq, scene_node_id id,
+                        uint8_t state)
+{
+    ctx *c = ud;
+    (void)id; (void)state;
+    scene_client_ack(c->cli, seq);
+}
+
+static void cb_sh_key(void *ud, uint64_t seq, uint32_t code, uint8_t state,
+                      uint8_t mods)
+{
+    ctx *c = ud;
+    if (c->sh) scene_shell_handle_key(c->sh, code, state, mods);
+    scene_client_ack(c->cli, seq);
+}
+
+static void cb_sh_text(void *ud, uint64_t seq, const char *text,
+                       uint32_t len)
+{
+    ctx *c = ud;
+    (void)text; (void)len;
+    scene_client_ack(c->cli, seq);
 }
 
 static const scene_client_cbs shell_cbs = {
-    .welcome       = cb_welcome,
+    .welcome        = cb_welcome,
     .input_activate = cb_activate,
+    .input_pointer  = cb_sh_pointer,
+    .input_focus    = cb_sh_focus,
+    .input_key      = cb_sh_key,
+    .input_text     = cb_sh_text,
 };
 
 /* ======================================================================
@@ -471,6 +512,18 @@ static void cb_launch(void *ud, uint32_t idx, const char *name)
         fprintf(stderr, "iso-drm: spawned '%s' pid=%u\n", name, pid);
 }
 
+/* System menu: Power Off / Restart. Busybox poweroff sends ACPI S5
+ * (QEMU exits on powerdown); reboot restarts. */
+static void cb_power(void *ud, int action)
+{
+    (void)ud;
+    fprintf(stderr, "iso-drm: power action %d\n", action);
+    if (action == SCENE_SHELL_ACTION_POWEROFF)
+        (void)system("poweroff");
+    else
+        (void)system("reboot");
+}
+
 /* Autostart: apps listed with --autolaunch=NAME on the command line are
  * spawned once the launcher is up (kernel cmdline autolaunch=NAME tokens
  * are forwarded by the init script). */
@@ -581,14 +634,10 @@ static void key_event(ctx *c, uint16_t code, int32_t value)
     default:
         break;
     }
-    if (c->sh && scene_compositor_focus_is_shell(c->cp)
-        && mods == 0 && (code == KEY_TAB || code == KEY_ENTER ||
-                         code == KEY_ESC)) {
-        /* shell hotkeys when no modifier is held and the shell has
-         * keyboard focus (an app session's typing must reach the app) */
-        if (scene_shell_handle_key(c->sh, code, state, 0))
-            return;
-    }
+    /* Shell keys arrive through the engine: the compositor routes by
+     * focus/grab and the shell client's input_key cb hands them to
+     * scene_shell_handle_key (acks keep the flow gate open). Only PrtSc
+     * is intercepted here — it is focus-independent by design. */
     if (c->sh && mods == 0 && code == KEY_SYSRQ) {
         /* PrtSc: the OS screenshot key, focus-independent (it is a
          * system key like the Super+S grab — apps never type it). The
@@ -781,6 +830,7 @@ int main(int argc, char **argv)
     c.launcher = scene_launcher_new(c.cp, NULL, &launcher_cbs, &c);
     if (!c.launcher) return 1;
     scene_shell_set_launch_cb(c.sh, cb_launch, &c);
+    scene_shell_set_power_cb(c.sh, cb_power, &c);
     autolaunch_each(&c);
     pump_shell(&c);
     fprintf(stderr, "iso-drm: scene nodes=%u\n",

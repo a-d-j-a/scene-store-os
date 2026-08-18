@@ -13,7 +13,7 @@
  *   2. test_play_ui: iso_play SYN joins; the window paints (titlebar
  *      0xFF1A1A1A, white title glyph pixels ground-truthed from the
  *      in-house 8x8 font data, window fill 0xFF202020); the status
- *      label (id 40005) reports "p" then "done"; clicking the close
+ *      label (id 40012) reports "p" then "done"; clicking the close
  *      button (312,54,24,24 inside the titlebar) makes the child exit
  *      0, the session is reaped, the desktop repaints.
  *   3. test_play_wav_ui: the selftest's build/test_tone.wav through the
@@ -23,7 +23,7 @@
  *      "bad file" status, and exits 0 on close.
  *
  * All status assertions read the app session's store directly (node
- * 40005 texts) — no timing guesses. Effects off: identity paint.
+ * 40012 texts) — no timing guesses. Effects off: identity paint.
  */
 #include "scene_compositor.h"
 #include "scene_client.h"
@@ -71,7 +71,7 @@ static int checks = 0;
 static char *g_argv0;
 
 /* ---- the app's node ids (scene_app APP_ID_BASE 40000 + scene_play) ------ */
-#define STATUS_NODE 40005u
+#define STATUS_NODE 40012u
 
 /* ---- harness ------------------------------------------------------------ */
 
@@ -298,7 +298,7 @@ static int child_exit_code(struct harness *h)
 #endif
 }
 
-/* Status label text of the app session (node 40005, one text slot). */
+/* Status label text of the app session (node 40012, one text slot). */
 static int status_label(const struct harness *h, char *out, size_t cap)
 {
     scene_node_text_vis tv[4];
@@ -431,8 +431,8 @@ static void wait_reaped(struct harness *h, int max_iters)
 
 static void play_window_checks(struct harness *h)
 {
-    /* titlebar band (title glyphs end at x=168 for 8 chars) */
-    CHECK(PX(h->cp, 260, 60) == 0xFF1A1A1Au);
+    /* titlebar band left of the title label (label starts at x=104) */
+    CHECK(PX(h->cp, 102, 60) == 0xFF1A1A1Au);
     /* 'i' dot of "iso-play": glyph rows at label (104,54); 'i' row0
      * 0x18 -> bits 3,4 (font: MSB-first); 'o' row2 0x3C -> bits 2..5 */
     CHECK(PX(h->cp, 107, 54) == 0xFFFFFFFFu);
@@ -531,7 +531,7 @@ static void test_play_wav_ui(void)
     }
     CHECK_EQ(h.joined, 1);
     CHECK(PX(h.cp, 150, 150) == 0xFF202020u);
-    CHECK(PX(h.cp, 260, 60) == 0xFF1A1A1Au);
+    CHECK(PX(h.cp, 102, 60) == 0xFF1A1A1Au);
     /* title "test_tone.wav": 't' row0 0x30 = bits 5,4 = cols 2,3 at
      * (106,54)/(107,54) (font is MSB-first, bit 7 = leftmost) */
     CHECK(PX(h.cp, 106, 54) == 0xFFFFFFFFu);
@@ -570,8 +570,9 @@ static void test_play_bad_file(void)
     CHECK_EQ(h.joined, 1);
     CHECK(PX(h.cp, 150, 150) == 0xFF202020u);
     /* the truncated file-name title (25 chars) covers 104..304, the
-     * close button starts at 312 — the band at 307 is clean */
-    CHECK(PX(h.cp, 307, 60) == 0xFF1A1A1Au);
+     * close button starts at 312 - the band at 102 (left of the
+     * label) is clean titlebar */
+    CHECK(PX(h.cp, 102, 60) == 0xFF1A1A1Au);
 
     wait_status(&h, "bad file", 400);
     {

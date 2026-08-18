@@ -59,8 +59,8 @@ static void msleep(unsigned m)
 #define EDIT_W 440
 #define EDIT_H 300
 
-#define SAVE_NODE   40006u      /* base+6: save button         */
-#define STATUS_NODE 40007u      /* base+7: status label        */
+#define SAVE_NODE   40030u      /* base+30: save button         */
+#define STATUS_NODE 40031u      /* base+31: status label        */
 #define ROW_BASE    40010u      /* base+10..base+21: view rows */
 
 #define EDIT_MAX_BYTES  32768u

@@ -198,6 +198,15 @@ uint32_t    scene_compositor_clipboard_len(const scene_compositor *cp);
 void scene_compositor_clipboard_set(scene_compositor *cp,
                                     const char *text, uint32_t len);
 
+/* Desktop lock: while locked, only the shell session (layer 0) paints
+ * and receives input — the shell shows a full-screen lock screen and
+ * app layers are hidden (their rendered_seq is frozen, so unlocking
+ * re-diffs and repaints every layer, including changes that happened
+ * during the lock). Flow control, grabs and the clipboard still reach
+ * the shell session. */
+void scene_compositor_set_locked(scene_compositor *cp, int on);
+int  scene_compositor_locked(const scene_compositor *cp);
+
 /* One composition cycle. Returns 0 on success, -1 on internal failure.  */
 int  scene_compositor_frame(scene_compositor *cp);
 const scene_fb *scene_compositor_fb(scene_compositor *cp);

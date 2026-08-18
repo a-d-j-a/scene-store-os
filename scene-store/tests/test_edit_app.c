@@ -75,8 +75,8 @@ static int checks = 0;
 static char *g_argv0;
 
 /* ---- the app's node ids (scene_app APP_ID_BASE 40000 + layout) ---------- */
-#define SAVE_NODE   40006u      /* base+6 */
-#define STATUS_NODE 40007u      /* base+7 */
+#define SAVE_NODE   40030u      /* base+30 */
+#define STATUS_NODE 40031u      /* base+31 */
 #define ROW_BASE    40010u      /* base+10..base+21 */
 #define FIXTURE     "build/edit_fix.txt"
 #define BADFILE     "no_such_edit_file_never_exists.txt"

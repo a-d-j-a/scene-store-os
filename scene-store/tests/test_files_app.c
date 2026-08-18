@@ -22,13 +22,14 @@
  *      first) in order; title contains "files_fix"; the ".." button and
  *      status label carry the expected texts and rects.
  *   2. test_files_navigate: clicking the aa_dir row (absolute rect
- *      from store node_vis) enters it — rows empty, status "aa_dir",
- *      title "aa_dir"; clicking ".." returns to the fixture listing.
+ *      from store node_vis) selects it, a second click enters it —
+ *      rows empty, status "aa_dir", title "aa_dir"; clicking ".."
+ *      returns to the fixture listing.
  *   3. test_files_file_status: clicking the ee_file.xyz row (unknown
- *      extension) sets the status to "file: ee_file.xyz".
+ *      extension) twice sets the status to "file: ee_file.xyz".
  *   4. test_files_bad_dir: a nonexistent path joins, shows "bad dir",
  *      and exits 0 on close; the desktop repaints.
- *   5. test_files_open_with: clicking the bb_file.txt row spawns the
+ *   5. test_files_open_with: clicking the bb_file.txt row twice spawns the
  *      real iso-edit child (inherits SCENE_STORE_PORT, reconnects to
  *      the harness listener as session 2, layer 2) which loads the
  *      file; clicking ff_pic.jpg spawns iso-photo, whose JPEG arrives
@@ -91,9 +92,11 @@ static char *g_argv0;
 #define F_TITLE  40002u
 #define F_CLOSE  40003u
 #define F_CONTENT 40004u
-#define F_UP     40006u
-#define F_STATUS 40007u
-#define F_ROW0   40010u
+#define F_UP     40032u
+#define F_STATUS 40033u
+#define F_DEL    40034u
+#define F_ROW0   40040u
+#define EDIT_ROW0 40010u   /* iso-edit view rows (ROW_BASE in iso_edit.c) */
 
 /* ---- fixture ------------------------------------------------------------ */
 
@@ -639,10 +642,13 @@ CHECK_EQ(node_text(&h, F_ROW0 + 0, t, sizeof(t)), 0);
     CHECK_EQ(node_text(&h, F_UP, t, sizeof(t)), 0);
     CHECK(strcmp(t, "..") == 0);
     CHECK_EQ(node_rect(&h, F_STATUS, &v), 0);
-    CHECK_EQ(v.rect[0], 168);
+    CHECK_EQ(v.rect[0], 228);
     CHECK_EQ(v.rect[1], 86);
-    CHECK_EQ(v.rect[2], 348);
+    CHECK_EQ(v.rect[2], 288);
     CHECK_EQ(v.rect[3], 22);
+    CHECK_EQ(node_rect(&h, F_DEL, &v), 0);
+    CHECK_EQ(v.rect[0], 172);
+    CHECK_EQ(v.rect[2], 48);
 
     /* title label carries the base dir name */
     CHECK_EQ(node_text(&h, F_TITLE, t, sizeof(t)), 0);
@@ -695,8 +701,10 @@ static void test_files_navigate(void)
     wait_status(&h, "files_fix", 400);
     CHECK_EQ(h.joined, 1);
 
-    /* into the empty aa_dir */
+    /* into the empty aa_dir (click = select, second click = open) */
     click_node(&h, F_ROW0 + 0);                       /* "D aa_dir" */
+    wait_status(&h, "sel: aa_dir", 400);
+    click_node(&h, F_ROW0 + 0);
     wait_status(&h, "aa_dir", 400);
     CHECK_EQ(node_text(&h, F_ROW0 + 0, t, sizeof(t)), 0);
     CHECK(t[0] == '\0');                              /* empty listing */
@@ -738,6 +746,8 @@ static void test_files_file_status(void)
     CHECK_EQ(h.joined, 1);
 
     click_node(&h, F_ROW0 + 3);                       /* "F ee_file.xyz" */
+    wait_status_prefix(&h, "sel: ee_file.xyz", 400);
+    click_node(&h, F_ROW0 + 3);
     wait_status_prefix(&h, "file: ee_file.xyz", 400);
     CHECK_EQ(node_text(&h, F_STATUS, t, sizeof(t)), 0);
     CHECK(strcmp(t, "file: ee_file.xyz") == 0);
@@ -805,6 +815,8 @@ static void test_files_open_with(void)
 
     /* ---- click the .txt row: iso-edit joins as session 2 ------------ */
     click_node(&h, F_ROW0 + 2);                       /* "F bb_file.txt" */
+    wait_status(&h, "sel: bb_file.txt", 400);
+    click_node(&h, F_ROW0 + 2);
     wait_status(&h, "open: bb_file.txt", 400);
     for (i = 0; i < 400 && h.sv2 == NULL; i++) {
         tickf(&h);
@@ -817,7 +829,7 @@ static void test_files_open_with(void)
      * 4-byte content "data" (the editor loads the file it was given;
      * view rows live at base+10..base+21, like the browser's) */
     for (i = 0; i < 400; i++) {
-        if (node_text2(&h, 40010, t, sizeof(t)) == 0
+        if (node_text2(&h, EDIT_ROW0, t, sizeof(t)) == 0
             && strcmp(t, "data") == 0)
             break;
         tickf(&h);
@@ -825,11 +837,11 @@ static void test_files_open_with(void)
     }
     CHECK_EQ(node_text2(&h, 40002, t, sizeof(t)), 0);
     CHECK(strcmp(t, "bb_file.txt") == 0);
-    CHECK_EQ(node_text2(&h, 40010, t, sizeof(t)), 0);
+    CHECK_EQ(node_text2(&h, EDIT_ROW0, t, sizeof(t)), 0);
     CHECK(strcmp(t, "data") == 0);
     {
         scene_node_vis v0;
-        CHECK_EQ(node_rect2(&h, 40010, &v0), 0);
+        CHECK_EQ(node_rect2(&h, EDIT_ROW0, &v0), 0);
         CHECK(v0.rect[2] > 0 && v0.rect[3] > 0);
     }
 
@@ -844,6 +856,8 @@ static void test_files_open_with(void)
 
     /* ---- click the .jpg row: iso-photo joins, imports via the wire - */
     click_node(&h, F_ROW0 + 4);                       /* "F ff_pic.jpg"  */
+    wait_status(&h, "sel: ff_pic.jpg", 400);
+    click_node(&h, F_ROW0 + 4);
     wait_status(&h, "open: ff_pic.jpg", 400);
     for (i = 0; i < 400 && h.sv2 == NULL; i++) {
         tickf(&h);
@@ -891,6 +905,91 @@ static void test_files_open_with(void)
     printf("test_files_open_with: ok\n");
 }
 
+/* ---- test 6: delete -------------------------------------------------------
+ * The Del toolbar button removes the SELECTED row (click a row once =
+ * select, again = open). Deleting a file removes it from the fs and the
+ * listing; an empty dir is removed; a non-empty dir fails ("failed: ..")
+ * and stays. All verified on the real fs from the harness side.       */
+
+static void test_files_delete(void)
+{
+    struct harness h;
+    uint16_t port = 0;
+    scene_node_vis v;
+    char t[80];
+    FILE *f;
+    int i;
+
+    /* fixture: build/files_del/{xx_dir/file.txt, yy_delme_dir/, zz_delme.txt} */
+    make_dir("build");
+    rm_tree("build/files_del");
+    make_dir("build/files_del");
+    make_dir("build/files_del/xx_dir");
+    f = fopen("build/files_del/xx_dir/file.txt", "wb");
+    if (f) { fwrite("x", 1, 1, f); fclose(f); }
+    make_dir("build/files_del/yy_delme_dir");
+    f = fopen("build/files_del/zz_delme.txt", "wb");
+    if (f) { fwrite("z", 1, 1, f); fclose(f); }
+
+    harness_init(&h, &port);
+    snprintf(h.log_path, sizeof(h.log_path), "files_del.log");
+    spawn_child(&h, "build/files_del", h.log_path);
+    CHECK(h.pid != 0);
+
+    wait_status(&h, "files_del", 400);
+    CHECK_EQ(h.joined, 1);
+
+    /* sorted: row0 = D xx_dir, row1 = D yy_delme_dir, row2 = F zz_delme.txt */
+    CHECK_EQ(node_text(&h, F_ROW0 + 0, t, sizeof(t)), 0);
+    CHECK(strcmp(t, "D xx_dir") == 0);
+    CHECK_EQ(node_text(&h, F_ROW0 + 2, t, sizeof(t)), 0);
+    CHECK(strcmp(t, "F zz_delme.txt") == 0);
+    CHECK_EQ(node_rect(&h, F_DEL, &v), 0);
+    CHECK_EQ(v.rect[0], 172);
+    CHECK_EQ(v.rect[1], 86);
+
+    /* select the file row, then delete it */
+    click_node(&h, F_ROW0 + 2);
+    wait_status(&h, "sel: zz_delme.txt", 400);
+    click_node(&h, F_DEL);
+    wait_status(&h, "removed: zz_delme.txt", 400);
+
+    /* row gone from the listing, gone from the fs */
+    CHECK_EQ(node_text(&h, F_ROW0 + 2, t, sizeof(t)), 0);
+    CHECK(t[0] == '\0');
+    CHECK_EQ(access("build/files_del/zz_delme.txt", F_OK), -1);
+
+    /* deleting an empty dir works */
+    click_node(&h, F_ROW0 + 1);                       /* D yy_delme_dir */
+    wait_status(&h, "sel: yy_delme_dir", 400);
+    click_node(&h, F_DEL);
+    wait_status(&h, "removed: yy_delme_dir", 400);
+    CHECK_EQ(access("build/files_del/yy_delme_dir", F_OK), -1);
+
+    /* deleting a non-empty dir fails and leaves it */
+    click_node(&h, F_ROW0 + 0);                       /* D xx_dir */
+    wait_status(&h, "sel: xx_dir", 400);
+    click_node(&h, F_DEL);
+    wait_status(&h, "failed: xx_dir", 400);
+    CHECK_EQ(access("build/files_del/xx_dir", F_OK), 0);
+    CHECK_EQ(node_text(&h, F_ROW0 + 0, t, sizeof(t)), 0);
+    CHECK(strcmp(t, "D xx_dir") == 0);
+
+    /* Del with no selection is a no-op (status unchanged) */
+    for (i = 0; i < 5; i++) { tickf(&h); msleep(5); }
+    click_node(&h, F_DEL);
+    wait_status(&h, "failed: xx_dir", 400);           /* unchanged */
+    click_node(&h, F_DEL);                            /* no-op again */
+    for (i = 0; i < 5; i++) { tickf(&h); msleep(5); }
+    CHECK_EQ(access("build/files_del/xx_dir", F_OK), 0);
+
+    close_and_verify(&h);
+    /* remove(h.log_path); */
+    harness_free(&h);
+    rm_tree("build/files_del");
+    printf("test_files_delete: ok\n");
+}
+
 int main(int argc, char **argv)
 {
     (void)argc;
@@ -903,6 +1002,7 @@ int main(int argc, char **argv)
     test_files_file_status();
     test_files_bad_dir();
     test_files_open_with();
+    test_files_delete();
     rm_tree("build/files_fix");
 
     printf("test_files_app: %d checks, %d failures\n", checks, failures);

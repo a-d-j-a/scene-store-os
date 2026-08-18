@@ -68,7 +68,7 @@ static void msleep(unsigned m)
 #define PLY_Y 50
 #define PLY_W 240
 #define PLY_H 160
-#define STATUS_NODE 40005u
+#define STATUS_NODE 40012u
 
 /* Playback states; each maps to one status text. */
 #define ST_PLAY       1   /* "p"               */
@@ -782,7 +782,7 @@ static void on_activate(void *ud, uint64_t seq, scene_node_id id)
 {
     (void)ud;
     dlog("iso-play: activate id=%u\n", (unsigned)id);
-    if (id == STATUS_NODE - 2) {            /* close button = base+3 */
+    if (id == STATUS_NODE - 9) {            /* close button = base+3 */
         dlog("iso-play: close clicked, exiting\n");
         /* flush delivers the DESTROY op; then exit(0) closes the socket
          * and the host reaps the session. NOTE: no scene_app_pump here —
@@ -792,7 +792,7 @@ static void on_activate(void *ud, uint64_t seq, scene_node_id id)
          * forever (stack overflow; seen 0xC00000FD under the test suite
          * and proven under gdb, iso_play on_activate -> pump -> dispatch
          * -> on_activate -> ...). */
-        scene_app_destroy_window(g_app, STATUS_NODE - 1);
+        scene_app_destroy_window(g_app, STATUS_NODE - 8);
         scene_app_flush(g_app);
         exit(0);
     }

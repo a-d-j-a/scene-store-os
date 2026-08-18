@@ -515,6 +515,69 @@ static void test_determinism(void)
     harness_free(&b);
 }
 
+/* Desktop lock: while locked, only the shell session paints and
+ * receives input; app windows are hidden and their changes do not
+ * repaint. Unlock re-diffs every layer, so changes made while locked
+ * appear.                                                              */
+static void test_lock_desktop(void)
+{
+    struct harness h;
+    scene_client *ac;
+
+    harness_init(&h);
+    build_shell(&h);
+    build_app_window(&h);
+    tickf(&h);
+    CHECK_EQ(PX(h.cp, 250, 150), 0xFF262626u);      /* app window is up */
+    CHECK_EQ(scene_compositor_locked(h.cp), 0);
+
+    /* engage the lock, then give the shell a full-screen lock node */
+    scene_compositor_set_locked(h.cp, 1);
+    CHECK_EQ(scene_compositor_locked(h.cp), 1);
+    scene_client_create_node(h.cl, SCENE_NO_PARENT, 2, SCENE_ROLE_WINDOW,
+        &(scene_rect){0, 0, 800, 600},
+        SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
+    tickf(&h);
+
+    /* the app window is hidden under the lock screen */
+    CHECK_EQ(PX(h.cp, 250, 150), 0xFF202020u);
+    CHECK_EQ(PX(h.cp, 150, 60), 0xFF202020u);
+
+    /* clicks inside the app window's area go to the shell only */
+    scene_compositor_input_pointer(h.cp, 0, 250, 150, 1);
+    tickf(&h);
+    CHECK_EQ(h.sh_ptr_calls, 1);
+    CHECK_EQ(h.sh_act_id, 2u);                      /* the lock node */
+    CHECK_EQ(h.ap_ptr_calls, 0);
+    scene_client_ack(h.cl, h.sh_act_seq);
+    tickf(&h);                                  /* ack lands: gate opens */
+
+    /* keys go to the shell only, regardless of pre-lock focus */
+    scene_compositor_input_key(h.cp, 30, 1, 0);
+    tickf(&h);
+    CHECK_EQ(h.sh_key_calls, 1);
+    CHECK_EQ(h.ap_key_calls, 0);
+
+    /* the app moves its window while locked: nothing repaints */
+    ac = scene_app_client(h.app);
+    scene_client_set_rect(ac, 41000, &(scene_rect){200, 100, 300, 200});
+    tickf(&h);
+    CHECK_EQ(PX(h.cp, 250, 150), 0xFF202020u);      /* still the lock */
+
+    /* unlock: the lock node dies and the app layer re-diffs */
+    scene_compositor_set_locked(h.cp, 0);
+    CHECK_EQ(scene_compositor_locked(h.cp), 0);
+    scene_client_destroy_node(h.cl, 2);
+    tickf(&h);
+    CHECK_EQ(PX(h.cp, 250, 250), 0xFF262626u);      /* moved window */
+    scene_compositor_input_pointer(h.cp, 0, 250, 250, 1);
+    tickf(&h);
+    CHECK_EQ(h.ap_ptr_calls, 1);                    /* app input back */
+    CHECK_EQ(h.ap_act_id[0], 41000u);
+    scene_app_ack(h.app, h.ap_ptr_seq[0]);
+    harness_free(&h);
+}
+
 int main(void)
 {
     test_layer_order();
@@ -523,6 +586,7 @@ int main(void)
     test_flow_independent();
     test_dead_app();
     test_remove_session();
+    test_lock_desktop();
     test_determinism();
     printf("test_sessions: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -53,6 +53,7 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <direct.h>
 static void msleep(unsigned m) { Sleep(m); }
 #else
 #include <time.h>
@@ -76,12 +77,13 @@ static void msleep(unsigned m)
 #define FL_MAX_DEPTH   32u
 
 /* Node ids relative to the window base (content id = base+4). */
-#define N_UP     6u
-#define N_STATUS 7u
-#define N_ROW0  10u
+#define N_UP     32u
+#define N_STATUS 33u
+#define N_DEL    34u   /* toolbar: delete the selected row  */
+#define N_ROW0   40u
 
 /* Pending actions (input callbacks only set these; main loop acts). */
-enum { ACT_NONE = 0, ACT_UP, ACT_ROW, ACT_CLOSE };
+enum { ACT_NONE = 0, ACT_UP, ACT_ROW, ACT_DEL, ACT_CLOSE };
 
 static scene_app     *g_app;
 static FILE          *g_log;
@@ -97,6 +99,7 @@ static int g_count;
 
 static int  g_act = ACT_NONE;
 static int  g_act_row;
+static int  g_sel_row = -1;   /* selected entry (-1 = none) */
 static char g_status[160];
 
 static void dlog(const char *fmt, ...)
@@ -132,6 +135,16 @@ static int is_dir_path(const char *path)
     struct stat st;
     if (stat(path, &st) != 0) return 0;
     return (st.st_mode & S_IFDIR) != 0;
+}
+
+/* Remove an empty directory (rmdir; _rmdir on Windows). */
+static int fs_remove_dir(const char *path)
+{
+#if defined(_WIN32)
+    return _rmdir(path);
+#else
+    return rmdir(path);
+#endif
 }
 
 /* ---- open-with (spawn the associated guest app for a file) -------------- *
@@ -434,6 +447,9 @@ static void on_activate(void *ud, uint64_t seq, scene_node_id id)
     }
     if (id == g_base + N_UP) {
         g_act = ACT_UP;
+    } else if (id == g_base + N_DEL) {
+        g_act = ACT_DEL;
+        dlog("iso-files: del click (sel=%d)\n", g_sel_row);
     } else if (id >= g_base + N_ROW0 && id < g_base + N_ROW0 + FL_ROWS) {
         g_act = ACT_ROW;
         g_act_row = (int)(id - (g_base + N_ROW0));
@@ -498,16 +514,20 @@ int main(int argc, char **argv)
     g_base = g_content - 4;
     cl = scene_app_client(g_app);
 
-    /* ".." button (base+6), status label (base+7), 12 row labels
-     * (base+10..base+21); all children of the content node, absolute
-     * screen coords (the scene_app convention). */
+    /* ".." button (base+6), Del button (base+8), status label (base+7),
+     * 12 row labels (base+10..base+21); all children of the content
+     * node, absolute screen coords (the scene_app convention). */
     scene_client_create_node(cl, g_content, g_base + N_UP, SCENE_ROLE_BUTTON,
                              &(scene_rect){104, 86, 60, 22},
                              SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
     scene_client_set_text(cl, g_base + N_UP, 0, "..", 2);
+    scene_client_create_node(cl, g_content, g_base + N_DEL, SCENE_ROLE_BUTTON,
+                             &(scene_rect){172, 86, 48, 22},
+                             SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
+    scene_client_set_text(cl, g_base + N_DEL, 0, "Del", 3);
     scene_client_create_node(cl, g_content, g_base + N_STATUS,
                              SCENE_ROLE_LABEL,
-                             &(scene_rect){168, 86, 348, 22},
+                             &(scene_rect){228, 86, 288, 22},
                              SCENE_FLAG_VISIBLE);
     for (i = 0; i < (int)FL_ROWS; i++) {
         scene_client_create_node(cl, g_content, g_base + N_ROW0 + (uint32_t)i,
@@ -547,11 +567,24 @@ int main(int argc, char **argv)
             int idx = g_act_row;
             g_act = ACT_NONE;
             if (idx >= 0 && idx < g_count) {
-                if (g_entries[idx].is_dir) {
+                if (idx != g_sel_row) {
+                    /* First click: select the row (second click opens) */
+                    char msg[300];
+                    g_sel_row = idx;
+                    snprintf(msg, sizeof(msg), "sel: %.48s",
+                             g_entries[idx].name);
+                    dlog("iso-files: select %d = %s\n", idx,
+                         g_entries[idx].name);
+                    set_status(msg);
+                    push_status();
+                    scene_app_present(g_app);
+                    scene_app_flush(g_app);
+                } else if (g_entries[idx].is_dir) {
                     char full[600];
                     path_join(g_stack[g_sp - 1], g_entries[idx].name,
                               full, sizeof(full));
                     dlog("iso-files: cd %s\n", full);
+                    g_sel_row = -1;
                     nav_to(full);
                 } else {
                     char full[600];
@@ -559,6 +592,7 @@ int main(int argc, char **argv)
                     char msg[300];
                     path_join(g_stack[g_sp - 1], g_entries[idx].name,
                               full, sizeof(full));
+                    g_sel_row = -1;
                     opener = open_app_for(g_entries[idx].name);
                     if (opener) {
                         if (spawn_opener(opener, full) == 0) {
@@ -580,6 +614,33 @@ int main(int argc, char **argv)
                     scene_app_present(g_app);
                     scene_app_flush(g_app);
                 }
+            }
+        } else if (g_act == ACT_DEL) {
+            int idx = g_sel_row;
+            char msg[300];
+            g_act = ACT_NONE;
+            g_sel_row = -1;
+            if (idx >= 0 && idx < g_count && g_sp > 0) {
+                char full[600];
+                path_join(g_stack[g_sp - 1], g_entries[idx].name,
+                          full, sizeof(full));
+                int rc = g_entries[idx].is_dir ?
+                         fs_remove_dir(full) : remove(full);
+                int gone = (access(full, F_OK) != 0);
+                dlog("iso-files: del %s rc=%d gone=%d\n", full, rc, gone);
+                if (rc == 0 || gone) {
+                    snprintf(msg, sizeof(msg), "removed: %.44s",
+                             g_entries[idx].name);
+                } else {
+                    snprintf(msg, sizeof(msg), "failed: %.44s",
+                             g_entries[idx].name);
+                }
+                set_status(msg);
+                push_status();
+                if (list_dir(g_stack[g_sp - 1]) != 0) g_count = 0;
+                render_rows();
+                scene_app_present(g_app);
+                scene_app_flush(g_app);
             }
         }
         msleep(5);

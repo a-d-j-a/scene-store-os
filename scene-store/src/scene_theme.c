@@ -35,6 +35,7 @@ int scene_theme_save(const scene_shell_config *cfg, const char *path)
     fprintf(f, "menu_item_color=0x%08X\n", cfg->menu_item_color);
     fprintf(f, "menu_item_text=0x%08X\n", cfg->menu_item_text);
     fprintf(f, "clock_12h=%u\n", cfg->clock_12h);
+    fprintf(f, "autolock_sec=%u\n", cfg->autolock_sec);
 
     if (cfg->launcher_app_count > 0) {
         fprintf(f, "launcher_apps=");

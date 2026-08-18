@@ -98,6 +98,12 @@ int scene_app_minimize(scene_app *app, scene_node_id content_id);
 int scene_app_maximize(scene_app *app, scene_node_id content_id,
                        int32_t screen_w, int32_t screen_h, int32_t panel_h);
 
+/* Remember the screen geometry for the central maximize chrome button
+ * (defaults to 1280x800 with a 32px panel). The OS seam calls this once
+ * with the real mode; the minimize/maximize titlebar buttons then work
+ * without per-app wiring.                                                  */
+int scene_app_set_screen(scene_app *app, int32_t w, int32_t h, int32_t panel_h);
+
 /* ---- node operations -------------------------------------------------- */
 
 int scene_app_set_text(scene_app *app, scene_node_id id,

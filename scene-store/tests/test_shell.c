@@ -26,6 +26,8 @@ static int checks, failures;
         __FILE__, __LINE__, #a, (unsigned long)(a), #b, (unsigned long)(b)); } \
 } while(0)
 
+#define PX(cp, x, y) scene_fb_get(scene_compositor_fb(cp), (x), (y))
+
 /* ---- harness --------------------------------------------------------- */
 
 struct harness {
@@ -837,6 +839,96 @@ static void cb_launch(void *ud, uint32_t idx, const char *name)
     snprintf(g_launch_name, sizeof(g_launch_name), "%s", name);
 }
 
+/* System menu: the power hook records the action instead of powering
+ * off the machine. */
+static uint32_t g_power_calls;
+static int      g_power_action;
+
+static void cb_power(void *ud, int action)
+{
+    (void)ud;
+    g_power_calls++;
+    g_power_action = action;
+}
+
+static void test_shell_power_menu(void)
+{
+    struct harness h;
+    harness_init(&h);
+
+    scene_shell_config cfg;
+    scene_shell_config_defaults(&cfg);
+    cfg.launcher_app_count = 1;
+    snprintf(cfg.launcher_apps[0], 64, "demo-app");
+
+    scene_shell *sh = scene_shell_new(h.cl,
+        scene_compositor_store(h.cp), h.cp, &cfg);
+    scene_shell_build(sh, 800, 600);
+    g_power_calls = 0;
+    g_power_action = -1;
+    scene_shell_set_power_cb(sh, cb_power, NULL);
+    tickf(&h);
+
+    /* Menu rects: 1 launcher + 2 system items = height 8+3*28 = 92,
+     * above the 32px panel: y = 600-32-92 = 476. Items: app at 480,
+     * Restart at 508, Power Off at 536 (24px tall each). */
+    scene_store *s = scene_compositor_store(h.cp);
+    scene_node_vis v;
+    CHECK_EQ(scene_store_node_vis(s, 10004, &v), 0);   /* menu */
+    CHECK_EQ(v.rect[1], 476);
+    CHECK_EQ(v.rect[3], 92);
+    CHECK_EQ(scene_store_node_vis(s, 20032, &v), 0);   /* restart */
+    CHECK_EQ(v.rect[1], 508);
+    CHECK_EQ(v.rect[3], 24);
+    CHECK_EQ(scene_store_node_vis(s, 20033, &v), 0);   /* power off */
+    CHECK_EQ(v.rect[1], 536);
+    CHECK_EQ(v.rect[3], 24);
+
+    /* System items hidden while the menu is closed */
+    CHECK_EQ(scene_store_node_vis(s, 20032, &v), 0);
+    CHECK_EQ(v.flags & SCENE_FLAG_VISIBLE, 0u);
+    CHECK_EQ(scene_store_node_vis(s, 20033, &v), 0);
+    CHECK_EQ(v.flags & SCENE_FLAG_VISIBLE, 0u);
+
+    /* Open the menu: system items become visible */
+    CHECK_EQ(scene_shell_handle_activate(sh, 10002), 1);
+    tickf(&h);
+    CHECK_EQ(scene_store_node_vis(s, 20032, &v), 0);
+    CHECK(v.flags & SCENE_FLAG_VISIBLE);
+    CHECK_EQ(scene_store_node_vis(s, 20033, &v), 0);
+    CHECK(v.flags & SCENE_FLAG_VISIBLE);
+
+    /* Restart item: hook fires with ACTION_RESTART, menu closes */
+    CHECK_EQ(scene_shell_handle_activate(sh, 20032), 1);
+    tickf(&h);
+    CHECK_EQ(g_power_calls, 1);
+    CHECK_EQ(g_power_action, SCENE_SHELL_ACTION_RESTART);
+    CHECK_EQ(scene_store_node_vis(s, 20032, &v), 0);
+    CHECK_EQ(v.flags & SCENE_FLAG_VISIBLE, 0u);
+
+    /* Power Off item */
+    CHECK_EQ(scene_shell_handle_activate(sh, 10002), 1);
+    tickf(&h);
+    CHECK_EQ(scene_shell_handle_activate(sh, 20033), 1);
+    tickf(&h);
+    CHECK_EQ(g_power_calls, 2);
+    CHECK_EQ(g_power_action, SCENE_SHELL_ACTION_POWEROFF);
+
+    /* Launcher items still work (item 0 = app; with the launch cb set) */
+    CHECK_EQ(scene_shell_handle_activate(sh, 10002), 1);
+    tickf(&h);
+    g_launch_calls = 0;
+    scene_shell_set_launch_cb(sh, cb_launch, NULL);
+    CHECK_EQ(scene_shell_handle_activate(sh, 20000), 1);
+    tickf(&h);
+    CHECK_EQ(g_launch_calls, 1);
+    CHECK_EQ(g_power_calls, 2);   /* untouched */
+
+    scene_shell_free(sh);
+    harness_destroy(&h);
+    printf("test_shell_power_menu: ok\n");
+}
+
 static void test_shell_launch_cb(void)
 {
     printf("test_shell_launch_cb:\n");
@@ -1373,6 +1465,181 @@ static void test_shell_screenshot(void)
     printf("test_shell_screenshot: ok\n");
 }
 
+/* ---- desktop lock ------------------------------------------------------ */
+
+/* Test checker: accepts exactly "secret". */
+static int lock_check_test(void *ud, const char *password)
+{
+    (void)ud;
+    return password && strcmp(password, "secret") == 0;
+}
+
+/* Stub clock for the autolock timeout (deterministic). */
+static time_t g_fake_now;
+static time_t lock_fake_clock(void) { return g_fake_now; }
+
+static void test_shell_lock_screen(void)
+{
+    struct harness h;
+    harness_init(&h);
+
+    scene_shell_config cfg;
+    scene_shell_config_defaults(&cfg);
+    scene_shell *sh = scene_shell_new(h.cl, scene_compositor_store(h.cp),
+                                      h.cp, &cfg);
+    CHECK(sh != NULL);
+    scene_shell_set_lock_check(sh, lock_check_test, NULL);
+    CHECK_EQ(scene_shell_build(sh, 800, 600), 0);
+    tickf(&h);
+    scene_store *s = scene_compositor_store(h.cp);
+
+    /* desktop up, unlocked */
+    CHECK_EQ(scene_shell_locked(sh), 0);
+    CHECK_EQ(scene_compositor_locked(h.cp), 0);
+    CHECK_EQ(PX(h.cp, 400, 300), 0xFF1A1A2Eu);
+
+    /* Super+L engages the lock */
+    CHECK_EQ(scene_shell_handle_key(sh, SCENE_KEY_L, 1, SCENE_MOD_SUPER), 1);
+    tickf(&h);
+    CHECK_EQ(scene_shell_locked(sh), 1);
+    CHECK_EQ(scene_compositor_locked(h.cp), 1);
+
+    /* lock nodes: full-screen backdrop + title/pwd/hint labels */
+    scene_a11y_node an;
+    CHECK_EQ(scene_store_a11y_node(s, 61000, &an), 0);
+    CHECK_EQ(an.role, SCENE_ROLE_WINDOW);
+    CHECK(an.flags & SCENE_FLAG_VISIBLE);
+    CHECK_EQ(an.rect[2], 800);
+    CHECK_EQ(an.rect[3], 600);
+    CHECK_EQ(scene_store_a11y_node(s, 61001, &an), 0);
+    CHECK_EQ(an.role, SCENE_ROLE_LABEL);
+    CHECK_EQ(scene_store_a11y_node(s, 61002, &an), 0);
+    CHECK_EQ(scene_store_a11y_node(s, 61003, &an), 0);
+
+    /* the backdrop covers the desktop */
+    CHECK_EQ(PX(h.cp, 400, 300), 0xFF0A0A14u);
+
+    /* every key is consumed while locked (non-printables: they must
+     * not leak into the password buffer) */
+    CHECK_EQ(scene_shell_handle_key(sh, SCENE_KEY_TAB, 1, 0), 1);
+    CHECK_EQ(scene_shell_handle_key(sh, SCENE_KEY_UP, 1, 0), 1);
+    CHECK_EQ(scene_shell_handle_key(sh, SCENE_KEY_DOWN, 1, 0), 1);
+    CHECK_EQ(scene_shell_handle_key(sh, SCENE_KEY_LEFT, 1, 0), 1);
+    CHECK_EQ(scene_shell_handle_key(sh, SCENE_KEY_ESC, 1, 0), 1);
+    CHECK_EQ(scene_shell_handle_key(sh, 15, 1, SCENE_MOD_ALT), 1);
+
+    /* typed characters render as box-glyph dots; backspace edits */
+    CHECK_EQ(scene_shell_handle_key(sh, 31, 1, 0), 1);   /* 's' */
+    CHECK_EQ(scene_shell_handle_key(sh, 18, 1, 0), 1);   /* 'e' */
+    CHECK_EQ(scene_shell_handle_key(sh, 46, 1, 0), 1);   /* 'c' */
+    tickf(&h);
+    CHECK_EQ(scene_store_a11y_node(s, 61002, &an), 0);
+    CHECK_EQ(an.primary_text_len, 3u);
+    CHECK_EQ(an.primary_text[0], (char)0x7F);
+    CHECK_EQ(scene_shell_handle_key(sh, SCENE_KEY_BACKSPACE, 1, 0), 1);
+    tickf(&h);
+    CHECK_EQ(scene_store_a11y_node(s, 61002, &an), 0);
+    CHECK_EQ(an.primary_text_len, 2u);
+
+    /* wrong password: hint flips, still locked */
+    CHECK_EQ(scene_shell_handle_key(sh, SCENE_KEY_ENTER, 1, 0), 1);
+    tickf(&h);
+    CHECK_EQ(scene_shell_locked(sh), 1);
+    CHECK_EQ(scene_store_a11y_node(s, 61003, &an), 0);
+    CHECK_EQ(an.primary_text_len, 14u);
+    CHECK(memcmp(an.primary_text, "wrong password", 14) == 0);
+
+    /* correct password unlocks; nodes die; desktop returns */
+    scene_shell_handle_key(sh, 31, 1, 0);   /* s */
+    scene_shell_handle_key(sh, 18, 1, 0);   /* e */
+    scene_shell_handle_key(sh, 46, 1, 0);   /* c */
+    scene_shell_handle_key(sh, 19, 1, 0);   /* r */
+    scene_shell_handle_key(sh, 18, 1, 0);   /* e */
+    scene_shell_handle_key(sh, 20, 1, 0);   /* t */
+    CHECK_EQ(scene_shell_handle_key(sh, SCENE_KEY_ENTER, 1, 0), 1);
+    tickf(&h);
+    CHECK_EQ(scene_shell_locked(sh), 0);
+    CHECK_EQ(scene_compositor_locked(h.cp), 0);
+    CHECK(scene_store_a11y_node(s, 61000, &an) != 0);   /* gone */
+    CHECK_EQ(PX(h.cp, 400, 300), 0xFF1A1A2Eu);
+
+    /* lock is idempotent; empty password rejected by the checker */
+    scene_shell_lock(sh);
+    scene_shell_lock(sh);
+    CHECK_EQ(scene_shell_locked(sh), 1);
+    CHECK_EQ(scene_compositor_locked(h.cp), 1);
+    CHECK_EQ(scene_shell_handle_key(sh, SCENE_KEY_ENTER, 1, 0), 1);
+    tickf(&h);
+    CHECK_EQ(scene_shell_locked(sh), 1);
+
+    scene_shell_free(sh);
+    harness_destroy(&h);
+    printf("test_shell_lock_screen: ok\n");
+}
+
+static void test_shell_autolock(void)
+{
+    struct harness h;
+    harness_init(&h);
+
+    scene_shell_config cfg;
+    scene_shell_config_defaults(&cfg);
+    cfg.autolock_sec = 5;
+
+    /* the probe must be installed before scene_shell_new: the shell
+     * stamps last_activity from it at construction */
+    g_fake_now = 1000;
+    scene_shell_clock_probe = lock_fake_clock;
+    scene_shell *sh = scene_shell_new(h.cl, scene_compositor_store(h.cp),
+                                      h.cp, &cfg);
+    CHECK(sh != NULL);
+    scene_shell_set_lock_check(sh, lock_check_test, NULL);
+    CHECK_EQ(scene_shell_build(sh, 800, 600), 0);
+    tickf(&h);
+    CHECK_EQ(scene_shell_locked(sh), 0);
+
+    /* idle 4 s: still open */
+    g_fake_now = 1004;
+    scene_shell_tick(sh);
+    tickf(&h);
+    CHECK_EQ(scene_shell_locked(sh), 0);
+
+    /* idle 5 s: locked */
+    g_fake_now = 1005;
+    scene_shell_tick(sh);
+    tickf(&h);
+    CHECK_EQ(scene_shell_locked(sh), 1);
+    CHECK_EQ(scene_compositor_locked(h.cp), 1);
+    CHECK_EQ(PX(h.cp, 400, 300), 0xFF0A0A14u);
+
+    /* unlock at fake 1006: typing resets the idle clock */
+    g_fake_now = 1006;
+    scene_shell_handle_key(sh, 31, 1, 0);   /* s */
+    scene_shell_handle_key(sh, 18, 1, 0);   /* e */
+    scene_shell_handle_key(sh, 46, 1, 0);   /* c */
+    scene_shell_handle_key(sh, 19, 1, 0);   /* r */
+    scene_shell_handle_key(sh, 18, 1, 0);   /* e */
+    scene_shell_handle_key(sh, 20, 1, 0);   /* t */
+    CHECK_EQ(scene_shell_handle_key(sh, SCENE_KEY_ENTER, 1, 0), 1);
+    tickf(&h);
+    CHECK_EQ(scene_shell_locked(sh), 0);
+
+    /* last key at 1006: idle 4 s fine, 5 s locks again */
+    g_fake_now = 1010;
+    scene_shell_tick(sh);
+    tickf(&h);
+    CHECK_EQ(scene_shell_locked(sh), 0);
+    g_fake_now = 1011;
+    scene_shell_tick(sh);
+    tickf(&h);
+    CHECK_EQ(scene_shell_locked(sh), 1);
+
+    scene_shell_clock_probe = NULL;
+    scene_shell_free(sh);
+    harness_destroy(&h);
+    printf("test_shell_autolock: ok\n");
+}
+
 int main(void)
 {
     test_shell_build();
@@ -1403,6 +1670,9 @@ int main(void)
     test_shell_notify();
     test_shell_volume_btn();
     test_shell_screenshot();
+    test_shell_lock_screen();
+    test_shell_autolock();
+    test_shell_power_menu();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

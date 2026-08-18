@@ -56,7 +56,7 @@ static void msleep(unsigned m)
 
 /* ---- window layout --------------------------------------------------- */
 /* window (100,50,300,220): titlebar 32px, content (100,82,300,188). The
- * status LABEL (id = app base+5 = 40005) is a child of the CONTENT node
+ * status LABEL (id = app base+12 = 40012) is a child of the CONTENT node
  * at (104,88,284,16). */
 #define PHOTO_X 100
 #define PHOTO_Y 50
@@ -67,7 +67,7 @@ static void msleep(unsigned m)
  * for; nothing is pre-agreed or pre-seeded (the wire import replaced the
  * old ISO_PHOTO_PATH env pre-seed). */
 #define PHOTO_REF    2u
-#define PHOTO_STATUS 40005u
+#define PHOTO_STATUS 40012u
 
 static scene_app     *g_app;
 static FILE          *g_log;

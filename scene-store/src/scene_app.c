@@ -17,6 +17,8 @@ typedef struct app_window {
     scene_node_id titlebar_id;
     scene_node_id title_label_id;
     scene_node_id close_btn_id;
+    scene_node_id min_btn_id;
+    scene_node_id max_btn_id;
     scene_node_id content_id;
     int32_t       x, y, w, h;
     char          title[64];
@@ -37,6 +39,7 @@ struct scene_app {
     int32_t         wm_x0, wm_y0;  /* grab point (absolute)    */
     int32_t         wm_wx, wm_wy;  /* window rect at grab      */
     int32_t         wm_ww, wm_wh;
+    int32_t         scr_w, scr_h, scr_panel;  /* chrome maximize target */
 };
 
 /* ---- WM constants ----------------------------------------------------- */
@@ -65,11 +68,17 @@ static void layout_window(scene_app *app, app_window *win,
     scene_client_set_rect(app->cl, win->window_id, &r);
     r = (scene_rect){x, y, w, WM_TB_H};
     scene_client_set_rect(app->cl, win->titlebar_id, &r);
-    r = (scene_rect){x + 4, y + 4, w - 40, WM_TB_H - 8};
+    r = (scene_rect){x + 4, y + 4, w - 100, WM_TB_H - 8};
     scene_client_set_rect(app->cl, win->title_label_id, &r);
     r = (scene_rect){x + w - WM_CLOSE_OFF, y + WM_CLOSE_Y,
                      WM_CLOSE_W, WM_CLOSE_H};
     scene_client_set_rect(app->cl, win->close_btn_id, &r);
+    r = (scene_rect){x + w - WM_CLOSE_OFF - 28, y + WM_CLOSE_Y,
+                     WM_CLOSE_W, WM_CLOSE_H};
+    scene_client_set_rect(app->cl, win->max_btn_id, &r);
+    r = (scene_rect){x + w - WM_CLOSE_OFF - 56, y + WM_CLOSE_Y,
+                     WM_CLOSE_W, WM_CLOSE_H};
+    scene_client_set_rect(app->cl, win->min_btn_id, &r);
     r = (scene_rect){x, y + WM_TB_H, w, h - WM_TB_H};
     scene_client_set_rect(app->cl, win->content_id, &r);
     win->x = x;
@@ -127,10 +136,12 @@ static void wm_input_pointer(scene_app *app, int32_t x, int32_t y,
         else if (y >= win->y + win->h - WM_EDGE)
             mode = WM_RSIZE_H;
         else if (y < win->y + WM_TB_H) {
-            int32_t cx = win->x + win->w - WM_CLOSE_OFF;
-            int32_t cy = win->y + WM_CLOSE_Y;
-            if (!(x >= cx && x < cx + WM_CLOSE_W
-                  && y >= cy && y < cy + WM_CLOSE_H))
+            /* Chrome buttons (min/max/close) are actionable, not
+             * draggable: the whole button strip stays out of WM_MOVE. */
+            int32_t bx = win->x + win->w - WM_CLOSE_OFF - 56;
+            int32_t by = win->y + WM_CLOSE_Y;
+            if (!(x >= bx && x < bx + 80
+                  && y >= by && y < by + WM_CLOSE_H))
                 mode = WM_MOVE;
         }
         if (mode != WM_NONE) {
@@ -182,6 +193,26 @@ static void on_input_pointer(void *ud, uint64_t seq, uint8_t dev,
 static void on_input_activate(void *ud, uint64_t seq, scene_node_id id)
 {
     scene_app *app = (scene_app *)ud;
+    uint32_t i;
+
+    /* Central chrome handling: the minimize/maximize buttons are OS
+     * chrome, owned by the library. The app's activate callback never
+     * sees them; the flow gate is released here. The close button
+     * stays app-owned (the app destroys its own window). */
+    for (i = 0; i < app->win_count; i++) {
+        app_window *win = &app->wins[i];
+        if (win->min_btn_id == id) {
+            scene_app_minimize(app, win->content_id);
+            scene_client_ack(app->cl, seq);
+            return;
+        }
+        if (win->max_btn_id == id) {
+            scene_app_maximize(app, win->content_id,
+                               app->scr_w, app->scr_h, app->scr_panel);
+            scene_client_ack(app->cl, seq);
+            return;
+        }
+    }
     if (app->cbs && app->cbs->activate)
         app->cbs->activate(app->ud, seq, id);
 }
@@ -252,6 +283,9 @@ scene_app *scene_app_new_on(scene_transport *t, const char *target,
     app->cbs = cbs;
     app->ud = ud;
     app->next_id = APP_ID_BASE;
+    app->scr_w = 1280;
+    app->scr_h = 800;
+    app->scr_panel = 32;
     if (scene_client_connect(app->cl, t, target, &app_cbs, app) != 0) {
         scene_client_free(app->cl);
         free(app);
@@ -288,8 +322,10 @@ scene_node_id scene_app_create_window_role(scene_app *app,
     scene_node_id tb_id     = base + 1;
     scene_node_id label_id  = base + 2;
     scene_node_id close_id  = base + 3;
+    scene_node_id min_id    = base + 5;
+    scene_node_id max_id    = base + 6;
     scene_node_id content_id = base + 4;
-    app->next_id = base + 5;
+    app->next_id = base + 7;
 
     uint8_t vis = SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE;
     int32_t tb_h = 32;
@@ -309,7 +345,7 @@ scene_node_id scene_app_create_window_role(scene_app *app,
     /* TITLE_LABEL: text inside titlebar */
     scene_client_create_node(app->cl, tb_id, label_id,
                              SCENE_ROLE_LABEL,
-         &(scene_rect){x + 4, y + 4, w - 40, tb_h - 8}, vis);
+         &(scene_rect){x + 4, y + 4, w - 100, tb_h - 8}, vis);
     if (title && title[0])
         scene_client_set_text(app->cl, label_id, 0, title, (uint32_t)strlen(title));
 
@@ -318,6 +354,18 @@ scene_node_id scene_app_create_window_role(scene_app *app,
                              SCENE_ROLE_BUTTON,
          &(scene_rect){x + w - 28, y + 4, 24, 24}, vis);
     scene_client_set_text(app->cl, close_id, 0, "X", 1);
+
+    /* MIN_BUTTON: "_" left of maximize */
+    scene_client_create_node(app->cl, tb_id, min_id,
+                             SCENE_ROLE_BUTTON,
+         &(scene_rect){x + w - 84, y + 4, 24, 24}, vis);
+    scene_client_set_text(app->cl, min_id, 0, "_", 1);
+
+    /* MAX_BUTTON: box glyph left of close */
+    scene_client_create_node(app->cl, tb_id, max_id,
+                             SCENE_ROLE_BUTTON,
+         &(scene_rect){x + w - 56, y + 4, 24, 24}, vis);
+    scene_client_set_text(app->cl, max_id, 0, "\x7F", 1);
 
 /* CONTENT: app draws here */
     scene_client_create_node(app->cl, win_id, content_id,
@@ -330,6 +378,8 @@ scene_node_id scene_app_create_window_role(scene_app *app,
     win->titlebar_id  = tb_id;
     win->title_label_id = label_id;
     win->close_btn_id = close_id;
+    win->min_btn_id = min_id;
+    win->max_btn_id = max_id;
     win->content_id   = content_id;
     win->x = x;
     win->y = y;
@@ -456,11 +506,17 @@ int scene_app_maximize(scene_app *app, scene_node_id content_id,
     scene_rect tbr = {0, 0, win_w, tb_h};
     scene_client_set_rect(app->cl, win->titlebar_id, &tbr);
     /* Update TITLE_LABEL */
-    scene_rect lr = {4, 4, win_w - 40, tb_h - 8};
+    scene_rect lr = {4, 4, win_w - 100, tb_h - 8};
     scene_client_set_rect(app->cl, win->title_label_id, &lr);
     /* Update CLOSE_BUTTON */
     scene_rect cr = {win_w - 28, 4, 24, 24};
     scene_client_set_rect(app->cl, win->close_btn_id, &cr);
+    /* Update MAX_BUTTON */
+    scene_rect mr = {win_w - 56, 4, 24, 24};
+    scene_client_set_rect(app->cl, win->max_btn_id, &mr);
+    /* Update MIN_BUTTON */
+    scene_rect nr = {win_w - 84, 4, 24, 24};
+    scene_client_set_rect(app->cl, win->min_btn_id, &nr);
     /* Update CONTENT */
     scene_rect cor = {0, tb_h, win_w, win_h - tb_h};
     scene_client_set_rect(app->cl, win->content_id, &cor);
@@ -540,6 +596,16 @@ int scene_app_set_wm(scene_app *app, int on)
     if (!app) return -1;
     if (!on) app->wm_drag = 0;      /* abort any in-flight drag */
     app->wm_on = on ? 1 : 0;
+    return 0;
+}
+
+/* Remember the screen geometry for the central maximize chrome button. */
+int scene_app_set_screen(scene_app *app, int32_t w, int32_t h, int32_t panel_h)
+{
+    if (!app || w <= 0 || h <= 0 || panel_h < 0) return -1;
+    app->scr_w = w;
+    app->scr_h = h;
+    app->scr_panel = panel_h;
     return 0;
 }
 

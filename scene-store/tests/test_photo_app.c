@@ -25,7 +25,7 @@
  *      Expectations computed FROM the harness's own decoded buffer (the
  *      same bytes it registered) plus a tolerance sanity-check against
  *      the fixture's source colors (JPEG is lossy; ±6/channel). Status
- *      reads "ok" through the session store (node 40005), the label
+ *      reads "ok" through the session store (node 40012), the label
  *      geometry is exact, close → exit 0 → reap → desktop restored.
  *   2. test_photo_bad_image: nonexistent path — the importer cb fails,
  *      the server answers ok=0, the app joins, reports "bad image" via
@@ -36,7 +36,7 @@
  *
  * Effects off: identity paint, so expectations hold on the frame the
  * damage commits. All status assertions read the app session's store
- * directly (node 40005 texts) — no timing guesses.
+ * directly (node 40012 texts) — no timing guesses.
  */
 #include "scene_compositor.h"
 #include "scene_client.h"
@@ -88,7 +88,7 @@ static char *g_argv0;
 /* ---- shared constants (src/iso_photo.c) --------------------------------- */
 
 #define PHOTO_REF    2u        /* ref the app requests via 0x0017        */
-#define PHOTO_STATUS 40005u    /* app base+5 (scene_app APP_ID_BASE 40000)*/
+#define PHOTO_STATUS 40012u    /* app base+12 (clear of chrome) */
 #define PHOTO_X 100
 #define PHOTO_Y 50
 #define PHOTO_W 300
@@ -395,7 +395,7 @@ static int child_exit_code(struct harness *h)
 #endif
 }
 
-/* Status label text of the app session (node 40005, one text slot). */
+/* Status label text of the app session (node 40012, one text slot). */
 static int status_label(const struct harness *h, char *out, size_t cap)
 {
     scene_node_text_vis tv[4];

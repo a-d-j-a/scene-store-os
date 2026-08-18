@@ -146,6 +146,7 @@ struct scene_compositor {
     int           force;
     uint64_t      tick;
     int           effects_on;
+    int           locked;   /* desktop lock: only layer 0 paints/inputs    */
 
     scene_layer  *walk_ly;  /* scratch: the layer of the current walk      */
 
@@ -801,6 +802,7 @@ static void repaint_rect(scene_compositor *cp, const scene_rect *r)
     for (i = 0; i < cp->ly_count; i++) {
         scene_layer *ly = &cp->ly[i];
 
+        if (cp->locked && i > 0) continue;   /* locked: shell only */
         if (ly->dead) continue;
         cp->walk_ly = ly;
         scene_store_walk(ly->store, paint_cb, cp);
@@ -822,6 +824,7 @@ static void repaint_all(scene_compositor *cp)
     for (i = 0; i < cp->ly_count; i++) {
         scene_layer *ly = &cp->ly[i];
 
+        if (cp->locked && i > 0) continue;   /* locked: shell only */
         if (ly->dead) continue;
         cp->walk_ly = ly;
         scene_store_walk(ly->store, paint_cb, cp);
@@ -1589,6 +1592,13 @@ int scene_compositor_input_pointer(scene_compositor *cp, uint8_t device,
     uint32_t i;
 
     if (!cp) return -1;
+    /* Desktop lock: every event goes to the shell session (layer 0) so
+     * the lock screen owns clicks; app layers never see them.       */
+    if (cp->locked) {
+        cp->focus_layer = 0;
+        return scene_server_input_pointer(cp->ly[0].sv, device, x, y,
+                                          buttons);
+    }
     /* Hit-test app layers topmost first; the first session owning the
      * point receives the event and becomes the keyboard focus.       */
     for (i = cp->ly_count; i > 1; i--) {
@@ -1633,7 +1643,8 @@ int scene_compositor_input_key(scene_compositor *cp, uint32_t key_code,
         }
     }
     ly = &cp->ly[0];
-    if (cp->focus_layer < cp->ly_count && !cp->ly[cp->focus_layer].dead
+    if (!cp->locked && cp->focus_layer < cp->ly_count
+        && !cp->ly[cp->focus_layer].dead
         && !scene_server_dead(cp->ly[cp->focus_layer].sv))
         ly = &cp->ly[cp->focus_layer];
     return scene_server_input_key(ly->sv, key_code, state, modifiers);
@@ -1671,15 +1682,18 @@ int scene_compositor_frame(scene_compositor *cp)
         cp->damage[0].w = (int32_t)cp->fb.w;
         cp->damage[0].h = (int32_t)cp->fb.h;
         cp->damage_count = 1;
-        for (i = 0; i < cp->ly_count; i++)
+        for (i = 0; i < cp->ly_count; i++) {
+            if (cp->locked && i > 0) continue;
             cp->ly[i].rendered_seq =
                 scene_store_view_seq(cp->ly[i].store);
+        }
         return 0;
     }
 
     for (i = 0; i < cp->ly_count; i++) {
         scene_layer *ly = &cp->ly[i];
 
+        if (cp->locked && i > 0) continue;   /* locked: shell only */
         if (ly->dead) continue;
         if (scene_store_view_seq(ly->store) != ly->rendered_seq)
             any_change = 1;
@@ -1694,6 +1708,7 @@ int scene_compositor_frame(scene_compositor *cp)
     for (i = 0; i < cp->ly_count; i++) {
         scene_layer *ly = &cp->ly[i];
 
+        if (cp->locked && i > 0) continue;   /* locked: shell only */
         if (ly->dead) continue;
         seq = scene_store_view_seq(ly->store);
         if (seq != ly->rendered_seq) {
@@ -1706,6 +1721,7 @@ int scene_compositor_frame(scene_compositor *cp)
         for (i = 0; i < cp->ly_count; i++) {
             scene_layer *ly = &cp->ly[i];
 
+            if (cp->locked && i > 0) continue;   /* locked: shell only */
             if (ly->dead) continue;
             if (anim_replaying(ly))
                 anim_clear_all(cp, ly);   /* playback: no transients */
@@ -1723,8 +1739,10 @@ int scene_compositor_frame(scene_compositor *cp)
         scene_fb_clear(&cp->fb, cp->clear);
     for (d = 0; d < cp->damage_count; d++)
         repaint_rect(cp, &cp->damage[d]);
-    for (i = 0; i < cp->ly_count; i++)
+    for (i = 0; i < cp->ly_count; i++) {
+        if (cp->locked && i > 0) continue;   /* hidden layers stay synced */
         cp->ly[i].rendered_seq = scene_store_view_seq(cp->ly[i].store);
+    }
     return 0;
 }
 
@@ -1739,6 +1757,31 @@ void scene_compositor_set_effects(scene_compositor *cp, int on)
             anim_clear_all(cp, &cp->ly[i]);  /* returning to identity */
     }
     cp->effects_on = on;
+}
+
+void scene_compositor_set_locked(scene_compositor *cp, int on)
+{
+    uint32_t i;
+
+    if (!cp) return;
+    on = on ? 1 : 0;
+    if (cp->locked == on) return;
+    cp->locked = on;
+    cp->focus_layer = 0;
+    if (on && cp->effects_on) {
+        /* hidden layers must not keep running transitions: a window
+         * entering while locked would resume mid-fade on unlock. */
+        for (i = 1; i < cp->ly_count; i++)
+            anim_clear_all(cp, &cp->ly[i]);
+    }
+    /* unlock: app layers re-diff on the next frame — their rendered_seq
+     * was never bumped while hidden, so every change during the lock
+     * repaints. */
+}
+
+int scene_compositor_locked(const scene_compositor *cp)
+{
+    return cp ? cp->locked : 0;
 }
 
 uint64_t scene_compositor_tick(scene_compositor *cp)

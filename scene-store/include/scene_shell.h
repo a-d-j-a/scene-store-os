@@ -44,6 +44,7 @@ typedef struct scene_shell_config {
     uint32_t menu_item_color;     /* launcher item fill ARGB            */
     uint32_t menu_item_text;      /* launcher item text ARGB            */
     uint8_t  clock_12h;           /* 1 = 12-hour clock, 0 = 24-hour    */
+    uint32_t autolock_sec;        /* idle seconds before auto-lock (0=off) */
     char     launcher_apps[SCENE_SHELL_MAX_APPS][64];
     uint32_t launcher_app_count;
 
@@ -89,6 +90,15 @@ typedef void (*scene_shell_launch_fn)(void *ud, uint32_t idx,
 void scene_shell_set_launch_cb(scene_shell *sh, scene_shell_launch_fn fn,
                                void *ud);
 
+/* System menu actions (the two menu items below the launcher list). The
+ * host hooks this (ACPI poweroff / reboot); without a hook the shell
+ * shells out: system("poweroff &") / system("reboot &"). */
+#define SCENE_SHELL_ACTION_RESTART  0
+#define SCENE_SHELL_ACTION_POWEROFF 1
+typedef void (*scene_shell_power_fn)(void *ud, int action);
+void scene_shell_set_power_cb(scene_shell *sh, scene_shell_power_fn fn,
+                              void *ud);
+
 /* Network tray probe: fills the tray label text ("net" / "no net" /
  * "NA" on Windows). The shell calls it at most every 2 seconds and only
  * updates the label when the cached text changes. Tests set this to a
@@ -130,6 +140,28 @@ scene_node_id scene_shell_handle_pointer(scene_shell *sh, int32_t x, int32_t y,
  * Escape = close menu, Alt+Tab/Alt+Shift-Tab = task cycle.              */
 int scene_shell_handle_key(scene_shell *sh, uint32_t key_code,
                            uint8_t state, uint8_t modifiers);
+
+/* ---- desktop lock ------------------------------------------------------ */
+
+/* Password checker: returns 1 when `password` unlocks the desktop. The
+ * default checker reads the POSIX /etc/shadow (first user entry: empty
+ * hash = any password, "!"/"*" = locked account, else crypt compare;
+ * no shadow file = only the empty password unlocks). Windows builds
+ * have no checker by default — tests inject their own. */
+typedef int (*scene_shell_lock_check_fn)(void *ud, const char *password);
+void scene_shell_set_lock_check(scene_shell *sh, scene_shell_lock_check_fn fn,
+                                void *ud);
+
+/* Engage the desktop lock: builds the full-screen lock screen (shell
+ * nodes) and tells the compositor to hide app layers and route all
+ * input to the shell. Idempotent. Super+L does the same. */
+int scene_shell_lock(scene_shell *sh);
+/* 1 while the desktop is locked. */
+int scene_shell_locked(const scene_shell *sh);
+
+/* Clock probe for idle timing (autolock). NULL = time(NULL). Tests set
+ * a stub to make the timeout deterministic. */
+extern time_t (*scene_shell_clock_probe)(void);
 
 /* ---- notifications ---------------------------------------------------- */
 

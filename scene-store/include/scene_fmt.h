@@ -195,6 +195,7 @@ enum scene_errno {
 #define SCENE_KEY_DOWN      108u
 #define SCENE_KEY_C         46u    /* evdev; clipboard copy grab          */
 #define SCENE_KEY_V         47u    /* evdev; clipboard paste grab         */
+#define SCENE_KEY_L         38u    /* evdev; desktop lock grab (Super+L)  */
 #define SCENE_KEY_SYSRQ     99u    /* evdev; PrtSc screenshot grab        */
 
 /* ---- Limits (section 8), defaulted in WELCOME ------------------------ */
