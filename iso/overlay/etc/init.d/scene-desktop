@@ -30,6 +30,7 @@ if [ -x /usr/bin/iso-drm ]; then
             autolaunch=*) AUTOLAUNCH="$AUTOLAUNCH --autolaunch=${tok#autolaunch=}" ;;
             videoclip=*)  AUTOLAUNCH="$AUTOLAUNCH --videoclip=${tok#videoclip=}" ;;
             volume=*)     AUTOLAUNCH="$AUTOLAUNCH --volume=${tok#volume=}" ;;
+            installto=*)  AUTOLAUNCH="$AUTOLAUNCH --installto=${tok#installto=}" ;;
             iso-debug) AUTOLAUNCH="$AUTOLAUNCH --debug" ;;
         esac
     done

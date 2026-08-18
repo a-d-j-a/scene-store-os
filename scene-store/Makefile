@@ -14,7 +14,7 @@ else
   SOCKLIB =
 endif
 
-all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE) build/iso_demo$(EXE) build/test_video_app$(EXE) build/iso_video$(EXE) build/test_app_wm$(EXE) build/test_hostwm$(EXE) build/test_shellwm$(EXE) build/iso_play$(EXE) build/test_play_app$(EXE) build/iso_files$(EXE) build/test_files_app$(EXE) build/iso_photo$(EXE) build/test_photo_app$(EXE) build/test_searchoverlay$(EXE) build/iso_edit$(EXE) build/test_edit_app$(EXE) build/test_codec$(EXE)
+all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE) build/iso_demo$(EXE) build/test_video_app$(EXE) build/iso_video$(EXE) build/test_app_wm$(EXE) build/test_hostwm$(EXE) build/test_shellwm$(EXE) build/iso_play$(EXE) build/iso_install$(EXE) build/test_play_app$(EXE) build/iso_files$(EXE) build/test_files_app$(EXE) build/iso_photo$(EXE) build/test_photo_app$(EXE) build/test_searchoverlay$(EXE) build/iso_edit$(EXE) build/test_edit_app$(EXE) build/test_codec$(EXE)
 
 # Vendored ffmpeg static build (see third_party/ffmpeg/LICENSE.md for
 # the locked configure and the written adoption justification). The ISO
@@ -260,6 +260,14 @@ build/iso_play$(EXE): src/iso_play.c build/scene_fmt.o \
 	$(CC) $(CFLAGS) src/iso_play.c build/scene_fmt.o \
 		build/scene_store.o build/scene_transport.o build/scene_client.o \
 		build/scene_app.o $(SOCKLIB) -lm -o $@
+
+# First-party installer guest app (POSIX fdisk/mke2fs/mount/grub steps;
+# _WIN32 guards compile stub steps so Windows catches scene wiring errors)
+build/iso_install$(EXE): src/iso_install.c build/scene_fmt.o \
+	build/scene_transport.o build/scene_client.o build/scene_app.o | build
+	$(CC) $(CFLAGS) src/iso_install.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_app.o $(SOCKLIB) -o $@
 
 build/test_play_app$(EXE): tests/test_play_app.c build/scene_fmt.o \
 	build/scene_store.o build/scene_transport.o build/scene_client.o \

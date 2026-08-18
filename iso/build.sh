@@ -419,6 +419,7 @@ build_scene_store() {
     rm -f build/*.o
     make build/iso_drm build/iso_demo build/iso_terminal build/iso_video \
         build/iso_photo build/iso_files build/iso_edit build/iso_play \
+        build/iso_install \
         CC="$MUSL_GCC" \
         CFLAGS="-std=c11 -Wall -Wextra -O2 -Iinclude" \
         FFMPEG_DIR="$BUILDDIR/ffmpeg/out" || die "iso_drm build failed"
@@ -431,6 +432,7 @@ build_scene_store() {
     cp build/iso_files "$SYSROOT/usr/bin/iso-files"
     cp build/iso_edit "$SYSROOT/usr/bin/iso-edit"
     cp build/iso_play "$SYSROOT/usr/bin/iso-play"
+    cp build/iso_install "$SYSROOT/usr/bin/iso-install"
     cd -
     msg "scene-store done."
 }
@@ -548,7 +550,7 @@ menu_border=0xFF444466
 menu_item_color=0xFF2A2A4E
 menu_item_text=0xFFE8E8E8
 clock_12h=0
-launcher_apps=iso-terminal,iso-files,iso-demo,iso-video,iso-play
+launcher_apps=iso-terminal,iso-files,iso-demo,iso-video,iso-play,iso-install
 CONF
 
     # Package manager: official Alpine repositories + CA trust bundle
@@ -565,6 +567,20 @@ REPO
         mkdir -p "$R/etc/apk" "$R/etc/ssl"
         cp /etc/ssl/certs/ca-certificates.crt "$R/etc/apk/ca.pem"
         cp /etc/ssl/certs/ca-certificates.crt "$R/etc/ssl/cert.pem"
+    fi
+
+    # GRUB bootloader for the installed-disk mode (iso-install runs
+    # grub-install inside the guest; it needs /usr/sbin/grub-install +
+    # /usr/lib/grub/i386-pc in the ROOTFS, not the host). apk --root
+    # unpacks the grub + grub-bios packages into the rootfs. The install
+    # step is best-effort: without network the rootfs builds anyway and
+    # the installer reports "grub failed".
+    if command -v apk >/dev/null 2>&1; then
+        apk add --root "$R" grub grub-bios >/dev/null 2>&1 && \
+            msg "grub installed into rootfs" || \
+            echo "WARN: apk add --root grub failed (no network?)"
+    else
+        echo "WARN: no host apk; grub not installed into rootfs"
     fi
 
     # Overlay (hand-written boot scripts, may override the above)
@@ -586,8 +602,10 @@ build_initramfs() {
 
     # Full rootfs copy: busybox install + musl + kernel modules + /etc + /usr
     cp -a "$SYSROOT/." "$TMP/"
-    # Drop build-only artifacts
-    rm -rf "$TMP/usr/include" "$TMP/boot" "$TMP/usr/lib/pkgconfig" \
+    # Drop build-only artifacts. /boot is KEPT: the installer copies the
+    # live /boot onto the target disk, and a disk boot loads vmlinuz +
+    # initramfs from the disk's own /boot partition.
+    rm -rf "$TMP/usr/include" "$TMP/usr/lib/pkgconfig" \
            "$TMP/usr/share/man" 2>/dev/null || true
     # Static libs are build-time only; strip the shared ones (saves MB)
     find "$TMP/usr/lib" -name '*.a' -delete 2>/dev/null || true
@@ -622,8 +640,16 @@ done
 if [ -n "$PERSIST" ]; then
     case "$PERSIST" in
         auto)
+            # Installed disks (iso-install) carry a DOS label: prefer
+            # the first partition; whole-disk ext2 persist disks (the
+            # classic proof layout) have no partition and fall through.
             for cand in /dev/vda /dev/sda /dev/hda; do
-                [ -b "$cand" ] && { PERSIST="$cand"; break; }
+                [ -b "$cand" ] || continue
+                PERSIST="$cand"
+                for p in "${cand}1" "${cand}2" "${cand}3" "${cand}4"; do
+                    [ -b "$p" ] && { PERSIST="$p"; break; }
+                done
+                break
             done
             ;;
     esac

@@ -675,6 +675,11 @@ int main(int argc, char **argv)
             g_dbg = 1;
         } else if (strncmp(argv[i], "--videoclip=", 12) == 0) {
             g_imp_clip = argv[i] + 12;
+        } else if (strncmp(argv[i], "--installto=", 12) == 0) {
+            /* the installer's target disk (kernel cmdline installto=DEV) */
+            setenv("SCENE_INSTALL_TO", argv[i] + 12, 1);
+            fprintf(stderr, "iso-drm: installto=%s -> SCENE_INSTALL_TO\n",
+                    argv[i] + 12);
         } else if (strncmp(argv[i], "--volume=", 9) == 0) {
             g_volume_arg = argv[i] + 9;
         }
