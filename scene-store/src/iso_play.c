@@ -361,6 +361,9 @@ static int track_convert(uint32_t dst_rate, uint16_t dst_ch)
 static int    g_afd = -1;
 static uint32_t g_chunk;        /* period size in frames (from HW_PARAMS) */
 static uint32_t g_periods;
+static uint32_t g_pad_frames;   /* tail silence after the track, frames   */
+static uint32_t g_pad_written;  /* tail silence already queued            */
+static int16_t g_zero_pad[4096 * 2];   /* 2 rings of silence (16 KB BSS) */
 
 static int alsa_setup(void)
 {
@@ -532,21 +535,36 @@ static int alsa_write_pass(void)
     uint32_t left, n;
     size_t bytes, done;
     const uint8_t *p;
+    int draining = 0;
 
-    if (g_afd < 0) return -1;
-    if (g_pos >= g_frames) return 1;
-    left = g_frames - g_pos;
-    /* Prime: the first pass fills the WHOLE kernel buffer (periods *
-     * chunk = the negotiated ring) in one write, so QEMU's HDA engine
-     * never reads a half-populated BDL ring at startup (seen live:
-     * writes in 512-frame granules let the emulator mis-deliver one
-     * ring lap — replaying the buffer head — after the third period).
-     * The kernel's WRITEI accepts up to the buffer size in one call. */
-    n = (left < g_chunk || g_pos > 0)
-            ? (left < g_chunk ? left : g_chunk)
-            : (left < g_chunk * g_periods ? left : g_chunk * g_periods);
+    if (g_afd < 0) return 1;                 /* stream closed: done */
+    if (g_pos < g_frames) {
+        left = g_frames - g_pos;
+        /* Prime: the first pass fills the WHOLE kernel buffer (periods *
+         * chunk = the negotiated ring) in one write, so QEMU's HDA engine
+         * never reads a half-populated BDL ring at startup (seen live:
+         * writes in 512-frame granules let the emulator mis-deliver one
+         * ring lap — replaying the buffer head — after the third period).
+         * The kernel's WRITEI accepts up to the buffer size in one call. */
+        n = (left < g_chunk || g_pos > 0)
+                ? (left < g_chunk ? left : g_chunk)
+                : (left < g_chunk * g_periods ? left : g_chunk * g_periods);
+        p = (const uint8_t *)(g_samples + (size_t)g_pos * g_channels);
+    } else if (g_pad_written < g_pad_frames) {
+        /* Tail: keep the engine running with silence so QEMU's audio
+         * backend drains its internal pipeline into the wav capture
+         * (without data it holds the last ~1.2k frames forever; seen
+         * live: capture stopped 1238 frames before the track end).
+         * Then DRAIN and close — stream close flushes the emulator. */
+        n = g_chunk;
+        if (g_pad_written + n > g_pad_frames)
+            n = g_pad_frames - g_pad_written;
+        p = (const uint8_t *)g_zero_pad;
+        draining = g_pad_written + n >= g_pad_frames;
+    } else {
+        return 1;                            /* track + pad fully queued */
+    }
     bytes = (size_t)n * g_channels * 2u;
-    p = (const uint8_t *)(g_samples + (size_t)g_pos * g_channels);
     done = 0;
     while (done < bytes) {
         ssize_t w = write(g_afd, p + done, bytes - done);
@@ -564,16 +582,22 @@ static int alsa_write_pass(void)
         }
         done += (size_t)w;
     }
-    g_pos += n;
+    if (g_pos < g_frames) {
+        g_pos += n;
+        if (g_pad_frames == 0) g_pad_frames = g_chunk * g_periods * 2u;
+        if (g_pad_frames > sizeof(g_zero_pad) / sizeof(g_zero_pad[0]) / 2u)
+            g_pad_frames = sizeof(g_zero_pad) / sizeof(g_zero_pad[0]) / 2u;
+    } else {
+        g_pad_written += n;
+    }
     if (ioctl(g_afd, SNDRV_PCM_IOCTL_START) < 0 && errno != EBADFD)
         dlog("iso-play: start: %s\n", strerror(errno));
-    if (g_pos >= g_frames) {
+    if (draining) {
         /* play the queued tail out, then stop (DROP would cut it) */
         if (ioctl(g_afd, SNDRV_PCM_IOCTL_DRAIN) < 0)
             dlog("iso-play: drain: %s\n", strerror(errno));
         close(g_afd);
         g_afd = -1;
-        return 1;
     }
     return 0;
 }
