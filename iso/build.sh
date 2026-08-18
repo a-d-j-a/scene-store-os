@@ -569,18 +569,36 @@ REPO
         cp /etc/ssl/certs/ca-certificates.crt "$R/etc/ssl/cert.pem"
     fi
 
-    # GRUB bootloader for the installed-disk mode (iso-install runs
+    # GRUB bootloader for installed-disk mode (iso-install runs
     # grub-install inside the guest; it needs /usr/sbin/grub-install +
-    # /usr/lib/grub/i386-pc in the ROOTFS, not the host). apk --root
-    # unpacks the grub + grub-bios packages into the rootfs. The install
-    # step is best-effort: without network the rootfs builds anyway and
-    # the installer reports "grub failed".
+    # /usr/lib/grub/i386-pc IN the rootfs). Alpine's grub packages link
+    # musl and run on our rootfs; the host apk and the standalone static
+    # apk (for non-Alpine build hosts) both install with --root.
+    # Best-effort: without network the rootfs still builds and the
+    # installer reports "grub failed".
     if command -v apk >/dev/null 2>&1; then
         apk add --root "$R" grub grub-bios >/dev/null 2>&1 && \
-            msg "grub installed into rootfs" || \
-            echo "WARN: apk add --root grub failed (no network?)"
+            msg "grub installed into rootfs (host apk)" || \
+            echo "WARN: apk add --root grub failed"
+    elif command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
+        local APKVER
+        local URL="https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64"
+        APKVER=$(curl -fsSL "$URL/APKINDEX.tar.gz" | tar -xzO APKINDEX \
+            2>/dev/null | awk '/^P:apk-tools-static$/{p=1} p&&/^V:/{sub(/^V:/,"");print;exit}')
+        if [ -n "$APKVER" ] && \
+            curl -fsSL -o "$TOPDIR/apk-tools-static.apk" \
+                "$URL/apk-tools-static-$APKVER.apk" && \
+            tar -xzf "$TOPDIR/apk-tools-static.apk" -C "$TOPDIR" \
+                sbin/apk.static 2>/dev/null; then
+            "$TOPDIR/sbin/apk.static" --root "$R" --initdb add \
+                grub grub-bios >/dev/null 2>&1 && \
+                msg "grub installed into rootfs (apk.static)" || \
+                echo "WARN: apk.static add grub failed"
+        else
+            echo "WARN: apk.static fetch failed"
+        fi
     else
-        echo "WARN: no host apk; grub not installed into rootfs"
+        echo "WARN: no apk/curl; grub not installed into rootfs"
     fi
 
     # Overlay (hand-written boot scripts, may override the above)
