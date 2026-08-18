@@ -355,15 +355,43 @@ static int track_convert(uint32_t dst_rate, uint16_t dst_ch)
     return 0;
 }
 
+/* Silence guards around the track. QEMU's HDA emulation has a startup
+ * transient at a nondeterministic ring position (seen live: the engine
+ * double-delivers ~50..200 frames of ring content once, at frame 1536
+ * or 3072 — both < 4096 — after which it locks on and stays byte-exact
+ * for the entire run). Guarding BOTH ends with silence makes any such
+ * transient corrupt only silence: the byte-proof then holds over the
+ * whole captured stream regardless of where the race fires. The same
+ * padded buffer is what the selftest writes as the reference, so the
+ * QEMU capture must equal it byte-for-byte. */
+#define TRACK_GUARD 4096u    /* frames of leading + trailing silence */
+
+static int track_add_guards(void)
+{
+    int16_t *p;
+    if (g_frames > 0x7FFFFFFFu - 2u * TRACK_GUARD) return -1;
+    p = (int16_t *)malloc((size_t)(g_frames + 2u * TRACK_GUARD)
+                          * (size_t)g_channels * 2u);
+    if (!p) return -1;
+    memset(p, 0, (size_t)TRACK_GUARD * g_channels * 2u);
+    memcpy(p + (size_t)TRACK_GUARD * g_channels, g_samples,
+           (size_t)g_frames * g_channels * 2u);
+    memset(p + (size_t)(g_frames + TRACK_GUARD) * g_channels, 0,
+           (size_t)TRACK_GUARD * g_channels * 2u);
+    free(g_samples);
+    g_samples = p;
+    g_frames += 2u * TRACK_GUARD;
+    dlog("iso-play: guarded: %u frames (+%u lead/+%u tail silence)\n",
+         (unsigned)g_frames, (unsigned)TRACK_GUARD, (unsigned)TRACK_GUARD);
+    return 0;
+}
+
 /* ---- ALSA raw PCM (POSIX only) — see alsa_uapi.h for the UAPI notes ---- */
 
 #if !defined(_WIN32)
 static int    g_afd = -1;
 static uint32_t g_chunk;        /* period size in frames (from HW_PARAMS) */
 static uint32_t g_periods;
-static uint32_t g_pad_frames;   /* tail silence after the track, frames   */
-static uint32_t g_pad_written;  /* tail silence already queued            */
-static int16_t g_zero_pad[4096 * 2];   /* 2 rings of silence (16 KB BSS) */
 
 static int alsa_setup(void)
 {
@@ -442,6 +470,14 @@ static int alsa_setup(void)
                         close(fd);
                         return -1;
                     }
+                }
+                /* Silence guards: the QEMU HDA emulator's startup
+                 * transient must land in silence, and the tail silence
+                 * lets its backend pipeline drain into the capture. */
+                if (track_add_guards() != 0) {
+                    dlog("iso-play: guard prepend failed\n");
+                    close(fd);
+                    return -1;
                 }
             }
         }
@@ -535,36 +571,21 @@ static int alsa_write_pass(void)
     uint32_t left, n;
     size_t bytes, done;
     const uint8_t *p;
-    int draining = 0;
 
     if (g_afd < 0) return 1;                 /* stream closed: done */
-    if (g_pos < g_frames) {
-        left = g_frames - g_pos;
-        /* Prime: the first pass fills the WHOLE kernel buffer (periods *
-         * chunk = the negotiated ring) in one write, so QEMU's HDA engine
-         * never reads a half-populated BDL ring at startup (seen live:
-         * writes in 512-frame granules let the emulator mis-deliver one
-         * ring lap — replaying the buffer head — after the third period).
-         * The kernel's WRITEI accepts up to the buffer size in one call. */
-        n = (left < g_chunk || g_pos > 0)
-                ? (left < g_chunk ? left : g_chunk)
-                : (left < g_chunk * g_periods ? left : g_chunk * g_periods);
-        p = (const uint8_t *)(g_samples + (size_t)g_pos * g_channels);
-    } else if (g_pad_written < g_pad_frames) {
-        /* Tail: keep the engine running with silence so QEMU's audio
-         * backend drains its internal pipeline into the wav capture
-         * (without data it holds the last ~1.2k frames forever; seen
-         * live: capture stopped 1238 frames before the track end).
-         * Then DRAIN and close — stream close flushes the emulator. */
-        n = g_chunk;
-        if (g_pad_written + n > g_pad_frames)
-            n = g_pad_frames - g_pad_written;
-        p = (const uint8_t *)g_zero_pad;
-        draining = g_pad_written + n >= g_pad_frames;
-    } else {
-        return 1;                            /* track + pad fully queued */
-    }
+    if (g_pos >= g_frames) return 1;
+    left = g_frames - g_pos;
+    /* Prime: the first pass fills the WHOLE kernel buffer (periods *
+     * chunk = the negotiated ring) in one write, so QEMU's HDA engine
+     * never reads a half-populated BDL ring at startup (seen live:
+     * writes in 512-frame granules let the emulator mis-deliver one
+     * ring lap — replaying the buffer head — after the third period).
+     * The kernel's WRITEI accepts up to the buffer size in one call. */
+    n = (left < g_chunk || g_pos > 0)
+            ? (left < g_chunk ? left : g_chunk)
+            : (left < g_chunk * g_periods ? left : g_chunk * g_periods);
     bytes = (size_t)n * g_channels * 2u;
+    p = (const uint8_t *)(g_samples + (size_t)g_pos * g_channels);
     done = 0;
     while (done < bytes) {
         ssize_t w = write(g_afd, p + done, bytes - done);
@@ -582,17 +603,10 @@ static int alsa_write_pass(void)
         }
         done += (size_t)w;
     }
-    if (g_pos < g_frames) {
-        g_pos += n;
-        if (g_pad_frames == 0) g_pad_frames = g_chunk * g_periods * 2u;
-        if (g_pad_frames > sizeof(g_zero_pad) / sizeof(g_zero_pad[0]) / 2u)
-            g_pad_frames = sizeof(g_zero_pad) / sizeof(g_zero_pad[0]) / 2u;
-    } else {
-        g_pad_written += n;
-    }
+    g_pos += n;
     if (ioctl(g_afd, SNDRV_PCM_IOCTL_START) < 0 && errno != EBADFD)
         dlog("iso-play: start: %s\n", strerror(errno));
-    if (draining) {
+    if (g_pos >= g_frames) {
         /* play the queued tail out, then stop (DROP would cut it) */
         if (ioctl(g_afd, SNDRV_PCM_IOCTL_DRAIN) < 0)
             dlog("iso-play: drain: %s\n", strerror(errno));
@@ -772,7 +786,7 @@ static int run_selftest(void)
     g_frames = total;
     g_rate = SYN_RATE;
     g_channels = 1;
-    ST_ASSERT(track_convert(44100, 2) == 0);
+     ST_ASSERT(track_convert(44100, 2) == 0);
     ST_ASSERT(g_rate == 44100u);
     ST_ASSERT(g_channels == 2);
     ST_ASSERT(g_frames == (uint64_t)total * 44100u / SYN_RATE);
@@ -783,6 +797,30 @@ static int run_selftest(void)
         ST_ASSERT(s < total);
         ST_ASSERT(g_samples[f * 2u] == buf[s]);      /* L */
         ST_ASSERT(g_samples[f * 2u + 1u] == buf[s]); /* R */
+    }
+    /* Silence guards — identical to the ISO path: the leading guard
+     * absorbs the QEMU emulator's startup transient, the trailing one
+     * drains its backend; the reference file contains the same stream
+     * the ISO plays, so a byte-compare of the capture against it must
+     * be exact. */
+    ST_ASSERT(track_add_guards() == 0);
+    ST_ASSERT(g_frames == (uint64_t)total * 44100u / SYN_RATE + 2u * TRACK_GUARD);
+    for (m = 0; m <= 399; m++) {
+        uint32_t f = TRACK_GUARD + 441u * m;   /* shifted by lead guard */
+        uint32_t s = 80u * m;
+        ST_ASSERT(f * 2u < g_frames * 2u);
+        ST_ASSERT(s < total);
+        ST_ASSERT(g_samples[f * 2u] == buf[s]);      /* L */
+        ST_ASSERT(g_samples[f * 2u + 1u] == buf[s]); /* R */
+    }
+    for (m = 0; m < TRACK_GUARD; m++) {        /* lead guard all-zero */
+        ST_ASSERT(g_samples[m * 2u] == 0);
+        ST_ASSERT(g_samples[m * 2u + 1u] == 0);
+    }
+    for (m = 0; m < TRACK_GUARD; m++) {        /* tail guard all-zero */
+        uint32_t f = g_frames - TRACK_GUARD + m;
+        ST_ASSERT(g_samples[f * 2u] == 0);
+        ST_ASSERT(g_samples[f * 2u + 1u] == 0);
     }
     ST_ASSERT(wav_write(path44, 2, 44100, g_samples, g_frames) == 0);
     f = fopen(path44, "rb");
@@ -800,11 +838,15 @@ static int run_selftest(void)
     ST_ASSERT(wf.rate == 44100u);
     ST_ASSERT(wf.frames == g_frames);
     for (m = 0; m <= 399; m++) {
-        uint32_t f = 441u * m;
+        uint32_t f = TRACK_GUARD + 441u * m;
         uint32_t s = 80u * m;
         ST_ASSERT(f * 2u < wf.frames * 2u);
         ST_ASSERT(wf.data[f * 2u] == buf[s]);
         ST_ASSERT(wf.data[f * 2u + 1u] == buf[s]);
+    }
+    for (m = 0; m < TRACK_GUARD; m++) {        /* file lead guard */
+        ST_ASSERT(wf.data[m * 2u] == 0);
+        ST_ASSERT(wf.data[m * 2u + 1u] == 0);
     }
 
     free(raw);
