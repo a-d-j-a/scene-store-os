@@ -403,25 +403,30 @@ static int alsa_setup(void)
             /* The card may reject the track's own geometry (QEMU's
              * HDA emulation: 16000..96000 Hz, stereo only — seen live:
              * refine rate=16000..96000 ch=2..2 while SYN is 8k mono).
-             * Convert the track to the first supported rate >= its own
-             * and the first supported channel count >= its own. */
+             * Convert the track to a supported geometry. Prefer 44100:
+             * QEMU's -audiodev wav captures at its backend default
+             * (44100) and resamples any other guest rate via mixeng,
+             * which would make the capture differ from the selftest
+             * reference. If the card cannot do 44100, fall back to the
+             * first supported rate >= the track's own. */
             {
                 uint32_t want_r = g_rate, want_c = g_channels;
-                uint32_t r, k;
+                uint32_t r, k, rmin = hp.intervals[im].min,
+                                  rmax = hp.intervals[im].max;
 
-                if (want_r < hp.intervals[im].min ||
-                    want_r > hp.intervals[im].max) {
-                    r = hp.intervals[im].min;
+                if (g_rate != 44100u && 44100u >= rmin && 44100u <= rmax) {
+                    want_r = 44100u;
+                } else if (want_r < rmin || want_r > rmax) {
+                    r = rmin;
                     for (k = 0; k < 16; k++) {
                         uint32_t cand = r * (k + 1);
-                        if (cand > hp.intervals[im].max) break;
-                        if (cand >= g_rate &&
-                            cand >= hp.intervals[im].min) { r = cand; break; }
+                        if (cand > rmax) break;
+                        if (cand >= g_rate && cand >= rmin) { r = cand; break; }
                     }
-                    if (r < hp.intervals[im].min)
-                        r = hp.intervals[im].min;
-                    if (r > hp.intervals[im].max)
-                        r = hp.intervals[im].max;
+                    if (r < rmin)
+                        r = rmin;
+                    if (r > rmax)
+                        r = rmax;
                     want_r = r;
                 }
                 if (want_c < hp.intervals[ic].min)
@@ -666,7 +671,7 @@ static void on_key(void *ud, uint64_t seq, uint32_t key_code,
 static int run_selftest(void)
 {
     static const char *path = "build/test_tone.wav";
-    static const char *path16 = "build/test_tone16.wav";
+    static const char *path44 = "build/test_tone44.wav";
     uint32_t total = syn_frames();
     int16_t *buf = (int16_t *)malloc((size_t)total * 2u);
     FILE *f;
@@ -676,6 +681,7 @@ static int run_selftest(void)
     const char *err = NULL;
     static const uint32_t probes[] = {0, 50, 999, 1000, 1601, 20000, 31999};
     size_t pi;
+    uint32_t m;
 
     printf("iso_play --selftest\n");
     fflush(stdout);
@@ -716,14 +722,16 @@ static int run_selftest(void)
      * v = (0.75*0.6 + 0.25*sin(1.6*pi))*SYN_PEAK >= 0.2*SYN_PEAK > 0 */
     ST_ASSERT(buf[SYN_ATTACK * 2] != 0);
 
-    /* Track conversion: SYN (8k mono) -> the QEMU HDA codec geometry
-     * (16k stereo). Each output frame i reads source at fixed-point
-     * pos = i*8000*65536/16000 = i*32768: even i -> frac 0 (exact copy
-     * of src[i/2]), odd i -> frac 32768 (linear midpoint). With
-     * dst_ch=2 the samples land at out[2i] (L) and out[2i+1] (R).
-     * Written as test_tone16.wav — the byte-exact reference the ISO's
-     * QEMU audio capture is compared against (the codec stream must
-     * equal what we write). */
+    /* Track conversion: SYN (8k mono) -> the playback geometry the
+     * proof hardware (QEMU HDA + -audiodev wav) needs. QEMU's wav
+     * backend captures at its default 44100 and resamples any other
+     * guest rate via mixeng, so the app converts to 44100 stereo and
+     * the capture must equal what we write — this reference. Output
+     * frame i reads source at fixed-point pos = i*8000*65536/44100;
+     * exactly integral when i = 441*m (frac 0, exact copy of
+     * src[80*m]), so probes walk m = 0..399. Written as
+     * test_tone44.wav — the byte-exact reference the ISO capture is
+     * compared against. */
     /* Copy into the globals — track_convert frees g_samples, so buf
      * must stay independent for the comparisons below. */
     g_samples = (int16_t *)malloc((size_t)total * 2u);
@@ -732,25 +740,20 @@ static int run_selftest(void)
     g_frames = total;
     g_rate = SYN_RATE;
     g_channels = 1;
-    ST_ASSERT(track_convert(16000, 2) == 0);
-    ST_ASSERT(g_frames == total * 2u);
+    ST_ASSERT(track_convert(44100, 2) == 0);
+    ST_ASSERT(g_rate == 44100u);
     ST_ASSERT(g_channels == 2);
-    ST_ASSERT(g_rate == 16000u);
-    for (pi = 0; pi < sizeof(probes) / sizeof(probes[0]); pi++) {
-        uint32_t k = probes[pi];
-        ST_ASSERT(k < total);
-        ST_ASSERT(g_samples[k * 4u] == buf[k]);          /* even frame, L */
-        ST_ASSERT(g_samples[k * 4u + 1u] == buf[k]);     /* even frame, R */
-        if (k + 1 < total) {
-            int32_t mid = (int32_t)buf[k] +
-                          (int32_t)(((int64_t)((int32_t)buf[k + 1] -
-                                               (int32_t)buf[k]) * 32768LL) >> 16);
-            ST_ASSERT(g_samples[k * 4u + 2u] == (int16_t)mid);  /* odd, L */
-            ST_ASSERT(g_samples[k * 4u + 3u] == (int16_t)mid);  /* odd, R */
-        }
+    ST_ASSERT(g_frames == (uint64_t)total * 44100u / SYN_RATE);
+    for (m = 0; m <= 399; m++) {
+        uint32_t f = 441u * m;                 /* output frame */
+        uint32_t s = 80u * m;                  /* source frame  */
+        ST_ASSERT(f * 2u < g_frames * 2u);
+        ST_ASSERT(s < total);
+        ST_ASSERT(g_samples[f * 2u] == buf[s]);      /* L */
+        ST_ASSERT(g_samples[f * 2u + 1u] == buf[s]); /* R */
     }
-    ST_ASSERT(wav_write(path16, 2, 16000, g_samples, g_frames) == 0);
-    f = fopen(path16, "rb");
+    ST_ASSERT(wav_write(path44, 2, 44100, g_samples, g_frames) == 0);
+    f = fopen(path44, "rb");
     ST_ASSERT(f != NULL);
     fseek(f, 0, SEEK_END);
     sz = ftell(f);
@@ -762,13 +765,14 @@ static int run_selftest(void)
     fclose(f);
     ST_ASSERT(wav_parse(raw, (size_t)sz, &wf, &err) == 0);
     ST_ASSERT(wf.channels == 2);
-    ST_ASSERT(wf.rate == 16000u);
+    ST_ASSERT(wf.rate == 44100u);
     ST_ASSERT(wf.frames == g_frames);
-    for (pi = 0; pi < sizeof(probes) / sizeof(probes[0]); pi++) {
-        uint32_t k = probes[pi] * 4u;      /* frame 2k, L: file idx 4k */
-        ST_ASSERT(k < wf.frames * 2u);
-        ST_ASSERT(wf.data[k] == buf[probes[pi]]);
-        ST_ASSERT(wf.data[k + 1u] == buf[probes[pi]]);
+    for (m = 0; m <= 399; m++) {
+        uint32_t f = 441u * m;
+        uint32_t s = 80u * m;
+        ST_ASSERT(f * 2u < wf.frames * 2u);
+        ST_ASSERT(wf.data[f * 2u] == buf[s]);
+        ST_ASSERT(wf.data[f * 2u + 1u] == buf[s]);
     }
 
     free(raw);
