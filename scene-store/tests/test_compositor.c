@@ -207,6 +207,111 @@ static void op_ok(struct harness *h, int r, const char *what)
     checks++;
 }
 
+/* ---- multi-session harness (notification tests) ------------------------ */
+/* Layer 0 = shell session client, layer 1 = an app session: its own
+ * scene_server attached via scene_compositor_add_session, driven by a
+ * raw scene_client over its own loopback. Same per-frame cadence as the
+ * single-session harness (flush -> feed -> out-next -> pump, x4, then
+ * exactly one compositor frame).                                        */
+struct nh {
+    struct harness sh_ev;    /* shell client event records                */
+    struct harness ap_ev;    /* app client event records                  */
+    scene_compositor *cp;
+    scene_server     *sv1;   /* app session (owned by the compositor)     */
+    scene_loopback   *lb0, *lb1;
+    scene_transport  *ts0, *ts1;
+    scene_client     *cl0, *cl1;
+
+    int nf_count;            /* notification callback fires               */
+    int nf_layer[16];
+    scene_node_id nf_id[16];
+    uint32_t nf_len[16];
+    char nf_text[16][64];
+};
+
+static void cb_nf(void *ud, int layer, scene_node_id id, const char *text,
+                  uint32_t len)
+{
+    struct nh *h = (struct nh *)ud;
+    if (h->nf_count < 16) {
+        h->nf_layer[h->nf_count] = layer;
+        h->nf_id[h->nf_count] = id;
+        h->nf_len[h->nf_count] = len;
+        if (len < sizeof(h->nf_text[0])) {
+            memcpy(h->nf_text[h->nf_count], text ? text : "", len);
+            h->nf_text[h->nf_count][len] = 0;
+        }
+    }
+    h->nf_count++;
+}
+
+/* Drive both sessions' links, then exactly one compositor frame. */
+static void ntick(struct nh *h)
+{
+    int round;
+    for (round = 0; round < 4; round++) {
+        scene_client_flush(h->cl0);
+        scene_client_flush(h->cl1);
+        uint8_t buf[8192];
+        uint32_t got;
+        while (scene_transport_recv(h->ts0, buf, sizeof(buf), &got) == 0
+               && got)
+            if (scene_server_feed(scene_compositor_server(h->cp), buf, got)
+                != 0) break;
+        while (scene_transport_recv(h->ts1, buf, sizeof(buf), &got) == 0
+               && got)
+            if (scene_server_feed(h->sv1, buf, got) != 0) break;
+        const uint8_t *f;
+        uint32_t flen;
+        while (scene_server_out_next_frame(scene_compositor_server(h->cp),
+                                           &f, &flen) == 1)
+            scene_transport_send(h->ts0, f, flen);
+        while (scene_server_out_next_frame(h->sv1, &f, &flen) == 1)
+            scene_transport_send(h->ts1, f, flen);
+        scene_client_pump(h->cl0);
+        scene_client_pump(h->cl1);
+    }
+    CHECK_EQ(scene_compositor_frame(h->cp), 0);
+}
+
+static void nh_init(struct nh *h)
+{
+    memset(h, 0, sizeof(*h));
+    h->cp = scene_compositor_new(NULL, 800, 600);
+    CHECK(h->cp != NULL);
+
+    /* shell session (layer 0) on loopback 0 */
+    h->lb0 = scene_loopback_new();
+    h->ts0 = scene_loopback_server_end(h->lb0);
+    h->cl0 = scene_client_new();
+    scene_server_attach(scene_compositor_server(h->cp));
+    CHECK_EQ(scene_client_connect(h->cl0, scene_loopback_client_end(h->lb0),
+                                  "shell", &g_cbs, &h->sh_ev), 0);
+
+    /* app session (layer 1): its own server, compositor-attached */
+    h->lb1 = scene_loopback_new();
+    h->ts1 = scene_loopback_server_end(h->lb1);
+    h->sv1 = scene_server_new(NULL);
+    CHECK(h->sv1 != NULL);
+    CHECK_EQ(scene_compositor_add_session(h->cp, h->sv1), 1);
+    scene_server_attach(h->sv1);
+    h->cl1 = scene_client_new();
+    CHECK_EQ(scene_client_connect(h->cl1, scene_loopback_client_end(h->lb1),
+                                  "app", &g_cbs, &h->ap_ev), 0);
+    ntick(h);   /* handshake: both WELCOMEs delivered, emit guards open */
+}
+
+static void nh_free(struct nh *h)
+{
+    scene_client_free(h->cl1);  /* closes the app client-end transport */
+    scene_transport_close(h->ts1);
+    scene_loopback_free(h->lb1);
+    scene_client_free(h->cl0);
+    scene_transport_close(h->ts0);
+    scene_loopback_free(h->lb0);
+    scene_compositor_free(h->cp);   /* frees sv1 (take-ownership) */
+}
+
 /* Deterministic app scene through the wire (12 ops -> scene_seq 12).
  *  100 WINDOW (10,10,300,200) VISIBLE
  *  101 PANEL  (10,40,300,170) VISIBLE  parent 100
@@ -1155,6 +1260,254 @@ static void test_comp_input_text_and_wheel(void)
     printf("test_comp_input_text_and_wheel: ok\n");
 }
 
+/* OS toast source: NOTIFICATION-role nodes on app layers (>= 1) raise
+ * the cb once per NEW signature — create with text, later text change,
+ * empty text on create, destroy+recreate. Layer 0 (the shell session)
+ * never fires; other roles never fire; no callback = inert.           */
+static void test_comp_notify(void)
+{
+    struct nh h;
+    static const scene_rect r_toast = {10, 10, 200, 50};
+    static const scene_rect r_btn = {10, 70, 100, 30};
+
+    nh_init(&h);
+    scene_compositor_set_notify_cb(h.cp, cb_nf, (void *)&h);
+    CHECK_EQ(h.nf_count, 0);        /* handshake frame: nothing yet */
+
+    /* (a) notification WITH text in the app layer: exactly one fire */
+    op_ok(&h.ap_ev, scene_client_create_node(h.cl1, SCENE_NO_PARENT, 500,
+                                             SCENE_ROLE_NOTIFICATION,
+                                             &r_toast, SCENE_FLAG_VISIBLE),
+          "nf create 500");
+    op_ok(&h.ap_ev, scene_client_set_text(h.cl1, 500, 1, "New message", 12),
+          "nf text 500");
+    ntick(&h);
+    CHECK_EQ(h.nf_count, 1);
+    CHECK_EQ(h.nf_layer[0], 1);
+    CHECK_EQ(h.nf_id[0], 500);
+    CHECK_EQ(h.nf_len[0], 12);
+    CHECK(memcmp(h.nf_text[0], "New message", 12) == 0);
+
+    /* (b) unchanged frame: no re-fire */
+    ntick(&h);
+    CHECK_EQ(h.nf_count, 1);
+
+    /* (c) text change: exactly one new fire with the new text */
+    op_ok(&h.ap_ev, scene_client_set_text(h.cl1, 500, 1, "Message 2", 9),
+          "nf retitle 500");
+    ntick(&h);
+    CHECK_EQ(h.nf_count, 2);
+    CHECK_EQ(h.nf_layer[1], 1);
+    CHECK_EQ(h.nf_id[1], 500);
+    CHECK_EQ(h.nf_len[1], 9);
+    CHECK(memcmp(h.nf_text[1], "Message 2", 9) == 0);
+
+    /* (d) a BUTTON with text in the app layer: never fires */
+    op_ok(&h.ap_ev, scene_client_create_node(h.cl1, SCENE_NO_PARENT, 501,
+                                             SCENE_ROLE_BUTTON, &r_btn,
+                                             SCENE_FLAG_VISIBLE),
+          "nf btn 501");
+    op_ok(&h.ap_ev, scene_client_set_text(h.cl1, 501, 1, "Press", 5),
+          "nf btn text");
+    ntick(&h);
+    CHECK_EQ(h.nf_count, 2);
+
+    /* (e) a NOTIFICATION in layer 0 (the shell session): never fires,
+     * not on create, not on text change (the shell's own toast nodes
+     * must not loop) */
+    op_ok(&h.sh_ev, scene_client_create_node(h.cl0, SCENE_NO_PARENT, 900,
+                                             SCENE_ROLE_NOTIFICATION,
+                                             &r_toast, SCENE_FLAG_VISIBLE),
+          "nf shell 900");
+    op_ok(&h.sh_ev, scene_client_set_text(h.cl0, 900, 1, "shell toast", 11),
+          "nf shell text");
+    ntick(&h);
+    CHECK_EQ(h.nf_count, 2);
+    op_ok(&h.sh_ev, scene_client_set_text(h.cl0, 900, 1, "changed", 7),
+          "nf shell retitle");
+    ntick(&h);
+    CHECK_EQ(h.nf_count, 2);
+
+    /* (f) notification created with EMPTY text fires once, len 0; text
+     * set in a later batch fires again with the new text */
+    op_ok(&h.ap_ev, scene_client_create_node(h.cl1, SCENE_NO_PARENT, 502,
+                                             SCENE_ROLE_NOTIFICATION,
+                                             &r_toast, SCENE_FLAG_VISIBLE),
+          "nf empty 502");
+    ntick(&h);
+    CHECK_EQ(h.nf_count, 3);
+    CHECK_EQ(h.nf_id[2], 502);
+    CHECK_EQ(h.nf_len[2], 0);
+    op_ok(&h.ap_ev, scene_client_set_text(h.cl1, 502, 1, "Late", 4),
+          "nf late text");
+    ntick(&h);
+    CHECK_EQ(h.nf_count, 4);
+    CHECK_EQ(h.nf_id[3], 502);
+    CHECK_EQ(h.nf_len[3], 4);
+    CHECK(memcmp(h.nf_text[3], "Late", 4) == 0);
+
+    /* (g) destroy + recreate: the fresh model entry is a new signature */
+    op_ok(&h.ap_ev, scene_client_destroy_node(h.cl1, 500), "nf destroy 500");
+    ntick(&h);
+    CHECK_EQ(h.nf_count, 4);
+    op_ok(&h.ap_ev, scene_client_create_node(h.cl1, SCENE_NO_PARENT, 503,
+                                             SCENE_ROLE_NOTIFICATION,
+                                             &r_toast, SCENE_FLAG_VISIBLE),
+          "nf recreate 503");
+    op_ok(&h.ap_ev, scene_client_set_text(h.cl1, 503, 1, "Again", 5),
+          "nf recreate text");
+    ntick(&h);
+    CHECK_EQ(h.nf_count, 5);
+    CHECK_EQ(h.nf_layer[4], 1);
+    CHECK_EQ(h.nf_id[4], 503);
+    CHECK(memcmp(h.nf_text[4], "Again", 5) == 0);
+
+    /* no callback registered: the feature is inert */
+    scene_compositor_set_notify_cb(h.cp, NULL, NULL);
+    op_ok(&h.ap_ev, scene_client_set_text(h.cl1, 503, 1, "Silent", 6),
+          "nf silent");
+    ntick(&h);
+    CHECK_EQ(h.nf_count, 5);
+
+    nh_free(&h);
+    printf("test_comp_notify: ok\n");
+}
+
+/* Screenshot service: the last committed frame is written as a 24-bit
+ * BGR BMP (bottom-up rows, 4-byte stride, zeroed padding). The file is
+ * read back and every header field plus the full pixel area is asserted
+ * byte-exact; the top-left pixel's channels are probed by hand (clear
+ * 0xFF112233 -> bytes 0x33, 0x22, 0x11) so a channel swap can never be
+ * self-consistent between writer and verifier.                        */
+static void test_comp_capture_bmp(void)
+{
+    struct harness h;
+    static const scene_rect r_win = {10, 10, 40, 40};
+    const scene_fb *fb;
+    uint8_t *file = NULL;
+    uint8_t *want = NULL;
+    uint32_t row_bytes, fsize, y, x;
+    long sz;
+    FILE *f;
+
+    harness_init(&h);
+    tickf(&h);
+    /* distinct-channel clear + odd width (800*3 % 4 == 0, 801*3 % 4 == 3:
+     * the padded-stride path is exercised) */
+    scene_compositor_set_clear(h.cp, 0xFF112233u);
+    scene_compositor_resize(h.cp, 801, 600);
+    tickf(&h);
+    CHECK_EQ(PX(h.cp, 0, 0), 0xFF112233u);
+    CHECK_EQ(PX(h.cp, 800, 599), 0xFF112233u);
+    /* one window so rows differ */
+    op_ok(&h, scene_client_create_node(h.cl, SCENE_NO_PARENT, 100,
+                                       SCENE_ROLE_WINDOW, &r_win,
+                                       SCENE_FLAG_VISIBLE), "cap win");
+    tickf(&h);
+    CHECK_EQ(PX(h.cp, 20, 20), 0xFF202020u);
+    CHECK_EQ(PX(h.cp, 0, 0), 0xFF112233u);
+
+    /* parameter / I/O failure paths */
+    CHECK_EQ(scene_compositor_capture_bmp(NULL, "build/shot_comp_test.bmp"),
+             -1);
+    CHECK_EQ(scene_compositor_capture_bmp(h.cp, NULL), -1);
+    CHECK_EQ(scene_compositor_capture_bmp(h.cp, "build/no_dir_zz/s.bmp"),
+             -1);
+
+    fb = scene_compositor_fb(h.cp);
+    row_bytes = ((fb->w * 3u + 3u) / 4u) * 4u;
+    fsize = 54u + row_bytes * fb->h;
+    CHECK_EQ(fb->w * 3u % 4u, 3u);   /* the padding path is live */
+    CHECK_EQ(scene_compositor_capture_bmp(h.cp, "build/shot_comp_test.bmp"),
+             0);
+
+    f = fopen("build/shot_comp_test.bmp", "rb");
+    CHECK(f != NULL);
+    if (!f) goto done;
+    if (fseek(f, 0, SEEK_END) != 0) goto done;
+    sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    CHECK_EQ((uint64_t)sz, (uint64_t)fsize);
+    if (sz != (long)fsize) {
+        fclose(f);
+        goto done;
+    }
+    file = malloc((size_t)fsize);
+    CHECK(file != NULL);
+    if (!file) {
+        fclose(f);
+        goto done;
+    }
+    CHECK_EQ(fread(file, 1, (size_t)fsize, f), (size_t)fsize);
+    fclose(f);
+
+    /* 14-byte BITMAPFILEHEADER */
+    CHECK_EQ(file[0], 'B');
+    CHECK_EQ(file[1], 'M');
+    CHECK_EQ(scene_get_u32(file + 2), fsize);       /* bfSize */
+    CHECK_EQ(scene_get_u16(file + 6), 0);           /* bfReserved1 */
+    CHECK_EQ(scene_get_u16(file + 8), 0);           /* bfReserved2 */
+    CHECK_EQ(scene_get_u32(file + 10), 54);         /* bfOffBits */
+    /* 40-byte BITMAPINFOHEADER */
+    CHECK_EQ(scene_get_u32(file + 14), 40);         /* biSize */
+    CHECK_EQ(scene_get_u32(file + 18), fb->w);      /* biWidth */
+    CHECK_EQ(scene_get_u32(file + 22), fb->h);      /* biHeight: bottom-up */
+    CHECK_EQ(scene_get_u16(file + 26), 1);          /* biPlanes */
+    CHECK_EQ(scene_get_u16(file + 28), 24);         /* biBitCount */
+    CHECK_EQ(scene_get_u32(file + 30), 0);          /* biCompression */
+    CHECK_EQ(scene_get_u32(file + 34), row_bytes * fb->h); /* biSizeImage */
+    CHECK_EQ(scene_get_u32(file + 38), 0);          /* biXPelsPerMeter */
+    CHECK_EQ(scene_get_u32(file + 42), 0);          /* biYPelsPerMeter */
+    CHECK_EQ(scene_get_u32(file + 46), 0);          /* biClrUsed */
+    CHECK_EQ(scene_get_u32(file + 50), 0);          /* biClrImportant */
+
+    /* hand-probed channels: fb (0,0) = 0xFF112233 sits at the BOTTOM
+     * image row (biHeight positive = bottom-up) as bytes 0x33,0x22,0x11 */
+    {
+        uint32_t off = (fb->h - 1u) * row_bytes;
+        CHECK_EQ(file[54u + off + 0], 0x33u);
+        CHECK_EQ(file[54u + off + 1], 0x22u);
+        CHECK_EQ(file[54u + off + 2], 0x11u);
+    }
+    /* window interior pixel (20,20) = 0xFF202020 in its image row */
+    {
+        uint32_t off = (fb->h - 1u - 20u) * row_bytes + 20u * 3u;
+        CHECK_EQ(file[54u + off + 0], 0x20u);
+        CHECK_EQ(file[54u + off + 1], 0x20u);
+        CHECK_EQ(file[54u + off + 2], 0x20u);
+    }
+
+    /* full pixel-area scan: bottom-up rows, BGR bytes, zeroed padding */
+    want = malloc((size_t)row_bytes * fb->h);
+    CHECK(want != NULL);
+    if (!want) {
+        free(file);
+        goto done;
+    }
+    for (y = 0; y < fb->h; y++) {
+        const uint32_t *src = fb->px + (fb->h - 1u - y) * fb->pitch;
+        uint8_t *p = want + (size_t)y * row_bytes;
+        for (x = 0; x < fb->w; x++) {
+            uint32_t px = src[x];
+            p[0] = (uint8_t)(px & 0xFFu);         /* B */
+            p[1] = (uint8_t)((px >> 8) & 0xFFu);  /* G */
+            p[2] = (uint8_t)((px >> 16) & 0xFFu); /* R */
+            p += 3;
+        }
+        if (fb->w * 3u < row_bytes)
+            memset(p, 0, row_bytes - fb->w * 3u);
+    }
+    CHECK(memcmp(file + 54, want, (size_t)row_bytes * fb->h) == 0);
+    /* one odd-width row's stride padding byte, probed directly */
+    CHECK_EQ(want[1u * row_bytes + fb->w * 3u], 0);
+
+    free(want);
+    free(file);
+done:
+    harness_free(&h);
+    printf("test_comp_capture_bmp: ok\n");
+}
+
 int main(void)
 {
     test_comp_empty_and_force();
@@ -1175,6 +1528,8 @@ int main(void)
     test_comp_key_input();
     test_comp_key_flow_control();
     test_comp_input_text_and_wheel();
+    test_comp_notify();
+    test_comp_capture_bmp();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -136,6 +136,11 @@ struct scene_compositor {
                                 Super+V pastes as INPUT_TEXT)             */
     uint32_t      clip_len;
 
+    /* OS toast source: called once per new NOTIFICATION-role signature
+     * on app layers (>= 1) during the render-model diff. NULL = inert. */
+    scene_compositor_notify_fn notify_cb;
+    void           *notify_ud;
+
     scene_fb      fb;
     uint32_t      clear;
     int           force;
@@ -156,7 +161,7 @@ struct scene_compositor {
 };
 
 /* ---- Role default styles (the OS's dark look seed; server-owned) ----- */
-static const scene_style role_defaults[32] = {
+static const scene_style role_defaults[33] = {
     /* GENERIC    */ {0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0, 0, 0, 0},
     /* WINDOW     */ {0xFF202020u, 0x00000000u, 0xFFFFFFFFu, 0, 0, 0, 8},
     /* PANEL      */ {0xFF2A2A2Au, 0x00000000u, 0xFFFFFFFFu, 0, 0, 0, 4},
@@ -189,6 +194,7 @@ static const scene_style role_defaults[32] = {
     /* SELECTION  */ {0x00000000u, 0x00000000u, 0xFFFFFFFFu, 0, 0, 0, 0},
     /* CURSOR     */ {0xFFCCCCCCu, 0x00000000u, 0xFF0C0C0Cu, 0, 0, 0, 0},
     /* LINK       */ {0x00000000u, 0x00000000u, 0xFF66B2FFu, 0, 0, 0, 0},
+    /* NOTIF      */ {0xFF1E2740u, 0xFF3B5B8Cu, 0xFFFFFFFFu, 1, 0, 0, 4},
 };
 
 /* ---- Damage list ----------------------------------------------------- */
@@ -825,6 +831,11 @@ static void repaint_all(scene_compositor *cp)
 
 /* ---- Diff walk (per layer) ------------------------------------------- */
 
+/* OS toast source: defined below with the OS services (it reads the
+ * layer's store texts; see the comment at its definition).            */
+static void notify_fire(scene_compositor *cp, scene_layer *ly,
+                        scene_node_id id);
+
 static int diff_cb(scene_node_id id, void *out)
 {
     scene_compositor *cp = out;
@@ -850,6 +861,11 @@ static int diff_cb(scene_node_id id, void *out)
         rn->sig = text_sig(ly, id);
         memcpy(rn->rect, v.rect, sizeof(rn->rect));
         rn_text_capture(ly, rn, id);
+        /* A notification node first entering a layer's model raises the
+         * OS toast once (texts read at diff time: a create + set_text in
+         * the same ingested batch fires one cb with the final text).    */
+        if (v.role == SCENE_ROLE_NOTIFICATION)
+            notify_fire(cp, ly, id);
         if (cp->effects_on && !anim_replaying(ly)
             && (v.flags & SCENE_FLAG_VISIBLE)
             && v.rect[2] > 0 && v.rect[3] > 0) {
@@ -886,8 +902,14 @@ static int diff_cb(scene_node_id id, void *out)
             }
         }
     }
-    if (rn->sig != sig)
+    if (rn->sig != sig) {
         rn_text_capture(ly, rn, id);
+        /* A notification whose text signature moved raises the toast
+         * once with the new text (the model role is the dedupe; the
+         * signature was just moved, so an unchanged frame never fires). */
+        if (rn->role == SCENE_ROLE_NOTIFICATION)
+            notify_fire(cp, ly, id);
+    }
 
     /* Damage the old and/or new rect exactly as needed: a content-only
      * change (same rect) damages once; a move damages old+new.        */
@@ -1190,6 +1212,116 @@ void scene_compositor_set_clear(scene_compositor *cp, uint32_t color)
     if (cp->clear == color) return;
     cp->clear = color;
     cp->force = 1;
+}
+
+/* ---- Notifications (OS toast source) ---------------------------------- */
+/* An app marks a node SCENE_ROLE_NOTIFICATION (with text) to raise an
+ * OS toast. The diff sites call this exactly once per NEW signature: at
+ * the render-model add site (node first seen) and at the text-signature
+ * change site. Layer 0 (the shell session) is excluded — the shell's
+ * own toast nodes must not loop back into the cb. The text pointer is
+ * the store's text storage, valid only during the call (the engine
+ * committed the batch before the frame, so it is stable here); the cb
+ * must copy what it needs.
+ * Firing reads the texts at the moment of the diff: a node created and
+ * given text in the same ingested batch fires ONE cb with the final
+ * text, not two. Empty text still fires once (len 0, text may be
+ * NULL).                                                               */
+static void notify_fire(scene_compositor *cp, scene_layer *ly,
+                        scene_node_id id)
+{
+    scene_node_text_vis t;
+    const char *text;
+    uint32_t len;
+    int n;
+
+    if (!cp->notify_cb) return;
+    if (ly == cp->ly) return;          /* layer 0 (shell) never fires   */
+    n = scene_store_node_texts(ly->store, id, &t, 1);
+    if (n > 0) {
+        text = t.data;
+        len = t.len;
+    } else {
+        text = NULL;
+        len = 0;
+    }
+    cp->notify_cb(cp->notify_ud, (int)(ly - cp->ly), id, text, len);
+}
+
+void scene_compositor_set_notify_cb(scene_compositor *cp,
+                                    scene_compositor_notify_fn fn, void *ud)
+{
+    if (!cp) return;
+    cp->notify_cb = fn;
+    cp->notify_ud = ud;
+}
+
+/* ---- Screenshot (OS service) ------------------------------------------ */
+/* Write the current framebuffer as a 24-bit BMP: 14-byte BITMAPFILE-
+ * HEADER ("BM", bfSize = 54 + row_bytes*h, bfOffBits = 54), 40-byte
+ * BITMAPINFOHEADER (biWidth/biHeight, positive height = bottom-up rows,
+ * biPlanes 1, biBitCount 24, biCompression 0, biSizeImage = row_bytes*h)
+ * and the pixel rows bottom-up, each row BGR with the stride padded to
+ * a multiple of 4 (padding zeroed: the file is byte-deterministic). No
+ * repaint happens — the capture reflects the last committed frame.     */
+int scene_compositor_capture_bmp(scene_compositor *cp, const char *path)
+{
+    const scene_fb *fb;
+    uint8_t hdr[54];
+    uint8_t *row = NULL;
+    uint32_t row_bytes, w, h, y;
+    FILE *f = NULL;
+    int rc = -1;
+
+    if (!cp || !path) return -1;
+    fb = &cp->fb;
+    w = fb->w;
+    h = fb->h;
+    if (w == 0 || h == 0) return -1;
+    row_bytes = ((w * 3u + 3u) / 4u) * 4u;
+
+    memset(hdr, 0, sizeof(hdr));
+    hdr[0] = 'B';
+    hdr[1] = 'M';
+    scene_put_u32(hdr + 2, 54u + row_bytes * h);   /* bfSize            */
+    scene_put_u16(hdr + 6, 0u);                    /* bfReserved1       */
+    scene_put_u16(hdr + 8, 0u);                    /* bfReserved2       */
+    scene_put_u32(hdr + 10, 54u);                  /* bfOffBits         */
+    scene_put_u32(hdr + 14, 40u);                  /* biSize            */
+    scene_put_u32(hdr + 18, w);                    /* biWidth           */
+    scene_put_u32(hdr + 22, h);                    /* biHeight: bottom-up */
+    scene_put_u16(hdr + 26, 1u);                   /* biPlanes          */
+    scene_put_u16(hdr + 28, 24u);                  /* biBitCount        */
+    scene_put_u32(hdr + 30, 0u);                   /* biCompression     */
+    scene_put_u32(hdr + 34, row_bytes * h);        /* biSizeImage       */
+
+    row = malloc(row_bytes);
+    if (!row) return -1;
+    f = fopen(path, "wb");
+    if (!f) goto out;
+    if (fwrite(hdr, 1, sizeof(hdr), f) != sizeof(hdr)) goto out;
+    for (y = 0; y < h; y++) {
+        const uint32_t *src = fb->px + (h - 1u - y) * fb->pitch;
+        uint8_t *p = row;
+        uint32_t x;
+
+        for (x = 0; x < w; x++) {
+            uint32_t px = src[x];
+
+            p[0] = (uint8_t)px;               /* R 0xAARRGGBB -> B      */
+            p[1] = (uint8_t)(px >> 8);        /* G                      */
+            p[2] = (uint8_t)(px >> 16);       /* R                      */
+            p += 3;
+        }
+        if (w * 3u < row_bytes)               /* pad: zeroed, so the    */
+            memset(p, 0, row_bytes - w * 3u); /* file is deterministic  */
+        if (fwrite(row, 1, row_bytes, f) != row_bytes) goto out;
+    }
+    rc = 0;
+out:
+    if (f) fclose(f);
+    free(row);
+    return rc;
 }
 
 static int register_tex_at(scene_compositor *cp, scene_layer *ly,

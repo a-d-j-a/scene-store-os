@@ -423,6 +423,11 @@ static void cb_session_added(void *ud, int layer, uint32_t pid)
     ctx *c = ud;
     scene_server *sv;
     fprintf(stderr, "iso-drm: app %u joined layer %d\n", pid, layer);
+    if (c->sh) {
+        char body[64];
+        snprintf(body, sizeof(body), "app %u joined layer %d", pid, layer);
+        scene_shell_notify(c->sh, "app joined", body);
+    }
     g_imp_cp = c->cp;
     g_imp_store = scene_compositor_layer_store(c->cp, layer);
     g_imp_layer = layer;
@@ -439,8 +444,13 @@ static void cb_session_added(void *ud, int layer, uint32_t pid)
 
 static void cb_session_exited(void *ud, int layer, uint32_t pid)
 {
-    (void)ud;
+    ctx *c = ud;
     fprintf(stderr, "iso-drm: app %u exited layer %d\n", pid, layer);
+    if (c->sh) {
+        char body[64];
+        snprintf(body, sizeof(body), "app %u exited layer %d", pid, layer);
+        scene_shell_notify(c->sh, "app exited", body);
+    }
     g_imp_store = NULL;
     g_imp_layer = -1;
 }
@@ -467,6 +477,7 @@ static void cb_launch(void *ud, uint32_t idx, const char *name)
 #define MAX_AUTOLAUNCH 4
 static const char *g_autolaunch[MAX_AUTOLAUNCH];
 static int g_autolaunch_n;
+static const char *g_volume_arg;   /* --volume=NN: initial OS volume     */
 
 static void autolaunch_each(ctx *c)
 {
@@ -578,6 +589,13 @@ static void key_event(ctx *c, uint16_t code, int32_t value)
         if (scene_shell_handle_key(c->sh, code, state, 0))
             return;
     }
+    if (c->sh && mods == 0 && code == KEY_SYSRQ) {
+        /* PrtSc: the OS screenshot key, focus-independent (it is a
+         * system key like the Super+S grab — apps never type it). The
+         * shell captures the fb and raises a toast. */
+        if (scene_shell_handle_key(c->sh, code, state, 0))
+            return;
+    }
     scene_compositor_input_key(c->cp, code, state, mods);
     (void)old;
 }
@@ -608,6 +626,24 @@ int main(int argc, char **argv)
             g_dbg = 1;
         } else if (strncmp(argv[i], "--videoclip=", 12) == 0) {
             g_imp_clip = argv[i] + 12;
+        } else if (strncmp(argv[i], "--volume=", 9) == 0) {
+            g_volume_arg = argv[i] + 9;
+        }
+    }
+
+    /* OS volume: publish the initial volume to the file the audio app
+     * polls (0..100; absent = 100). The shell's panel volume button
+     * writes the same file at runtime — same contract, one writer at
+     * a time, small atomic-ish writes, polled reads. */
+    if (g_volume_arg) {
+        FILE *vf = fopen("/run/scene-volume", "w");
+        if (vf) {
+            fputs(g_volume_arg, vf);
+            fclose(vf);
+            fprintf(stderr, "iso-drm: volume=%s -> /run/scene-volume\n",
+                    g_volume_arg);
+        } else {
+            fprintf(stderr, "iso-drm: cannot write /run/scene-volume\n");
         }
     }
 

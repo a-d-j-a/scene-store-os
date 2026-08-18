@@ -131,6 +131,18 @@ scene_node_id scene_shell_handle_pointer(scene_shell *sh, int32_t x, int32_t y,
 int scene_shell_handle_key(scene_shell *sh, uint32_t key_code,
                            uint8_t state, uint8_t modifiers);
 
+/* ---- notifications ---------------------------------------------------- */
+
+/* Toast lifetime in ticks (~4 s at 60 fps). Deterministic, frame-based. */
+#define SCENE_SHELL_TOAST_TICKS 240u
+
+/* Raise a toast notification: a small OS window (top-right, role
+ * NOTIFICATION) with a title + body label, auto-hidden after
+ * TOAST_TICKS ticks (frame-count based, deterministic under test).
+ * The toast is shell-session state; the host calls this from its
+ * launcher/notify callbacks. Returns 0 on success. */
+int scene_shell_notify(scene_shell *sh, const char *title, const char *body);
+
 /* ---- reconfiguration ------------------------------------------------- */
 
 /* Reload config from file and apply live (re-theme panel, buttons, etc.) */

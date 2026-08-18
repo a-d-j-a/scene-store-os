@@ -54,7 +54,7 @@ typedef uint32_t scene_effect_ref;
 #define SCENE_FLAG_FOCUSABLE 0x02u
 #define SCENE_FLAG_VISIBLE  0x04u
 
-/* ---- Roles (section 4): 0x00..0x1F, mandatory for every node --------- */
+/* ---- Roles (section 4): 0x00..0x20, mandatory for every node --------- */
 typedef enum scene_role {
     SCENE_ROLE_GENERIC   = 0x00, SCENE_ROLE_WINDOW  = 0x01,
     SCENE_ROLE_PANEL     = 0x02, SCENE_ROLE_BUTTON  = 0x03,
@@ -71,10 +71,11 @@ typedef enum scene_role {
     SCENE_ROLE_TOOLTIP   = 0x18, SCENE_ROLE_POPUP    = 0x19,
     SCENE_ROLE_GROUP     = 0x1A, SCENE_ROLE_CANVAS   = 0x1B,
     SCENE_ROLE_TEXTBLOCK = 0x1C, SCENE_ROLE_SELECTION = 0x1D,
-    SCENE_ROLE_CURSOR    = 0x1E, SCENE_ROLE_LINK     = 0x1F
+    SCENE_ROLE_CURSOR    = 0x1E, SCENE_ROLE_LINK     = 0x1F,
+    SCENE_ROLE_NOTIFICATION = 0x20   /* OS toast source (added 2026-08-18) */
 } scene_role;
 
-#define SCENE_ROLE_MAX UINT16_C(0x1F)
+#define SCENE_ROLE_MAX UINT16_C(0x20)
 
 /* ---- Ops, client -> server (section 5) -------------------------------- */
 enum {
@@ -194,6 +195,7 @@ enum scene_errno {
 #define SCENE_KEY_DOWN      108u
 #define SCENE_KEY_C         46u    /* evdev; clipboard copy grab          */
 #define SCENE_KEY_V         47u    /* evdev; clipboard paste grab         */
+#define SCENE_KEY_SYSRQ     99u    /* evdev; PrtSc screenshot grab        */
 
 /* ---- Limits (section 8), defaulted in WELCOME ------------------------ */
 typedef struct scene_limits {

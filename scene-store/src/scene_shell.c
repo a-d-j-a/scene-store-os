@@ -23,6 +23,7 @@
 #define ID_CLOCK       10003u
 #define ID_MENU        10004u
 #define ID_TRAY        10005u   /* network tray label (right of clock)    */
+#define ID_VOL_BTN     10006u   /* volume toggle button (left of tray)    */
 #define ID_MENU_BASE   20000u   /* menu items: ID_MENU_BASE + i */
 #define ID_TASK_BASE   30000u   /* task buttons: ID_TASK_BASE + seq */
 #define ID_APP_TASK_BASE 40000u /* app task buttons: base + slot */
@@ -37,6 +38,11 @@
 #define SCENE_SHELL_OVL_W    480
 #define SCENE_SHELL_OVL_H    320
 #define OVL_HOTKEY_CODE 31u     /* set-1 scancode of 's' (Super+S) */
+
+/* Toast notifications (lazy, created on first notify). */
+#define ID_TOAST       60000u
+#define ID_TOAST_TITLE 60001u
+#define ID_TOAST_BODY  60002u
 
 /* Compositor style slots owned by the shell theme. Slots 1 (hover) and
  * 2 (active) belong to iso_drm (scene_compositor_setup_hover_style /
@@ -140,6 +146,14 @@ struct scene_shell {
     uint32_t             ovl_hit_count;   /* live hits (<= 8)             */
     uint32_t             ovl_sel;         /* selected hit row             */
     ovl_hit              ovl_hits[SCENE_SHELL_OVL_HITS];
+
+    /* toast notifications (lazily created, top-right) */
+    scene_node_id        toast_id;     /* 0 = never created                */
+    uint32_t             toast_life;   /* ticks until hide (0 = hidden)    */
+    uint8_t              toast_up;     /* 1 = currently visible            */
+
+    /* volume toggle button */
+    uint8_t              vol_muted;    /* 1 = muted (vol file "0")         */
 };
 
 /* ---- helpers --------------------------------------------------------- */
@@ -215,6 +229,17 @@ static const char *shell_tray_probe_impl(void)
 #endif
 
 const char *(*scene_shell_tray_probe)(void) = shell_tray_probe_impl;
+
+/* Volume state file: the OS audio service reads this. Windows builds
+ * (tests, preview) write into build/; the ISO uses the tmpfs run dir. */
+static const char *vol_file_path(void)
+{
+#if defined(_WIN32)
+    return "build/scene-volume";
+#else
+    return "/run/scene-volume";
+#endif
+}
 
 /* ---- config ---------------------------------------------------------- */
 
@@ -447,6 +472,7 @@ static void apply_theme(scene_shell *sh)
     scene_client_set_style(sh->client, ID_BACKGROUND, SHELL_STYLE_BG);
     scene_client_set_style(sh->client, ID_PANEL, SHELL_STYLE_PANEL);
     scene_client_set_style(sh->client, ID_START_BTN, SHELL_STYLE_BUTTON);
+    scene_client_set_style(sh->client, ID_VOL_BTN, SHELL_STYLE_BUTTON);
     scene_client_set_style(sh->client, ID_CLOCK, SHELL_STYLE_LABEL);
     scene_client_set_style(sh->client, ID_TRAY, SHELL_STYLE_LABEL);
     scene_client_set_style(sh->client, ID_MENU, SHELL_STYLE_MENU);
@@ -502,6 +528,17 @@ int scene_shell_build(scene_shell *sh, int32_t width, int32_t height)
                     SCENE_FLAG_VISIBLE);
     if (r != 0) return -1;
     r = emit_text(sh, ID_TRAY, 1, "NA", 2);
+    if (r != 0) return -1;
+
+    /* Volume button — left of the tray/clock cluster (40x22, vertically
+     * centered in the panel; 6px gap to the tray label) */
+    r = emit_create(sh, ID_PANEL, ID_VOL_BTN,
+                    SCENE_ROLE_BUTTON, width - 202,
+                    panel_y + ((int32_t)ph - 22) / 2,
+                    40, 22,
+                    SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
+    if (r != 0) return -1;
+    r = emit_text(sh, ID_VOL_BTN, 1, "vol", 3);
     if (r != 0) return -1;
 
     /* Launcher menu — initially hidden, positioned above start button */
@@ -562,12 +599,15 @@ int scene_shell_build(scene_shell *sh, int32_t width, int32_t height)
     sh->built = 1;
     apply_theme(sh);
 
-    /* OS key grab: Super+S opens the cross-app search overlay from
-     * anywhere, even while an app session has keyboard focus. Grabs are
-     * registered once at build time, not per open. */
-    if (sh->cp)
+    /* OS key grabs: Super+S opens the cross-app search overlay and PrtSc
+     * (SYSRQ, no mods) captures the screen — both from anywhere, even
+     * while an app session has keyboard focus. Grabs are registered once
+     * at build time, not per gesture. */
+    if (sh->cp) {
         scene_compositor_key_grab(sh->cp, OVL_HOTKEY_CODE,
                                   SCENE_MOD_SUPER);
+        scene_compositor_key_grab(sh->cp, SCENE_KEY_SYSRQ, 0);
+    }
     return 0;
 }
 
@@ -676,6 +716,17 @@ int scene_shell_tick(scene_shell *sh)
         }
         emit_text(sh, ID_CLOCK, 1, buf, (uint32_t)strlen(buf));
         sh->last_clock_min = cur_min;
+    }
+
+    /* --- Toast lifetime (frame-counted, deterministic) --- */
+    if (sh->toast_life > 0) {
+        sh->toast_life--;
+        if (sh->toast_life == 0 && sh->toast_up) {
+            emit_flags(sh, ID_TOAST, 0);
+            emit_flags(sh, ID_TOAST_TITLE, 0);
+            emit_flags(sh, ID_TOAST_BODY, 0);
+            sh->toast_up = 0;   /* idempotent: hide emitted once */
+        }
     }
 
     /* --- Network tray text (probe at most every 2 s, emit on change) --- */
@@ -1198,6 +1249,20 @@ int scene_shell_handle_activate(scene_shell *sh, scene_node_id activated_id)
         return 1;
     }
 
+    /* Volume button — toggle mute: write the OS volume file and flip the
+     * button text. */
+    if (activated_id == ID_VOL_BTN) {
+        sh->vol_muted = !sh->vol_muted;
+        const char *label = sh->vol_muted ? "muted" : "vol";
+        FILE *vf = fopen(vol_file_path(), "w");
+        if (vf) {
+            fputs(sh->vol_muted ? "0" : "100", vf);
+            fclose(vf);
+        }
+        emit_text(sh, ID_VOL_BTN, 1, label, (uint32_t)strlen(label));
+        return 1;
+    }
+
     /* Menu item — launch app and close menu */
     if (activated_id >= ID_MENU_BASE &&
         activated_id < ID_MENU_BASE + SCENE_SHELL_MAX_APPS) {
@@ -1289,6 +1354,46 @@ int scene_shell_handle_activate(scene_shell *sh, scene_node_id activated_id)
     }
 
     return 0;  /* not a shell node */
+}
+
+/* ---- notifications --------------------------------------------------- */
+
+int scene_shell_notify(scene_shell *sh, const char *title, const char *body)
+{
+    if (!sh || !title || !body) return -1;
+
+    /* Lazy creation once: a top-right NOTIFICATION toast owned by the
+     * shell session (role default style, style_ref 0). Rects are
+     * absolute session space (spec §3): children anchored at the
+     * toast's origin. Never focusable. */
+    if (sh->toast_id == 0) {
+        int32_t tx = sh->width - 272 - 12;
+        int32_t ty = 12;
+
+        if (emit_create(sh, SCENE_NO_PARENT, ID_TOAST,
+                        SCENE_ROLE_NOTIFICATION, tx, ty, 272, 56,
+                        SCENE_FLAG_VISIBLE) != 0)
+            return -1;
+        if (emit_create(sh, ID_TOAST, ID_TOAST_TITLE,
+                        SCENE_ROLE_LABEL, tx + 8, ty + 4, 256, 16,
+                        SCENE_FLAG_VISIBLE) != 0)
+            return -1;
+        if (emit_create(sh, ID_TOAST, ID_TOAST_BODY,
+                        SCENE_ROLE_LABEL, tx + 8, ty + 22, 256, 24,
+                        SCENE_FLAG_VISIBLE) != 0)
+            return -1;
+        sh->toast_id = ID_TOAST;
+    } else {
+        /* Re-raise an existing toast: show + replace, no recreate. */
+        emit_flags(sh, ID_TOAST, SCENE_FLAG_VISIBLE);
+        emit_flags(sh, ID_TOAST_TITLE, SCENE_FLAG_VISIBLE);
+        emit_flags(sh, ID_TOAST_BODY, SCENE_FLAG_VISIBLE);
+    }
+    emit_text(sh, ID_TOAST_TITLE, 1, title, (uint32_t)strlen(title));
+    emit_text(sh, ID_TOAST_BODY, 1, body, (uint32_t)strlen(body));
+    sh->toast_life = SCENE_SHELL_TOAST_TICKS;
+    sh->toast_up = 1;
+    return 0;
 }
 
 /* ---- pointer / hover ------------------------------------------------- */
@@ -1490,7 +1595,7 @@ scene_node_id scene_shell_handle_pointer(scene_shell *sh, int32_t x, int32_t y,
      * then dynamic task buttons. */
     scene_node_id hit = 0;
     scene_node_id candidates[] = {
-        ID_START_BTN, ID_CLOCK,
+        ID_START_BTN, ID_CLOCK, ID_VOL_BTN,
         ID_MENU,
         ID_MENU_BASE, ID_MENU_BASE+1, ID_MENU_BASE+2, ID_MENU_BASE+3,
         ID_MENU_BASE+4, ID_MENU_BASE+5, ID_MENU_BASE+6, ID_MENU_BASE+7,
@@ -1608,6 +1713,21 @@ int scene_shell_load_config(scene_shell *sh, const char *path)
         sh->ovl_hit_count = 0;
         sh->ovl_sel = 0;
         sh->ovl_query[0] = '\0';
+        /* Destroy the toast (lazily created, may not exist) */
+        if (sh->toast_id != 0) {
+            emit_destroy(sh, ID_TOAST_BODY);
+            emit_destroy(sh, ID_TOAST_TITLE);
+            emit_destroy(sh, ID_TOAST);
+            sh->toast_id = 0;
+            sh->toast_life = 0;
+            sh->toast_up = 0;
+        }
+        /* Destroy the volume button (exists after every build) */
+        {
+            scene_node_vis tbv;
+            if (scene_store_node_vis(sh->store, ID_VOL_BTN, &tbv) == 0)
+                emit_destroy(sh, ID_VOL_BTN);
+        }
         emit_destroy(sh, ID_CLOCK);
         emit_destroy(sh, ID_TRAY);
         emit_destroy(sh, ID_START_BTN);
@@ -1663,6 +1783,21 @@ int scene_shell_apply_config(scene_shell *sh, const scene_shell_config *cfg)
         sh->ovl_hit_count = 0;
         sh->ovl_sel = 0;
         sh->ovl_query[0] = '\0';
+        /* Destroy the toast (lazily created, may not exist) */
+        if (sh->toast_id != 0) {
+            emit_destroy(sh, ID_TOAST_BODY);
+            emit_destroy(sh, ID_TOAST_TITLE);
+            emit_destroy(sh, ID_TOAST);
+            sh->toast_id = 0;
+            sh->toast_life = 0;
+            sh->toast_up = 0;
+        }
+        /* Destroy the volume button (exists after every build) */
+        {
+            scene_node_vis tbv;
+            if (scene_store_node_vis(sh->store, ID_VOL_BTN, &tbv) == 0)
+                emit_destroy(sh, ID_VOL_BTN);
+        }
         emit_destroy(sh, ID_CLOCK);
         emit_destroy(sh, ID_START_BTN);
         emit_destroy(sh, ID_PANEL);
@@ -1714,8 +1849,20 @@ int scene_shell_resize(scene_shell *sh, int32_t width, int32_t height)
     emit_rect(sh, ID_TRAY, width - 100 - 56, height - (int32_t)ph + 2,
               52, (int32_t)ph - 4);
 
+    /* Reposition volume button (left of tray, vertically centered) */
+    emit_rect(sh, ID_VOL_BTN, width - 202,
+              height - (int32_t)ph + ((int32_t)ph - 22) / 2, 40, 22);
+
     /* Reposition menu */
     emit_rect(sh, ID_MENU, 0, height - (int32_t)ph - 160, 160, 160);
+
+    /* Reposition toast (top-right, children follow the origin) */
+    if (sh->toast_id != 0) {
+        int32_t tx = width - 272 - 12;
+        emit_rect(sh, ID_TOAST, tx, 12, 272, 56);
+        emit_rect(sh, ID_TOAST_TITLE, tx + 8, 4, 256, 16);
+        emit_rect(sh, ID_TOAST_BODY, tx + 8, 22, 256, 24);
+    }
 
     /* Reposition the search overlay (if built) */
     if (sh->ovl_built)
@@ -1789,6 +1936,21 @@ int scene_shell_handle_key(scene_shell *sh, uint32_t key_code,
         if (key_code == SCENE_KEY_DOWN) { ovl_sel_move(sh, 1); return 1; }
         if (ovl_printable(sh, key_code, modifiers)) return 1;
         return 0;
+    }
+
+    /* PrtSc: OS screenshot service. While the overlay is open the key
+     * stays with it (the block above returns 0 for unmatched keys). */
+    if (key_code == SCENE_KEY_SYSRQ && modifiers == 0) {
+        if (!sh->cp) return 0;
+#if defined(_WIN32)
+        const char *shot_path = "build/shot.bmp";
+#else
+        const char *shot_path = "/home/user/shot.bmp";
+#endif
+        int rc = scene_compositor_capture_bmp(sh->cp, shot_path);
+        scene_shell_notify(sh, "screenshot",
+                           rc == 0 ? "saved to shot.bmp" : "capture failed");
+        return 1;
     }
 
     /* Escape: close start menu if open. */

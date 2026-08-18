@@ -1133,6 +1133,246 @@ static void test_shell_resize_not_on_edges(void)
     printf("test_shell_resize_not_on_edges: ok\n");
 }
 
+static void test_shell_notify(void)
+{
+    struct harness h;
+    harness_init(&h);
+
+    scene_shell_config cfg;
+    scene_shell_config_defaults(&cfg);
+    scene_shell *sh = scene_shell_new(h.cl,
+        scene_compositor_store(h.cp), h.cp, &cfg);
+    scene_shell_build(sh, 800, 600);
+    tickf(&h);
+
+    scene_store *s = scene_compositor_store(h.cp);
+    scene_node_vis v;
+    scene_node_text_vis tv[16];
+    int n;
+    uint32_t i;
+
+    /* Nothing before the first notify (lazy creation) */
+    CHECK(scene_store_node_vis(s, 60000, &v) != 0);
+
+    /* Raise: toast + title + body visible, texts set */
+    CHECK_EQ(scene_shell_notify(sh, "t", "hello world"), 0);
+    tickf(&h);
+
+    CHECK_EQ(scene_store_node_vis(s, 60000, &v), 0);
+    CHECK_EQ(v.role, SCENE_ROLE_NOTIFICATION);
+    CHECK(v.flags & SCENE_FLAG_VISIBLE);
+    CHECK(!(v.flags & SCENE_FLAG_FOCUSABLE));
+    CHECK_EQ(v.rect[0], 800 - 272 - 12);   /* top-right */
+    CHECK_EQ(v.rect[1], 12);
+    CHECK_EQ(v.rect[2], 272);
+    CHECK_EQ(v.rect[3], 56);
+
+    CHECK_EQ(scene_store_node_vis(s, 60001, &v), 0);
+    CHECK(v.flags & SCENE_FLAG_VISIBLE);
+    CHECK_EQ(scene_store_node_vis(s, 60002, &v), 0);
+    CHECK(v.flags & SCENE_FLAG_VISIBLE);
+
+    n = scene_store_node_texts(s, 60001, tv, 16);
+    CHECK(n > 0);
+    if (n > 0) {
+        CHECK_EQ(tv[0].len, 1);
+        CHECK(tv[0].data[0] == 't');
+    }
+    n = scene_store_node_texts(s, 60002, tv, 16);
+    CHECK(n > 0);
+    if (n > 0) {
+        CHECK_EQ(tv[0].len, 11);
+        CHECK(memcmp(tv[0].data, "hello world", 11) == 0);
+    }
+
+    /* TOAST_TICKS-1 ticks: still visible (life decremented only) */
+    for (i = 0; i < SCENE_SHELL_TOAST_TICKS - 1; i++) {
+        scene_shell_tick(sh);
+        tickf(&h);
+    }
+    CHECK_EQ(scene_store_node_vis(s, 60000, &v), 0);
+    CHECK(v.flags & SCENE_FLAG_VISIBLE);
+
+    /* One more tick: hidden */
+    scene_shell_tick(sh);
+    tickf(&h);
+    CHECK_EQ(scene_store_node_vis(s, 60000, &v), 0);
+    CHECK(!(v.flags & SCENE_FLAG_VISIBLE));
+    CHECK_EQ(scene_store_node_vis(s, 60001, &v), 0);
+    CHECK(!(v.flags & SCENE_FLAG_VISIBLE));
+    CHECK_EQ(scene_store_node_vis(s, 60002, &v), 0);
+    CHECK(!(v.flags & SCENE_FLAG_VISIBLE));
+
+    /* Re-raise: same nodes (no recreate), replaced body text */
+    CHECK_EQ(scene_shell_notify(sh, "t2", "v2"), 0);
+    tickf(&h);
+    CHECK_EQ(scene_store_node_vis(s, 60000, &v), 0);
+    CHECK(v.flags & SCENE_FLAG_VISIBLE);
+    n = scene_store_node_texts(s, 60002, tv, 16);
+    CHECK(n > 0);
+    if (n > 0) {
+        CHECK_EQ(tv[0].len, 2);
+        CHECK(tv[0].data[0] == 'v');
+        CHECK(tv[0].data[1] == '2');
+    }
+
+    /* Hide is idempotent: another full lifetime emits nothing, no crash */
+    for (i = 0; i < SCENE_SHELL_TOAST_TICKS; i++) {
+        scene_shell_tick(sh);
+        tickf(&h);
+    }
+    CHECK_EQ(scene_store_node_vis(s, 60000, &v), 0);
+    CHECK(!(v.flags & SCENE_FLAG_VISIBLE));
+
+    scene_shell_free(sh);
+    harness_destroy(&h);
+    printf("test_shell_notify: ok\n");
+}
+
+static void test_shell_volume_btn(void)
+{
+    struct harness h;
+    harness_init(&h);
+
+    scene_shell_config cfg;
+    scene_shell_config_defaults(&cfg);
+    scene_shell *sh = scene_shell_new(h.cl,
+        scene_compositor_store(h.cp), h.cp, &cfg);
+    scene_shell_build(sh, 800, 600);
+    tickf(&h);
+
+    scene_store *s = scene_compositor_store(h.cp);
+    scene_node_vis v;
+    scene_node_text_vis tv[16];
+    int n;
+
+    remove("build/scene-volume");
+
+    /* Built: button role, visible, "vol" text */
+    CHECK_EQ(scene_store_node_vis(s, 10006, &v), 0);
+    CHECK_EQ(v.role, SCENE_ROLE_BUTTON);
+    CHECK(v.flags & SCENE_FLAG_VISIBLE);
+    n = scene_store_node_texts(s, 10006, tv, 16);
+    CHECK(n > 0);
+    if (n > 0) {
+        CHECK_EQ(tv[0].len, 3);
+        CHECK(memcmp(tv[0].data, "vol", 3) == 0);
+    }
+
+    /* Toggle to muted: text flips, volume file written "0" */
+    CHECK_EQ(scene_shell_handle_activate(sh, 10006), 1);
+    tickf(&h);
+    n = scene_store_node_texts(s, 10006, tv, 16);
+    CHECK(n > 0);
+    if (n > 0) {
+        CHECK_EQ(tv[0].len, 5);
+        CHECK(memcmp(tv[0].data, "muted", 5) == 0);
+    }
+    {
+        FILE *vf = fopen("build/scene-volume", "rb");
+        CHECK(vf != NULL);
+        if (vf) {
+            CHECK_EQ(fgetc(vf), '0');
+            fclose(vf);
+        }
+    }
+
+    /* Toggle back: "vol" text, volume file "100" */
+    CHECK_EQ(scene_shell_handle_activate(sh, 10006), 1);
+    tickf(&h);
+    n = scene_store_node_texts(s, 10006, tv, 16);
+    CHECK(n > 0);
+    if (n > 0) {
+        CHECK_EQ(tv[0].len, 3);
+        CHECK(memcmp(tv[0].data, "vol", 3) == 0);
+    }
+    {
+        FILE *vf = fopen("build/scene-volume", "rb");
+        CHECK(vf != NULL);
+        if (vf) {
+            CHECK_EQ(fgetc(vf), '1');
+            CHECK_EQ(fgetc(vf), '0');
+            CHECK_EQ(fgetc(vf), '0');
+            fclose(vf);
+        }
+    }
+    remove("build/scene-volume");
+
+    scene_shell_free(sh);
+    harness_destroy(&h);
+    printf("test_shell_volume_btn: ok\n");
+}
+
+static void test_shell_screenshot(void)
+{
+    struct harness h;
+    harness_init(&h);
+
+    scene_shell_config cfg;
+    scene_shell_config_defaults(&cfg);
+    scene_shell *sh = scene_shell_new(h.cl,
+        scene_compositor_store(h.cp), h.cp, &cfg);
+    scene_shell_build(sh, 800, 600);
+    tickf(&h);
+
+    /* Settle the enter animations so the framebuffer holds identity
+     * colors (the desktop bg 0xFF1A1A2E at full alpha). */
+    uint32_t guard = 0;
+    while (scene_compositor_anim_count(h.cp) > 0 && guard < 64) {
+        scene_compositor_frame(h.cp);
+        guard++;
+    }
+    CHECK_EQ(scene_compositor_anim_count(h.cp), 0u);
+
+    remove("build/shot.bmp");
+
+    /* PrtSc: key-down with no modifiers → capture + notify toast */
+    CHECK_EQ(scene_shell_handle_key(sh, SCENE_KEY_SYSRQ, 1, 0), 1);
+
+    {
+        FILE *f = fopen("build/shot.bmp", "rb");
+        CHECK(f != NULL);
+        if (f) {
+            uint8_t hdr[54], px[3];
+            uint32_t row_bytes = ((800u * 3u + 3u) / 4u) * 4u;
+            long off = 54 + (long)(600u - 1u - 5u) * (long)row_bytes + 5L * 3L;
+
+            CHECK_EQ(fread(hdr, 1, 54, f), (size_t)54);
+            CHECK_EQ(hdr[0], 'B');
+            CHECK_EQ(hdr[1], 'M');
+            /* BGR bytes of pixel (5,5) — desktop bg 0xFF1A1A2E, in its
+             * bottom-up image row h-1-5 */
+            CHECK_EQ(fseek(f, off, SEEK_SET), 0);
+            CHECK_EQ(fread(px, 1, 3, f), (size_t)3);
+            CHECK_EQ(px[0], 0x2Eu);   /* B */
+            CHECK_EQ(px[1], 0x1Au);   /* G */
+            CHECK_EQ(px[2], 0x1Au);   /* R */
+            fclose(f);
+        }
+    }
+
+    /* The capture raised a toast notification (visible after flush) */
+    tickf(&h);
+    scene_store *s = scene_compositor_store(h.cp);
+    scene_node_vis v;
+    CHECK_EQ(scene_store_node_vis(s, 60000, &v), 0);
+    CHECK(v.flags & SCENE_FLAG_VISIBLE);
+    remove("build/shot.bmp");
+
+    /* Without a compositor the key is not consumed (no capture) */
+    {
+        scene_shell *sh0 = scene_shell_new(h.cl,
+            scene_compositor_store(h.cp), NULL, &cfg);
+        scene_shell_build(sh0, 800, 600);
+        CHECK_EQ(scene_shell_handle_key(sh0, SCENE_KEY_SYSRQ, 1, 0), 0);
+        scene_shell_free(sh0);
+    }
+
+    scene_shell_free(sh);
+    harness_destroy(&h);
+    printf("test_shell_screenshot: ok\n");
+}
+
 int main(void)
 {
     test_shell_build();
@@ -1160,6 +1400,9 @@ int main(void)
     test_shell_resize_edge();
     test_shell_resize_clamp();
     test_shell_resize_not_on_edges();
+    test_shell_notify();
+    test_shell_volume_btn();
+    test_shell_screenshot();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

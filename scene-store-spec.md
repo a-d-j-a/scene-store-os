@@ -64,6 +64,7 @@ offset  size  field
 0x14 Terminal   0x15 Editor      0x16 Combo      0x17 Progress
 0x18 Tooltip    0x19 Popup       0x1A Group      0x1B Canvas
 0x1C TextBlock  0x1D Selection   0x1E Cursor     0x1F Link
+0x20 Notification   (OS toast source; added 2026-08-18, additive)
 ```
 
 Unassigned opcode values: reserved. Receiving a reserved value is a protocol error:

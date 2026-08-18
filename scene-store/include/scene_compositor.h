@@ -162,6 +162,26 @@ int scene_compositor_input_pointer(scene_compositor *cp, uint8_t device,
 int scene_compositor_input_key(scene_compositor *cp, uint32_t key_code,
                                uint8_t state, uint8_t modifiers);
 
+/* ---- notifications (OS toast source) ---------------------------------- */
+/* An app marks a node SCENE_ROLE_NOTIFICATION (with text) to raise an
+ * OS toast. The compositor diffs NOTIFICATION-role nodes on the app
+ * layers (>= 1) as part of the per-frame render-model diff and calls
+ * the registered cb once per new signature (node created or its text
+ * changed; unchanged frames do not re-fire). Layer 0 (the shell
+ * session) is excluded: the shell's own toast nodes must not loop.   */
+typedef void (*scene_compositor_notify_fn)(void *ud, int layer,
+                                           scene_node_id id,
+                                           const char *text, uint32_t len);
+void scene_compositor_set_notify_cb(scene_compositor *cp,
+                                    scene_compositor_notify_fn fn, void *ud);
+
+/* ---- screenshot (OS service) ------------------------------------------ */
+/* Write the current framebuffer as a 24-bit BGR BMP file (rows
+ * bottom-up, 4-byte row stride). Returns 0 on success, -1 on I/O or
+ * parameter failure. The compositor is not repainted by this call —
+ * the capture reflects the last committed frame. */
+int scene_compositor_capture_bmp(scene_compositor *cp, const char *path);
+
 /* ---- clipboard (OS service) ------------------------------------------ */
 /* Super+C is consumed OS-side in scene_compositor_input_key and copies
  * the focused node's text (or its nearest ancestor's, via

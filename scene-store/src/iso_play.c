@@ -386,6 +386,97 @@ static int track_add_guards(void)
     return 0;
 }
 
+/* ---- volume control -----------------------------------------------------
+ * The OS volume is a small ASCII file (0..100): the shell's volume
+ * button and the host (iso_drm, `volume=` cmdline) write it, this app
+ * polls it and rescales the samples. Scaling is per-sample linear
+ * (s*vol/100, truncating), applied against the volume-free master
+ * copy, so any volume is exactly reversible (a later 100 restores the
+ * original bytes — the selftest proves it). The reference WAV the
+ * selftest writes is the vol=100 stream, so the QEMU capture at
+ * volume=100 must stay byte-identical to it. */
+
+static int32_t g_volume = 100;   /* 0..100 */
+static int16_t *g_base = NULL;   /* volume-free master (post-convert+guards) */
+
+static const char *volume_path(void)
+{
+#if defined(_WIN32)
+    return "build/scene-volume";          /* test artifact (cwd = scene-store) */
+#else
+    return "/run/scene-volume";           /* ISO: host + shell write it        */
+#endif
+}
+
+/* Read the volume file: 0..100, or -1 when absent/invalid. */
+static int volume_read(void)
+{
+    FILE *f = fopen(volume_path(), "r");
+    char buf[16], *end = NULL;
+    long v;
+    size_t n;
+
+    if (!f) return -1;
+    n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    if (n == 0) return -1;
+    buf[n] = '\0';
+    v = strtol(buf, &end, 10);
+    if (!end || end == buf) return -1;
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    return (int)v;
+}
+
+/* Seal the volume-free master copy. Call once after the track is final
+ * (converted + guarded); every subsequent apply re-derives g_samples
+ * from it, so playback never double-scales. */
+static int track_seal_base(void)
+{
+    int16_t *p;
+    if (g_frames == 0) return -1;
+    p = (int16_t *)malloc((size_t)g_frames * (size_t)g_channels * 2u);
+    if (!p) return -1;
+    memcpy(p, g_samples, (size_t)g_frames * (size_t)g_channels * 2u);
+    free(g_base);
+    g_base = p;
+    return 0;
+}
+
+/* Rescale g_samples from the master at the given volume. 100 = byte
+ * copy of the master; 0 = silence; anything else = truncating scale. */
+static int track_apply_volume(uint32_t vol)
+{
+    uint32_t i, n;
+
+    if (vol > 100u) vol = 100u;
+    if (!g_base) return -1;
+    n = g_frames * g_channels;
+    if (vol == 100u) {
+        memcpy(g_samples, g_base, (size_t)g_frames * (size_t)g_channels * 2u);
+    } else {
+        for (i = 0; i < n; i++)
+            g_samples[i] = (int16_t)(((int32_t)g_base[i] * (int32_t)vol) / 100);
+    }
+    if ((int32_t)vol != g_volume) {
+        dlog("iso-play: volume %u\n", (unsigned)vol);
+        g_volume = (int32_t)vol;
+    }
+    return 0;
+}
+
+/* Poll the volume file; re-apply on change. Cheap: one small read per
+ * main-loop pass, no-op while the file is absent or unchanged. */
+static void volume_poll(void)
+{
+    int v = volume_read();
+    if (v < 0) return;
+    if ((uint32_t)v != (uint32_t)g_volume) {
+        if (!g_base) g_volume = v;      /* no master yet: remember only */
+        else track_apply_volume((uint32_t)v);
+    }
+}
+
 /* ---- ALSA raw PCM (POSIX only) — see alsa_uapi.h for the UAPI notes ---- */
 
 #if !defined(_WIN32)
@@ -476,6 +567,18 @@ static int alsa_setup(void)
                  * lets its backend pipeline drain into the capture. */
                 if (track_add_guards() != 0) {
                     dlog("iso-play: guard prepend failed\n");
+                    close(fd);
+                    return -1;
+                }
+                /* Volume: seal the master, then apply the configured
+                 * volume to the actual played buffer (vol=100 = copy). */
+                if (track_seal_base() != 0) {
+                    dlog("iso-play: base seal failed\n");
+                    close(fd);
+                    return -1;
+                }
+                if (track_apply_volume((uint32_t)g_volume) != 0) {
+                    dlog("iso-play: volume apply failed\n");
                     close(fd);
                     return -1;
                 }
@@ -822,6 +925,40 @@ static int run_selftest(void)
         ST_ASSERT(g_samples[f * 2u] == 0);
         ST_ASSERT(g_samples[f * 2u + 1u] == 0);
     }
+    /* Volume scaling (the OS volume file contract): seal the master,
+     * then prove 100 = byte-identical, 50 = exactly half (scan-derived
+     * maxima, independent of the per-sample formula), 0 = silence, and
+     * 100 again = byte-exact restoration from the master (no drift). */
+    ST_ASSERT(track_seal_base() == 0);
+    ST_ASSERT(memcmp(g_samples, g_base,
+                     (size_t)g_frames * 2u * 2u) == 0);
+    ST_ASSERT(track_apply_volume(50u) == 0);
+    {
+        int32_t maxb = 0, minb = 0, maxv = 0, minv = 0;
+        uint32_t fi;
+        for (fi = 0; fi < g_frames * 2u; fi++) {
+            int32_t b = g_base[fi], v = g_samples[fi];
+            if (b > maxb) maxb = b;
+            if (b < minb) minb = b;
+            if (v > maxv) maxv = v;
+            if (v < minv) minv = v;
+        }
+        ST_ASSERT(maxb > 4000 && minb < -4000); /* real music, not flat */
+        ST_ASSERT(maxv == maxb * 50 / 100);
+        ST_ASSERT(minv == minb * 50 / 100);
+    }
+    for (m = 0; m < TRACK_GUARD; m++) {        /* guards stay silent */
+        ST_ASSERT(g_samples[m * 2u] == 0);
+        ST_ASSERT(g_samples[(g_frames - TRACK_GUARD + m) * 2u] == 0);
+    }
+    ST_ASSERT(track_apply_volume(0u) == 0);
+    for (m = 0; m < g_frames; m++) {           /* muted = all zero */
+        ST_ASSERT(g_samples[m * 2u] == 0);
+        ST_ASSERT(g_samples[m * 2u + 1u] == 0);
+    }
+    ST_ASSERT(track_apply_volume(100u) == 0);
+    ST_ASSERT(memcmp(g_samples, g_base,
+                     (size_t)g_frames * 2u * 2u) == 0);
     ST_ASSERT(wav_write(path44, 2, 44100, g_samples, g_frames) == 0);
     f = fopen(path44, "rb");
     ST_ASSERT(f != NULL);
@@ -853,6 +990,8 @@ static int run_selftest(void)
     free(buf);
     free(g_samples);
     g_samples = NULL;
+    free(g_base);
+    g_base = NULL;
     printf("SELFTEST OK\n");
     fflush(stdout);
     return 0;
@@ -947,6 +1086,14 @@ int main(int argc, char **argv)
     scene_app_present(g_app);
     scene_app_flush(g_app);
 
+    /* Volume: initial value from the OS volume file (the shell's volume
+     * button or the host writes it; absent = 100). Polled in the loop. */
+    {
+        int v = volume_read();
+        if (v >= 0) g_volume = v;
+        dlog("iso-play: volume file %s = %d\n", volume_path(), g_volume);
+    }
+
     /* ---- playback begin -------------------------------------------------- */
     if (g_state != ST_BAD_FILE) {
         int rc;
@@ -967,6 +1114,7 @@ int main(int argc, char **argv)
     push_status();
 
     for (;;) {
+        volume_poll();
         scene_app_pump(g_app);
         scene_app_flush(g_app);
         if (g_state == ST_PLAY) {

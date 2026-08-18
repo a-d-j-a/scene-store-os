@@ -101,7 +101,8 @@ static void cb_sh_key(void *ud, uint64_t seq, uint32_t code, uint8_t state,
 
 static const scene_client_cbs g_sh_cbs = {
     cb_welcome, NULL, NULL, NULL, NULL, NULL,
-    cb_sh_pointer, cb_sh_activate, NULL, cb_sh_key, NULL, NULL, NULL, NULL
+    cb_sh_pointer, cb_sh_activate, NULL, cb_sh_key, NULL, NULL, NULL, NULL,
+    NULL
 };
 
 static void cb_ap_pointer(void *ud, uint64_t seq, int32_t x, int32_t y,
@@ -134,7 +135,7 @@ static void cb_ap_key(void *ud, uint64_t seq, uint32_t code, uint8_t state,
 }
 
 static const scene_app_cbs g_ap_cbs = {
-    cb_ap_pointer, cb_ap_activate, cb_ap_key, NULL, NULL
+    cb_ap_pointer, cb_ap_activate, cb_ap_key, NULL, NULL, NULL
 };
 
 static void tickf(struct harness *h);

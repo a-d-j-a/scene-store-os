@@ -30,3 +30,9 @@ git_setup.bat
 # Serial proof artifacts
 serial*.log
 state.img
+
+# Test-run artifacts (app event logs, screenshots)
+*.log
+shot.bmp
+scene-volume
+aud*.wav
