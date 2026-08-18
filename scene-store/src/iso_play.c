@@ -536,7 +536,15 @@ static int alsa_write_pass(void)
     if (g_afd < 0) return -1;
     if (g_pos >= g_frames) return 1;
     left = g_frames - g_pos;
-    n = left < g_chunk ? left : g_chunk;
+    /* Prime: the first pass fills the WHOLE kernel buffer (periods *
+     * chunk = the negotiated ring) in one write, so QEMU's HDA engine
+     * never reads a half-populated BDL ring at startup (seen live:
+     * writes in 512-frame granules let the emulator mis-deliver one
+     * ring lap — replaying the buffer head — after the third period).
+     * The kernel's WRITEI accepts up to the buffer size in one call. */
+    n = (left < g_chunk || g_pos > 0)
+            ? (left < g_chunk ? left : g_chunk)
+            : (left < g_chunk * g_periods ? left : g_chunk * g_periods);
     bytes = (size_t)n * g_channels * 2u;
     p = (const uint8_t *)(g_samples + (size_t)g_pos * g_channels);
     done = 0;
