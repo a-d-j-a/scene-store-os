@@ -315,6 +315,46 @@ static int track_load_syn(void)
     return 0;
 }
 
+/* Resample + channel-convert the track to a codec-supported geometry.
+ * Integer 16.16 fixed-point linear interpolation — deterministic on
+ * every host (no libm), so the emitted stream is byte-identical to the
+ * selftest's converted reference. Rate is scaled first (each output
+ * frame interpolates between two source frames), then channel mapping
+ * (duplicate the last source channel when expanding, arithmetic-mean
+ * when collapsing). Replaces the track buffer in place. */
+static int track_convert(uint32_t dst_rate, uint16_t dst_ch)
+{
+    uint32_t total = ((uint64_t)g_frames * dst_rate + g_rate - 1u) / g_rate;
+    int16_t *out;
+    uint32_t i, c;
+    if (dst_rate == g_rate && dst_ch == g_channels) return 0;
+    if (dst_ch < 1 || dst_ch > 2 || dst_rate == 0) return -1;
+    out = (int16_t *)malloc((size_t)total * (size_t)dst_ch * 2u);
+    if (!out) return -1;
+
+    for (i = 0; i < total; i++) {
+        uint64_t sp = (uint64_t)i * g_rate * 65536u / dst_rate;
+        uint32_t s0 = (uint32_t)(sp >> 16);
+        uint32_t frac = (uint32_t)(sp & 0xFFFFu);
+        uint32_t s1 = s0 + 1 < g_frames ? s0 + 1 : s0;
+        for (c = 0; c < dst_ch; c++) {
+            uint32_t sc = c < g_channels ? c : g_channels - 1u;
+            int32_t a = g_samples[(size_t)s0 * g_channels + sc];
+            int32_t b = g_samples[(size_t)s1 * g_channels + sc];
+            int32_t v = a + (int32_t)(((int64_t)(b - a) * frac) >> 16);
+            out[(size_t)i * dst_ch + c] = (int16_t)v;
+        }
+    }
+    free(g_samples);
+    g_samples = out;
+    g_frames = total;
+    g_rate = dst_rate;
+    g_channels = dst_ch;
+    dlog("iso-play: converted: %u frames x%u @%u\n",
+         (unsigned)g_frames, (unsigned)g_channels, (unsigned)g_rate);
+    return 0;
+}
+
 /* ---- ALSA raw PCM (POSIX only) — see alsa_uapi.h for the UAPI notes ---- */
 
 #if !defined(_WIN32)
@@ -359,6 +399,43 @@ static int alsa_setup(void)
                  hp.intervals[ip].min, hp.intervals[ip].max,
                  hp.intervals[in].min, hp.intervals[in].max,
                  hp.intervals[ib].min, hp.intervals[ib].max);
+
+            /* The card may reject the track's own geometry (QEMU's
+             * HDA emulation: 16000..96000 Hz, stereo only — seen live:
+             * refine rate=16000..96000 ch=2..2 while SYN is 8k mono).
+             * Convert the track to the first supported rate >= its own
+             * and the first supported channel count >= its own. */
+            {
+                uint32_t want_r = g_rate, want_c = g_channels;
+                uint32_t r, k;
+
+                if (want_r < hp.intervals[im].min ||
+                    want_r > hp.intervals[im].max) {
+                    r = hp.intervals[im].min;
+                    for (k = 0; k < 16; k++) {
+                        uint32_t cand = r * (k + 1);
+                        if (cand > hp.intervals[im].max) break;
+                        if (cand >= g_rate &&
+                            cand >= hp.intervals[im].min) { r = cand; break; }
+                    }
+                    if (r < hp.intervals[im].min)
+                        r = hp.intervals[im].min;
+                    if (r > hp.intervals[im].max)
+                        r = hp.intervals[im].max;
+                    want_r = r;
+                }
+                if (want_c < hp.intervals[ic].min)
+                    want_c = (uint16_t)hp.intervals[ic].min;
+                if (want_c > hp.intervals[ic].max)
+                    want_c = (uint16_t)hp.intervals[ic].max;
+                if (want_r != g_rate || want_c != g_channels) {
+                    if (track_convert(want_r, (uint16_t)want_c) != 0) {
+                        dlog("iso-play: track convert failed\n");
+                        close(fd);
+                        return -1;
+                    }
+                }
+            }
         }
     }
 
@@ -589,6 +666,7 @@ static void on_key(void *ud, uint64_t seq, uint32_t key_code,
 static int run_selftest(void)
 {
     static const char *path = "build/test_tone.wav";
+    static const char *path16 = "build/test_tone16.wav";
     uint32_t total = syn_frames();
     int16_t *buf = (int16_t *)malloc((size_t)total * 2u);
     FILE *f;
@@ -638,8 +716,65 @@ static int run_selftest(void)
      * v = (0.75*0.6 + 0.25*sin(1.6*pi))*SYN_PEAK >= 0.2*SYN_PEAK > 0 */
     ST_ASSERT(buf[SYN_ATTACK * 2] != 0);
 
+    /* Track conversion: SYN (8k mono) -> the QEMU HDA codec geometry
+     * (16k stereo). Each output frame i reads source at fixed-point
+     * pos = i*8000*65536/16000 = i*32768: even i -> frac 0 (exact copy
+     * of src[i/2]), odd i -> frac 32768 (linear midpoint). With
+     * dst_ch=2 the samples land at out[2i] (L) and out[2i+1] (R).
+     * Written as test_tone16.wav — the byte-exact reference the ISO's
+     * QEMU audio capture is compared against (the codec stream must
+     * equal what we write). */
+    /* Copy into the globals — track_convert frees g_samples, so buf
+     * must stay independent for the comparisons below. */
+    g_samples = (int16_t *)malloc((size_t)total * 2u);
+    ST_ASSERT(g_samples != NULL);
+    memcpy(g_samples, buf, (size_t)total * 2u);
+    g_frames = total;
+    g_rate = SYN_RATE;
+    g_channels = 1;
+    ST_ASSERT(track_convert(16000, 2) == 0);
+    ST_ASSERT(g_frames == total * 2u);
+    ST_ASSERT(g_channels == 2);
+    ST_ASSERT(g_rate == 16000u);
+    for (pi = 0; pi < sizeof(probes) / sizeof(probes[0]); pi++) {
+        uint32_t k = probes[pi];
+        ST_ASSERT(k < total);
+        ST_ASSERT(g_samples[k * 4u] == buf[k]);          /* even frame, L */
+        ST_ASSERT(g_samples[k * 4u + 1u] == buf[k]);     /* even frame, R */
+        if (k + 1 < total) {
+            int32_t mid = (int32_t)buf[k] +
+                          (int32_t)(((int64_t)((int32_t)buf[k + 1] -
+                                               (int32_t)buf[k]) * 32768LL) >> 16);
+            ST_ASSERT(g_samples[k * 4u + 2u] == (int16_t)mid);  /* odd, L */
+            ST_ASSERT(g_samples[k * 4u + 3u] == (int16_t)mid);  /* odd, R */
+        }
+    }
+    ST_ASSERT(wav_write(path16, 2, 16000, g_samples, g_frames) == 0);
+    f = fopen(path16, "rb");
+    ST_ASSERT(f != NULL);
+    fseek(f, 0, SEEK_END);
+    sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    ST_ASSERT(sz == (long)g_frames * 4L + 44L);
+    raw = (uint8_t *)realloc(raw, (size_t)sz);
+    ST_ASSERT(raw != NULL);
+    ST_ASSERT(fread(raw, 1, (size_t)sz, f) == (size_t)sz);
+    fclose(f);
+    ST_ASSERT(wav_parse(raw, (size_t)sz, &wf, &err) == 0);
+    ST_ASSERT(wf.channels == 2);
+    ST_ASSERT(wf.rate == 16000u);
+    ST_ASSERT(wf.frames == g_frames);
+    for (pi = 0; pi < sizeof(probes) / sizeof(probes[0]); pi++) {
+        uint32_t k = probes[pi] * 4u;      /* frame 2k, L: file idx 4k */
+        ST_ASSERT(k < wf.frames * 2u);
+        ST_ASSERT(wf.data[k] == buf[probes[pi]]);
+        ST_ASSERT(wf.data[k + 1u] == buf[probes[pi]]);
+    }
+
     free(raw);
     free(buf);
+    free(g_samples);
+    g_samples = NULL;
     printf("SELFTEST OK\n");
     fflush(stdout);
     return 0;
