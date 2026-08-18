@@ -6,7 +6,12 @@
 # networking script runs -> pkgtest=PKG apk installs and runs.
 #
 # Mode "shot": boots with -vga std, waits for the desktop, takes a
-# screendump (/tmp/qemu-shot.ppm) via the stdio monitor, then quits.
+# screendump (/tmp/qemu-shot.ppm) via the stdio monitor, then powers
+# down. Note: the guest is left to shut down cleanly (powerdown, not
+# quit): an abrupt quit is a power cut for the guest, so files the
+# guest wrote to a persist= disk (e.g. /home/user/shot.bmp from the
+# PrtSc service) are still dirty in its page cache and are lost â€”
+# the capture is provably complete only when the guest syncs first.
 # disk=FILE: attach FILE as a raw virtio disk and append persist=/dev/vda
 #   (proves the persistence path: apk installs survive a reboot).
 # cdrom=FILE: boot from FILE as a CD-ROM instead of -kernel/-initrd
@@ -46,7 +51,7 @@ DRIVE_ARGS=""
 
 if [ "$SHOT" = 1 ]; then
     if [ -n "$ISO_CD" ]; then
-        (sleep 80; echo screendump /tmp/qemu-shot.ppm; echo quit) \
+        (sleep 80; echo screendump /tmp/qemu-shot.ppm; echo powerdown) \
             | timeout 120 qemu-system-x86_64 -m 512 \
                 -cdrom "$ISO_CD" \
                 $DRIVE_ARGS $AUDIO_ARGS \
@@ -55,7 +60,7 @@ if [ "$SHOT" = 1 ]; then
                 -no-reboot -serial file:/tmp/qemu-shot.log -monitor stdio \
             || true
     else
-        (sleep 80; echo screendump /tmp/qemu-shot.ppm; echo quit) \
+        (sleep 80; echo screendump /tmp/qemu-shot.ppm; echo powerdown) \
             | timeout 120 qemu-system-x86_64 -m 512 \
                 -kernel "$K" -initrd "$I" \
                 -append "$APPEND" \
