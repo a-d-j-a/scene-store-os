@@ -220,6 +220,14 @@ static inline void scene_al_hw_any(snd_pcm_hw_params *p)
             p->intervals[k].max = 0xFFFFFFFFu;
         }
     }
+    /* rmask: request every parameter (alsa-lib's snd_pcm_hw_params_any
+     * sets rmask=~0U). The kernel skips any parameter the caller did
+     * not request (pcm_native.c v6.6: "This parameter is not requested
+     * to change by a caller" in constrain_mask_params /
+     * constrain_interval_params), so without this HW_REFINE returns
+     * the untouched "any" struct -- every interval stays 0..UINT_MAX
+     * and the ladder's exact pins are never validated. */
+    p->rmask = 0xFFFFFFFFu;
 }
 
 static inline void scene_al_mask_set(snd_mask *m, unsigned int bit)
