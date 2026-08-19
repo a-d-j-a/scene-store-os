@@ -227,6 +227,7 @@ static int step_detect(void)
 static int step_fdisk(void)
 {
     char cmd[256];
+    int rc, tries;
     set_status("partitioning...");
     /* util-linux sfdisk in SCRIPT mode (non-interactive by design; the
      * busybox fdisk applet is not compiled into this busybox build and
@@ -235,22 +236,23 @@ static int step_fdisk(void)
     snprintf(cmd, sizeof(cmd),
              "printf 'label: dos\\nstart=2048, type=83\\n' | sfdisk %s",
              g_dev);
-    if (sh(cmd) != 0) {
+    rc = sh(cmd);
+    dlog("iso-install: fdisk rc=%d\n", rc);
+    if (rc != 0) {
         set_status("fdisk failed");
         return -1;
     }
     /* The partition node can lag the table write; poll up to 10 s. */
-    {
-        int tries;
-        for (tries = 0; tries < 10; tries++) {
-            snprintf(cmd, sizeof(cmd), "[ -b %s ]", g_part);
-            if (sh(cmd) == 0)
-                return 0;
-            sleep(1);
-        }
-        set_status("partition node missing");
-        return -1;
+    for (tries = 0; tries < 10; tries++) {
+        snprintf(cmd, sizeof(cmd), "[ -b %s ]", g_part);
+        rc = sh(cmd);
+        dlog("iso-install: node check %d rc=%d\n", tries, rc);
+        if (rc == 0)
+            return 0;
+        sleep(1);
     }
+    set_status("partition node missing");
+    return -1;
 }
 
 static int step_mkfs(void)
