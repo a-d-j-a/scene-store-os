@@ -21,6 +21,8 @@
 #include "scene_wallpaper.h"
 #include "scene_fmt.h"
 
+#include <time.h>
+
 typedef struct scene_shell scene_shell;
 
 /* ---- configuration --------------------------------------------------- */
