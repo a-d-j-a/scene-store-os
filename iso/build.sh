@@ -576,6 +576,19 @@ REPO
     # apk (for non-Alpine build hosts) both install with --root.
     # Best-effort: without network the rootfs still builds and the
     # installer reports "grub failed".
+    #
+    # Alpine signing keys: the sysroot must carry them or apk refuses the
+    # repository indexes (UNTRUSTED signature). Fetch them from the
+    # alpinelinux.org key archive when the build host has none.
+    mkdir -p "$R/etc/apk/keys"
+    if ! ls "$R"/etc/apk/keys/*.rsa.pub >/dev/null 2>&1; then
+        for k in alpine-devel@lists.alpinelinux.org-4a6a0840.rsa.pub \
+                 alpine-devel@lists.alpinelinux.org-524d27bb.rsa.pub \
+                 alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub; do
+            curl -fsSL -o "$R/etc/apk/keys/$k" \
+                "https://alpinelinux.org/keys/$k" 2>/dev/null || true
+        done
+    fi
     if command -v apk >/dev/null 2>&1; then
         apk add --root "$R" grub grub-bios >/dev/null 2>&1 && \
             msg "grub installed into rootfs (host apk)" || \
@@ -583,13 +596,14 @@ REPO
     elif command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
         local APKVER
         local URL="https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64"
-        APKVER=$(curl -fsSL "$URL/APKINDEX.tar.gz" | tar -xzO APKINDEX \
-            2>/dev/null | awk '/^P:apk-tools-static$/{p=1} p&&/^V:/{sub(/^V:/,"");print;exit}')
+        local ASTATIC="$TOPDIR/apk-tools-static.apk"
+        rm -f "$ASTATIC"
+        APKVER=$(curl -fsSL "$URL/APKINDEX.tar.gz" 2>/dev/null \
+            | tar -xzO APKINDEX 2>/dev/null \
+            | awk '/^P:apk-tools-static$/{p=1} p&&/^V:/{sub(/^V:/,"");print;exit}')
         if [ -n "$APKVER" ] && \
-            curl -fsSL -o "$TOPDIR/apk-tools-static.apk" \
-                "$URL/apk-tools-static-$APKVER.apk" && \
-            tar -xzf "$TOPDIR/apk-tools-static.apk" -C "$TOPDIR" \
-                sbin/apk.static 2>/dev/null; then
+            curl -fsSL -o "$ASTATIC" "$URL/apk-tools-static-$APKVER.apk" \
+                && tar -xzf "$ASTATIC" -C "$TOPDIR" sbin/apk.static 2>/dev/null; then
             "$TOPDIR/sbin/apk.static" --root "$R" --initdb add \
                 grub grub-bios >/dev/null 2>&1 && \
                 msg "grub installed into rootfs (apk.static)" || \
@@ -597,8 +611,14 @@ REPO
         else
             echo "WARN: apk.static fetch failed"
         fi
+        rm -f "$ASTATIC"
     else
         echo "WARN: no apk/curl; grub not installed into rootfs"
+    fi
+    if [ ! -x "$R/usr/sbin/grub-install" ]; then
+        echo "WARN: grub-install absent from the rootfs - the installer"
+        echo "      menu item will report 'grub failed' - install it with:"
+        echo "      apk add --root $R grub grub-bios"
     fi
 
     # Overlay (hand-written boot scripts, may override the above)
@@ -705,9 +725,22 @@ exec /sbin/init
 INIT
     chmod +x "$TMP/init"
 
-    cd "$TMP"
-    find . -print0 | cpio --null -ov --format=newc 2>/dev/null | gzip -9 > "$INITRD"
-    cd -
+    # Two-pass pack: the initramfs must carry /boot/initramfs-*.cpio.gz
+    # alongside vmlinuz so a subsequent DISK boot (iso-install target)
+    # can load both from the installed disk's /boot. Pass 1 builds a
+    # bootstrap initramfs (without itself); that copy is placed into
+    # $SYSROOT/boot AND $TMP/boot; pass 2 repacks so the final initramfs
+    # self-includes (~+25 MB, gzip-stored blob).
+    pack_initramfs() {
+        cd "$TMP"
+        find . -print0 | cpio --null -ov --format=newc 2>/dev/null \
+            | gzip -9 > "$INITRD"
+        cd - >/dev/null
+    }
+    pack_initramfs
+    cp "$INITRD" "$SYSROOT/boot/"
+    cp "$INITRD" "$TMP/boot/"
+    pack_initramfs
     rm -rf "$TMP"
     msg "initramfs done: $INITRD"
 }
@@ -724,15 +757,22 @@ build_iso() {
     cp "$SYSROOT/boot/vmlinuz-${KVER}" "$ISOROOT/boot/"
     cp "$INITRD" "$ISOROOT/boot/"
 
-    # grub.cfg: single source of truth is iso/grub.cfg (tracked in repo).
-    # Regex notes: [0-9.]* would swallow the trailing dot of "6.6.52." —
+# grub.cfg: single source of truth is iso/grub.cfg (tracked in repo).
+    # Regex notes: [0-9.]* would swallow the trailing dot of "6.6.52." �?""
     # use version-then-(.digits)+ so "initramfs-6.6.52.cpio.gz" keeps the dot.
-    # Proof build: `build.sh iso <app> <persist-dev>` concatenates the
-    # tracked iso/grub-proof.cfg (hardcoded entry with autolaunch= +
-    # persist= baked in, default set to it) — no runtime sed of args.
+    # Proof builds (tracked configs appended, no runtime sed of args):
+    #   `build.sh iso <app> <dev>`      -> grub-proof.cfg (video proof,
+    #                                      autolaunch= <app> persist= <dev>)
+    #   `build.sh iso install`          -> grub-install.cfg (install proof:
+    #                                      installto=/dev/vda +
+    #                                      autolaunch=iso-install)
     cp "$SCRIPT_DIR/grub.cfg" "$ISOROOT/boot/grub/grub.cfg"
     if [ -n "${1:-}" ]; then
-        cat "$SCRIPT_DIR/grub-proof.cfg" >> "$ISOROOT/boot/grub/grub.cfg"
+        if [ "$1" = "install" ]; then
+            cat "$SCRIPT_DIR/grub-install.cfg" >> "$ISOROOT/boot/grub/grub.cfg"
+        else
+            cat "$SCRIPT_DIR/grub-proof.cfg" >> "$ISOROOT/boot/grub/grub.cfg"
+        fi
     fi
     sed -i "s/vmlinuz-[0-9]\+\(\.[0-9]\+\)\+/vmlinuz-${KVER}/g; s/initramfs-[0-9]\+\(\.[0-9]\+\)\+/initramfs-${KVER}/g" \
         "$ISOROOT/boot/grub/grub.cfg"
