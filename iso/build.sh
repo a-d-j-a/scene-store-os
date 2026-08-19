@@ -648,8 +648,17 @@ build_initramfs() {
     rm -rf "$TMP"
     mkdir -p "$TMP"
 
+    # The self-include copy from ANY previous build must be dropped first:
+    # build N ended with SYSROOT/boot carrying I_N, so without this rm a
+    # rebuild would pack I_N inside I_{N+1} - every rebuild doubling the
+    # size until the kernel cannot unpack the initrd in RAM ("Ran out of
+    # memory" -> "Unable to mount root fs"). The two-pass pack below
+    # re-creates a single fresh copy.
+    rm -f "$SYSROOT/boot/initramfs-*.cpio.gz" 2>/dev/null || true
+
     # Full rootfs copy: busybox install + musl + kernel modules + /etc + /usr
     cp -a "$SYSROOT/." "$TMP/"
+    rm -f "$TMP/boot/initramfs-*.cpio.gz" 2>/dev/null || true
     # Drop build-only artifacts. /boot is KEPT: the installer copies the
     # live /boot onto the target disk, and a disk boot loads vmlinuz +
     # initramfs from the disk's own /boot partition.
@@ -758,6 +767,9 @@ INIT
     cp "$INITRD" "$SYSROOT/boot/"
     cp "$INITRD" "$TMP/boot/"
     pack_initramfs
+    # The FINAL initramfs replaces the pass-1 copy in the sysroot, so the
+    # disk's /boot carries the definitive artifact.
+    cp "$INITRD" "$SYSROOT/boot/"
     rm -rf "$TMP"
     msg "initramfs done: $INITRD"
 }
