@@ -355,7 +355,7 @@ static int step_cfg(void)
     }
     fprintf(f, "set timeout=2\nset default=0\n");
     fprintf(f, "menuentry \"scene-store\" {\n");
-    fprintf(f, "    linux /boot/%s quiet autolaunch=iso-terminal persist=auto\n",
+    fprintf(f, "    linux /boot/%s console=ttyS0 autolaunch=iso-terminal persist=auto\n",
             kern);
     fprintf(f, "    initrd /boot/%s\n", initrd);
     fprintf(f, "}\n");
