@@ -224,8 +224,11 @@ static int step_fdisk(void)
 {
     char cmd[256];
     set_status("partitioning...");
+    /* On a BLANK disk busybox fdisk first asks "Do you want to start with
+     * a DOS partition table? (y/n)" - answer y, then label, primary
+     * partition 1, defaults for first/last sector, write. */
     snprintf(cmd, sizeof(cmd),
-             "printf 'o\\nn\\np\\n1\\n\\n\\nw\\n' | fdisk %s", g_dev);
+             "printf 'y\\no\\nn\\np\\n1\\n\\n\\nw\\n' | fdisk %s", g_dev);
     if (sh(cmd) != 0) {
         set_status("fdisk failed");
         return -1;
