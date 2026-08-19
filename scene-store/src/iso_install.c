@@ -299,7 +299,9 @@ static int step_copy(void)
         snprintf(cmd + strlen(cmd), sizeof(cmd) - strlen(cmd), "%s ",
                  g_copy_dirs[i]);
     snprintf(cmd + strlen(cmd), sizeof(cmd) - strlen(cmd),
-             "; do [ -e /$d ] && cp -a /$d /mnt/tgt/ || bad=1; done; "
+             "; do if [ -e /$d ]; then cp -a /$d /mnt/tgt/ || "
+             "{ echo COPFAIL $d; bad=1; }; else echo MISSING $d; "
+             "bad=1; fi; done; "
              "mkdir -p /mnt/tgt/dev/pts /mnt/tgt/proc /mnt/tgt/sys "
              "/mnt/tgt/run /mnt/tgt/tmp && touch /mnt/tgt/.iso-rootfs-v1; "
              "exit $bad");
