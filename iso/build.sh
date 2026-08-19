@@ -590,7 +590,7 @@ REPO
         done
     fi
     if command -v apk >/dev/null 2>&1; then
-        apk add --root "$R" grub grub-bios >/dev/null 2>&1 && \
+        apk add --root "$R" grub grub-bios e2fsprogs >/dev/null 2>&1 && \
             msg "grub installed into rootfs (host apk)" || \
             echo "WARN: apk add --root grub failed"
     elif command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
@@ -605,7 +605,7 @@ REPO
             curl -fsSL -o "$ASTATIC" "$URL/apk-tools-static-$APKVER.apk" \
                 && tar -xzf "$ASTATIC" -C "$TOPDIR" sbin/apk.static 2>/dev/null; then
             "$TOPDIR/sbin/apk.static" --root "$R" --initdb add \
-                grub grub-bios >/dev/null 2>&1 && \
+                grub grub-bios e2fsprogs >/dev/null 2>&1 && \
                 msg "grub installed into rootfs (apk.static)" || \
                 echo "WARN: apk.static add grub failed"
         else
@@ -619,6 +619,17 @@ REPO
         echo "WARN: grub-install absent from the rootfs - the installer"
         echo "      menu item will report 'grub failed' - install it with:"
         echo "      apk add --root $R grub grub-bios"
+    fi
+    # Prefer the real e2fsprogs mke2fs over the busybox applet symlink
+    # (the applet can be compiled out; the init script's persist flow and
+    # iso-install both rely on a working mke2fs).
+    rm -f "$R/sbin/mke2fs" "$R/sbin/mkfs.ext2" "$R/sbin/mkfs.ext3" \
+          "$R/sbin/mkfs.ext4" 2>/dev/null || true
+    if [ -x "$R/usr/sbin/mke2fs" ]; then
+        msg "mke2fs present (e2fsprogs)"
+    else
+        echo "WARN: mke2fs absent from the rootfs - persist= and the"
+        echo "      installer cannot format disks."
     fi
 
     # Overlay (hand-written boot scripts, may override the above)
@@ -695,14 +706,21 @@ if [ -n "$PERSIST" ]; then
         echo "persist: device $PERSIST"
         mkdir -p /mnt/root
         if ! mount -t ext4 "$PERSIST" /mnt/root 2>/dev/null; then
-            echo "persist: blank disk — formatting (ext2 fs, ext4 driver)"
-            mke2fs -F -q "$PERSIST" 2>/dev/null && \
-                mount -t ext4 "$PERSIST" /mnt/root 2>/dev/null || \
-                echo "persist: format/mount FAILED"
+            echo "persist: blank disk - formatting (ext2 fs, ext4 driver)"
+            if mke2fs -F -q "$PERSIST" && \
+                mount -t ext4 "$PERSIST" /mnt/root; then
+                echo "persist: formatted OK"
+            else
+                echo "persist: format/mount FAILED - RAM mode"
+                umount /mnt/root 2>/dev/null
+                PERSIST=""
+            fi
         fi
+    fi
+    if [ -n "$PERSIST" ]; then
         if [ ! -f /mnt/root/.iso-rootfs-v1 ]; then
-            echo "persist: first boot — copying rootfs to disk"
-            for d in bin sbin usr lib lib64 etc home root var opt; do
+            echo "persist: first boot - copying rootfs to disk"
+            for d in bin sbin usr lib lib64 etc home root var opt boot; do
                 [ -e "/$d" ] || continue
                 cp -a "/$d" /mnt/root/
             done
@@ -718,7 +736,7 @@ if [ -n "$PERSIST" ]; then
         echo "persist: switching root to $PERSIST"
         exec switch_root /mnt/root /sbin/init
     fi
-    echo "persist: device $PERSIST missing — RAM mode"
+    echo "persist: RAM mode"
 fi
 
 exec /sbin/init
