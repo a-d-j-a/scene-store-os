@@ -224,11 +224,13 @@ static int step_fdisk(void)
 {
     char cmd[256];
     set_status("partitioning...");
-    /* On a BLANK disk busybox fdisk first asks "Do you want to start with
-     * a DOS partition table? (y/n)" - answer y, then label, primary
-     * partition 1, defaults for first/last sector, write. */
+    /* util-linux sfdisk in SCRIPT mode (non-interactive by design; the
+     * busybox fdisk applet is not compiled into this busybox build and
+     * interactive fdisk cannot be scripted reliably across versions):
+     * a DOS label with one Linux partition starting at sector 2048. */
     snprintf(cmd, sizeof(cmd),
-             "printf 'y\\no\\nn\\np\\n1\\n\\n\\nw\\n' | fdisk %s", g_dev);
+             "printf 'label: dos\\nstart=2048, type=83\\n' | sfdisk %s",
+             g_dev);
     if (sh(cmd) != 0) {
         set_status("fdisk failed");
         return -1;

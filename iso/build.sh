@@ -590,7 +590,7 @@ REPO
         done
     fi
     if command -v apk >/dev/null 2>&1; then
-        apk add --root "$R" grub grub-bios e2fsprogs >/dev/null 2>&1 && \
+        apk add --root "$R" grub grub-bios e2fsprogs sfdisk >/dev/null 2>&1 && \
             msg "grub installed into rootfs (host apk)" || \
             echo "WARN: apk add --root grub failed"
     elif command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
@@ -605,7 +605,7 @@ REPO
             curl -fsSL -o "$ASTATIC" "$URL/apk-tools-static-$APKVER.apk" \
                 && tar -xzf "$ASTATIC" -C "$TOPDIR" sbin/apk.static 2>/dev/null; then
             "$TOPDIR/sbin/apk.static" --root "$R" --initdb add \
-                grub grub-bios e2fsprogs >/dev/null 2>&1 && \
+                grub grub-bios e2fsprogs sfdisk >/dev/null 2>&1 && \
                 msg "grub installed into rootfs (apk.static)" || \
                 echo "WARN: apk.static add grub failed"
         else
