@@ -125,16 +125,7 @@ static int sh(const char *cmd)
              "rc=$?; echo rc=$rc >> /var/log/iso-install.log; "
              "tail -5 /var/log/iso-install.log >&2; exit $rc", cmd);
     rc = system(buf);
-    dlog("iso-install: sh sys rc=%d\n", rc);
-    if (rc == -1)
-        return 1;
-    if (WIFEXITED(rc)) {
-        dlog("iso-install: sh exit=%d\n", WEXITSTATUS(rc));
-        return WEXITSTATUS(rc);
-    }
-    dlog("iso-install: sh signaled sig=%d\n",
-         WIFSIGNALED(rc) ? WTERMSIG(rc) : -1);
-    return 1;
+    return rc == -1 ? 1 : (WIFEXITED(rc) ? WEXITSTATUS(rc) : 1);
 }
 
 /* True when nothing is mounted from /dev/<base> (any partition of it). */
