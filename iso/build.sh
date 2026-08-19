@@ -620,15 +620,14 @@ REPO
         echo "      menu item will report 'grub failed' - install it with:"
         echo "      apk add --root $R grub grub-bios"
     fi
-    # Prefer the real e2fsprogs mke2fs over the busybox applet symlink
-    # (the applet can be compiled out; the init script's persist flow and
-    # iso-install both rely on a working mke2fs).
-    rm -f "$R/sbin/mke2fs" "$R/sbin/mkfs.ext2" "$R/sbin/mkfs.ext3" \
-          "$R/sbin/mkfs.ext4" 2>/dev/null || true
-    if [ -x "$R/usr/sbin/mke2fs" ]; then
-        msg "mke2fs present (e2fsprogs)"
+    # mke2fs: Alpine's e2fsprogs drops a REAL binary at $R/sbin/mke2fs
+    # (+ mkfs.ext{2,3,4} symlinks), replacing the busybox applet symlink
+    # during the same install. init's persist flow and iso-install both
+    # rely on it; verify it landed.
+    if [ -x "$R/sbin/mke2fs" ] && [ ! -L "$R/sbin/mke2fs" ]; then
+        msg "mke2fs present (e2fsprogs, real binary)"
     else
-        echo "WARN: mke2fs absent from the rootfs - persist= and the"
+        echo "WARN: real mke2fs absent from the rootfs - persist= and the"
         echo "      installer cannot format disks."
     fi
 
