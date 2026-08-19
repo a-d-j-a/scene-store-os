@@ -448,6 +448,15 @@ int main(int argc, char **argv)
     scene_node_id content;
     int i;
 
+#if !defined(_WIN32)
+    /* The launcher forks us with SIGCHLD set to SIG_IGN, which survives
+     * exec (only caught signals reset to SIG_DFL). With SIGCHLD ignored,
+     * system()'s waitpid fails with ECHILD and every shell command
+     * reports failure to the installer. The installer spawns its own
+     * children (sfdisk, mke2fs, grub) and must reap them: set SIG_DFL. */
+    signal(SIGCHLD, SIG_DFL);
+#endif
+
     if (argc > 1 && strcmp(argv[1], "--help") == 0) {
         printf("usage: iso-install [DEVICE]\n"
                "       installs the running system onto a disk and makes\n"
