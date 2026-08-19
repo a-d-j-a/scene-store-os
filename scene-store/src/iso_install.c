@@ -111,15 +111,19 @@ static void set_status(const char *s)
 
 /* ---- POSIX-only: the real step bodies ------------------------------------ */
 
-/* Run a shell pipeline, appending its output to /tmp/iso-install.log.
- * Returns the command's exit status. */
+/* Run a shell pipeline, appending its output to /var/log/iso-install.log
+ * (DISK-backed: /tmp is a tmpfs in the running system and its contents
+ * die with the power cut; the persist disk keeps the log for post-mortem
+ * reads). The last five lines are echoed to stderr -> serial. Returns
+ * the command's exit status. */
 static int sh(const char *cmd)
 {
-    char buf[512];
+    char buf[640];
     int rc;
     snprintf(buf, sizeof(buf),
-             "(%s) >> /tmp/iso-install.log 2>&1; echo rc=$? "
-             ">> /tmp/iso-install.log", cmd);
+             "(%s) >> /var/log/iso-install.log 2>&1; echo rc=$? "
+             ">> /var/log/iso-install.log; tail -5 /var/log/iso-install.log "
+             ">&2;", cmd);
     rc = system(buf);
     return rc == -1 ? 1 : (WIFEXITED(rc) ? WEXITSTATUS(rc) : 1);
 }
@@ -235,8 +239,18 @@ static int step_fdisk(void)
         set_status("fdisk failed");
         return -1;
     }
-    snprintf(cmd, sizeof(cmd), "sleep 1; [ -b %s ]", g_part);
-    return sh(cmd) == 0 ? 0 : -1;
+    /* The partition node can lag the table write; poll up to 10 s. */
+    {
+        int tries;
+        for (tries = 0; tries < 10; tries++) {
+            snprintf(cmd, sizeof(cmd), "[ -b %s ]", g_part);
+            if (sh(cmd) == 0)
+                return 0;
+            sleep(1);
+        }
+        set_status("partition node missing");
+        return -1;
+    }
 }
 
 static int step_mkfs(void)
