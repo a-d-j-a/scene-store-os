@@ -657,7 +657,11 @@ build_initramfs() {
     rm -f "$SYSROOT/boot/initramfs-*.cpio.gz" 2>/dev/null || true
 
     # Full rootfs copy: busybox install + musl + kernel modules + /etc + /usr
-    cp -a "$SYSROOT/." "$TMP/"
+    # (a polluted build tree /dev is possible - live system bind probes -
+    # cp of device nodes fails; /dev is never needed: init mounts devtmpfs
+    # fresh at boot).
+    cp -a "$SYSROOT/." "$TMP/" 2>/dev/null || true
+    rm -rf "$TMP/dev"
     rm -f "$TMP/boot/initramfs-*.cpio.gz" 2>/dev/null || true
     # Drop build-only artifacts. /boot is KEPT: the installer copies the
     # live /boot onto the target disk, and a disk boot loads vmlinuz +
