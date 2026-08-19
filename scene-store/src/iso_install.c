@@ -118,12 +118,12 @@ static void set_status(const char *s)
  * the command's exit status. */
 static int sh(const char *cmd)
 {
-    char buf[640];
+    char buf[672];
     int rc;
     snprintf(buf, sizeof(buf),
-             "(%s) >> /var/log/iso-install.log 2>&1; echo rc=$? "
-             ">> /var/log/iso-install.log; tail -5 /var/log/iso-install.log "
-             ">&2;", cmd);
+             "(%s) >> /var/log/iso-install.log 2>&1; "
+             "rc=$?; echo rc=$rc >> /var/log/iso-install.log; "
+             "tail -5 /var/log/iso-install.log >&2; exit $rc", cmd);
     rc = system(buf);
     return rc == -1 ? 1 : (WIFEXITED(rc) ? WEXITSTATUS(rc) : 1);
 }
