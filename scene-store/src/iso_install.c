@@ -160,15 +160,15 @@ static int detect_dev(char *out, size_t outsz)
         if (strncmp(name, "loop", 4) == 0 || strncmp(name, "ram", 3) == 0 ||
             strncmp(name, "fd", 2) == 0 || strncmp(name, "sr", 2) == 0)
             continue;
-        snprintf(path, sizeof(path), "/sys/block/%s/device", name);
+        snprintf(path, sizeof(path), "/sys/block/%.40s/device", name);
         if (stat(path, &st) != 0)
             continue;
-        snprintf(path, sizeof(path), "/dev/%s", name);
+        snprintf(path, sizeof(path), "/dev/%.40s", name);
         if (stat(path, &st) != 0 || !S_ISBLK(st.st_mode))
             continue;
         if (!disk_unmounted(name))
             continue;
-        snprintf(out, outsz, "/dev/%s", name);
+        snprintf(out, outsz, "/dev/%.40s", name);
         free(list);
         return 0;
     }
@@ -184,9 +184,9 @@ static void mk_part_name(const char *dev, char *out, size_t outsz)
     base = base ? base + 1 : dev;
     n = strlen(base);
     if (n > 0 && base[n - 1] >= '0' && base[n - 1] <= '9')
-        snprintf(out, outsz, "%sp1", dev);
+        snprintf(out, outsz, "%.48sp1", dev);
     else
-        snprintf(out, outsz, "%s1", dev);
+        snprintf(out, outsz, "%.48s1", dev);
 }
 
 /* Top-level dirs the rootfs copy carries. /boot is included so the
@@ -202,7 +202,7 @@ static int step_detect(void)
     const char *want = getenv("SCENE_INSTALL_TO");
     struct stat st;
     if (want && *want)
-        snprintf(g_dev, sizeof(g_dev), "%s", want);
+        snprintf(g_dev, sizeof(g_dev), "%.48s", want);
     else if (detect_dev(g_dev, sizeof(g_dev)) != 0) {
         set_status("no target disk");
         g_step = ST_FAIL;
