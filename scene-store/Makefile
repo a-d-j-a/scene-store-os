@@ -500,7 +500,7 @@ WLR_PC := wlroots wayland-server libdrm xkbcommon wayland-client
 # Compile-only check of the compositor against the wlroots headers
 # (seat of the Linux integration; the ISO links none of this)
 build/iso_compositor.o: src/iso_compositor.c include/iso_compositor.h include/scene_compositor.h include/scene_fb.h include/scene_client.h include/scene_store.h include/scene_shell.h | build
-	$(CC) $(CFLAGS) -DWLR_USE_UNSTABLE $(shell pkg-config --cflags $(WLR_PC)) -c src/iso_compositor.c -o $@
+	$(CC) $(CFLAGS) -DWLR_USE_UNSTABLE -Ithird_party/wayland $(shell pkg-config --cflags $(WLR_PC)) -c src/iso_compositor.c -o $@
 
 # Standalone compositor binary (headless proof / ISO host runs)
 build/iso-wl: src/iso_compositor.c build/scene_fmt.o build/scene_store.o \
@@ -509,6 +509,7 @@ build/iso-wl: src/iso_compositor.c build/scene_fmt.o build/scene_store.o \
 	build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
 	build/scene_wallpaper.o build/scene_image.o | build
 	$(CC) $(CFLAGS) -DISO_WL_MAIN -DWLR_USE_UNSTABLE \
+		-Ithird_party/wayland \
 		$(shell pkg-config --cflags --libs $(WLR_PC)) \
 		-lwlroots \
 		src/iso_compositor.c build/scene_fmt.o build/scene_store.o \
