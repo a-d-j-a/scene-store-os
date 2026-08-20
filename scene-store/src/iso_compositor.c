@@ -189,6 +189,7 @@ static void cb_pointer(void *ud, uint64_t seq, uint8_t device,
                        int32_t x, int32_t y, uint8_t buttons)
 {
     iso_server *srv = ud;
+    (void)device;
     if (srv->sh)
         scene_shell_handle_pointer(srv->sh, x, y, buttons);
     scene_client_ack(srv->cli, seq);
@@ -367,15 +368,21 @@ static void win_commit(struct wl_listener *listener, void *data)
     iso_window *win = wl_container_of(listener, win, commit);
     (void)data;
     if (win->dead) return;
+
+    /* wlroots 0.17 removed xdg map/unmap signals; the mapped state is
+     * derived from wlr_surface.mapped at each commit. */
+    if (win->surface && win->surface->mapped && !win->mapped)
+        win_map_derive(win);
+    else if ((!win->surface || !win->surface->mapped) && win->mapped)
+        win_unmap_derive(win);
+
     wl_import_frame(win->srv, win);
     wl_set_title(win->srv, win);
 }
 
-static void win_map(struct wl_listener *listener, void *data)
+static void win_map_derive(iso_window *win)
 {
-    iso_window *win = wl_container_of(listener, win, map);
     iso_server *srv = win->srv;
-    (void)data;
     if (win->mapped || win->dead) return;
     win->mapped = 1;
 
@@ -412,10 +419,8 @@ static void win_map(struct wl_listener *listener, void *data)
     }
 }
 
-static void win_unmap(struct wl_listener *listener, void *data)
+static void win_unmap_derive(iso_window *win)
 {
-    iso_window *win = wl_container_of(listener, win, unmap);
-    (void)data;
     if (!win->mapped || win->dead) return;
     win->mapped = 0;
     if (win->srv->cli)
@@ -444,11 +449,9 @@ static void win_destroy(struct wl_listener *listener, void *data)
         if (srv->seat)
             wlr_seat_keyboard_clear_focus(srv->seat);
     }
-    if (win->slot < WL_WIN_ID_CAP)
+    if (win->slot >= 0 && (uint32_t)win->slot < WL_WIN_ID_CAP)
         srv->win_slots[win->slot] = 0;
 
-    wl_list_remove(&win->map.link);
-    wl_list_remove(&win->unmap.link);
     wl_list_remove(&win->destroy.link);
     wl_list_remove(&win->commit.link);
     wl_list_remove(&win->link);
@@ -482,10 +485,6 @@ static void xdg_toplevel_new(struct wl_listener *listener, void *data)
     srv->win_next = (slot + 1) % WL_WIN_ID_CAP;
     wl_list_insert(&srv->windows, &win->link);
 
-    wl_signal_add(&win->toplevel->events.map, &win->map);
-    win->map.notify = win_map;
-    wl_signal_add(&win->toplevel->events.unmap, &win->unmap);
-    win->unmap.notify = win_unmap;
     wl_signal_add(&xdg_surface->events.destroy, &win->destroy);
     win->destroy.notify = win_destroy;
     wl_signal_add(&win->surface->events.commit, &win->commit);
