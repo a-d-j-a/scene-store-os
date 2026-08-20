@@ -525,8 +525,9 @@ build/iso-wl: src/iso_compositor.c build/scene_fmt.o build/scene_store.o \
 # reproducible without wayland-protocols at build time).
 build/iso_wl_client: tools/iso_wl_client.c third_party/wayland/xdg-shell-protocol.c third_party/wayland/xdg-shell-client.h | build
 	$(CC) $(CFLAGS) -Ithird_party/wayland \
-		$(shell pkg-config --cflags --libs wayland-client) \
+		$(shell pkg-config --cflags wayland-client) \
 		tools/iso_wl_client.c third_party/wayland/xdg-shell-protocol.c \
+		$(shell pkg-config --libs wayland-client) \
 		-o $@
 
 iso-compositor: build/iso-wl build/iso_wl_client
