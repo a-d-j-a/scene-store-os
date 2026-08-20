@@ -122,6 +122,9 @@ typedef struct iso_window {
     struct wl_list        link;
 } iso_window;
 
+static void win_map_derive(iso_window *win);
+static void win_unmap_derive(iso_window *win);
+
 /* ---- server ----------------------------------------------------------- */
 
 struct iso_server {
