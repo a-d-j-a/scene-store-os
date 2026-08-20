@@ -482,9 +482,9 @@ static void xdg_toplevel_new(struct wl_listener *listener, void *data)
     srv->win_next = (slot + 1) % WL_WIN_ID_CAP;
     wl_list_insert(&srv->windows, &win->link);
 
-    wl_signal_add(&xdg_surface->events.map, &win->map);
+    wl_signal_add(&win->toplevel->events.map, &win->map);
     win->map.notify = win_map;
-    wl_signal_add(&xdg_surface->events.unmap, &win->unmap);
+    wl_signal_add(&win->toplevel->events.unmap, &win->unmap);
     win->unmap.notify = win_unmap;
     wl_signal_add(&xdg_surface->events.destroy, &win->destroy);
     win->destroy.notify = win_destroy;
@@ -516,7 +516,7 @@ static void output_frame(struct wl_listener *listener, void *data)
         if (pf) {
             fprintf(pf, "P6\n%u %u\n255\n", fb->w, fb->h);
             for (uint32_t i = 0; i < (uint32_t)(fb->w * fb->h); i++) {
-                uint32_t p = fb->pixels[i];
+                uint32_t p = fb->px[i];
                 const uint8_t c[3] = {
                     (uint8_t)((p >> 16) & 0xFF),
                     (uint8_t)((p >> 8)  & 0xFF),
@@ -529,7 +529,7 @@ static void output_frame(struct wl_listener *listener, void *data)
     }
 
     struct wlr_texture *tex = wlr_texture_from_pixels(srv->renderer,
-            DRM_FORMAT_XRGB8888, fb->w * 4, fb->w, fb->h, fb->pixels);
+            DRM_FORMAT_XRGB8888, fb->w * 4, fb->w, fb->h, fb->px);
     if (!tex)
         return;
 
@@ -620,7 +620,7 @@ static uint8_t key_mods_to_scene(struct wlr_keyboard *kb)
 {
     uint8_t m = 0;
     xkb_mod_mask_t dep = kb->modifiers.depressed;
-    xkb_keymap *km = kb->keymap;
+    struct xkb_keymap *km = kb->keymap;
     if (!km) return 0;
     xkb_mod_index_t ci = xkb_keymap_mod_get_index(km, XKB_MOD_NAME_CTRL);
     xkb_mod_index_t si = xkb_keymap_mod_get_index(km, XKB_MOD_NAME_SHIFT);
@@ -779,8 +779,6 @@ iso_server *iso_server_create(void)
         fprintf(stderr, "iso-wl: failed to create the wlroots backend\n");
         goto fail;
     }
-    if (getenv("ISO_HEADLESS"))
-        wlr_headless_add_output(srv->backend, 1280, 800);
 
     srv->renderer = wlr_renderer_autocreate(srv->backend);
     if (!srv->renderer) {
@@ -812,6 +810,10 @@ iso_server *iso_server_create(void)
     srv->new_xdg_surface.notify = xdg_toplevel_new;
     srv->output_frame.notify = output_frame;
     srv->output_destroy.notify = output_destroy;
+    srv->pointer_motion.notify = pointer_motion;
+    srv->pointer_button.notify = pointer_button;
+    srv->keyboard_key.notify = keyboard_key;
+    srv->keyboard_modifiers.notify = keyboard_modifiers;
     wl_signal_add(&srv->backend->events.new_output, &srv->new_output);
     wl_signal_add(&srv->backend->events.new_input, &srv->new_input);
     wl_signal_add(&srv->xdg_shell->events.new_surface, &srv->new_xdg_surface);
