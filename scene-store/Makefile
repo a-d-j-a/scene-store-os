@@ -337,7 +337,7 @@ build/test_photo_app$(EXE): tests/test_photo_app.c build/scene_fmt.o \
 		build/scene_font_data.o build/scene_compositor.o build/scene_image.o \
 		$(SOCKLIB) -o $@
 
-# Cross-app search overlay (Super+S) suite ??? the OS-layer flagship consumer
+# Cross-app search overlay (Super+S) suite — the OS-layer flagship consumer
 build/test_searchoverlay$(EXE): tests/test_searchoverlay.c build/scene_fmt.o \
 	build/scene_store.o build/scene_transport.o build/scene_client.o \
 	build/scene_server.o build/scene_fb.o build/scene_font.o \
@@ -495,28 +495,45 @@ test-dbg: build/test_store_dbg$(EXE)
 
 # wlroots compositor (Linux only)
 ifneq ($(UNAME_S),Windows)
-build/iso_compositor.o: src/iso_compositor.c include/iso_compositor.h include/scene_compositor.h include/scene_fb.h include/scene_client.h include/scene_store.h include/scene_shell.h | build
-	$(CC) $(CFLAGS) $(shell pkg-config --cflags wlroots wayland-server) -c src/iso_compositor.c -o $@
+WLR_PC := wlroots wayland-server libdrm xkbcommon wayland-client
 
-build/iso_compositor$(EXE): src/iso_compositor.c build/scene_fmt.o build/scene_store.o \
+# Compile-only check of the compositor against the wlroots headers
+# (seat of the Linux integration; the ISO links none of this)
+build/iso_compositor.o: src/iso_compositor.c include/iso_compositor.h include/scene_compositor.h include/scene_fb.h include/scene_client.h include/scene_store.h include/scene_shell.h | build
+	$(CC) $(CFLAGS) -DWLR_USE_UNSTABLE $(shell pkg-config --cflags $(WLR_PC)) -c src/iso_compositor.c -o $@
+
+# Standalone compositor binary (headless proof / ISO host runs)
+build/iso-wl: src/iso_compositor.c build/scene_fmt.o build/scene_store.o \
 	build/scene_transport.o build/scene_client.o build/scene_server.o \
 	build/scene_fb.o build/scene_font.o build/scene_font_data.o \
 	build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
-	build/scene_wallpaper.o build/scene_image.o \
-	build/iso_compositor.o | build
-	$(CC) $(CFLAGS) $(shell pkg-config --cflags --libs wlroots wayland-server) \
+	build/scene_wallpaper.o build/scene_image.o | build
+	$(CC) $(CFLAGS) -DISO_WL_MAIN -DWLR_USE_UNSTABLE \
+		$(shell pkg-config --cflags --libs $(WLR_PC)) \
+		-lwlroots \
 		src/iso_compositor.c build/scene_fmt.o build/scene_store.o \
 		build/scene_transport.o build/scene_client.o build/scene_server.o \
 		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
 		build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
 		build/scene_wallpaper.o build/scene_image.o \
-		-lwayland-server -lpthread -o $@
+		-lwayland-server -lpthread -lm -o $@
 
-iso-compositor: build/iso_compositor$(EXE)
+# Proof Wayland client: real libwayland-client + generated xdg-shell code.
+# third_party/wayland/xdg-shell-protocol.c+client.h are produced by
+# wayland-scanner from the stable protocol (vendored so the build is
+# reproducible without wayland-protocols at build time).
+build/iso_wl_client: tools/iso_wl_client.c third_party/wayland/xdg-shell-protocol.c third_party/wayland/xdg-shell-client.h | build
+	$(CC) $(CFLAGS) -Ithird_party/wayland \
+		$(shell pkg-config --cflags --libs wayland-client) \
+		tools/iso_wl_client.c third_party/wayland/xdg-shell-protocol.c \
+		-o $@
+
+iso-compositor: build/iso-wl build/iso_wl_client
+wl-proof: build/iso-wl build/iso_wl_client
 
 # DRM/KMS compositor (Linux only): pure kernel-UAPI, no external libs.
 # ffmpeg static libs: the OS-side media importer (scene_codec) decodes
-# the shared clip at this seam ??? the honest-boundary adoption, whose
+# the shared clip at this seam — the honest-boundary adoption, whose
 # lock + justification live in third_party/ffmpeg/LICENSE.md.
 build/iso_drm$(EXE): src/iso_drm.c build/scene_fmt.o build/scene_store.o \
 	build/scene_transport.o build/scene_client.o build/scene_server.o \
@@ -555,4 +572,4 @@ endif
 clean:
 	rm -rf build
 
-.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-sessions test-launcher test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm iso-terminal test-video test-appwm test-hostwm test-shellwm test-play clean test-codec
+.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-sessions test-launcher test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm iso-terminal test-video test-appwm test-hostwm test-shellwm test-play clean test-codec wl-proof

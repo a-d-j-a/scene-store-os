@@ -1,653 +1,828 @@
 /* iso_compositor.c — custom wlroots compositor integrating the scene engine.
  *
  * Architecture:
- *   wlroots          ->  Wayland protocol, output, input, GPU
- *   iso_compositor   ->  maps wlroots surfaces to scene-store ops
- *   scene_compositor ->  software-renders the semantic scene to a framebuffer
- *   wlroots output   <-  presents the framebuffer
+ *   wlroots              ->  Wayland protocol, outputs, input
+ *   iso_server           ->  owns the scene engine (scene_compositor + its
+ *                            layer-0 store), the desktop shell, and the
+ *                            bridge from Wayland clients into the scene
+ *   scene_compositor     ->  software-renders the semantic scene to a fb
+ *   wlroots output      <-  presents that fb as one XRGB8888 texture
  *
- * The scene_compositor owns both the store and the server seam.
- * wlroots client frames are fed into scene_server_feed().
- * Shell nodes (desktop, panel) are created via an internal scene_client
- * connected through a loopback transport.
+ * The honest boundary (stated, never hidden): legacy Wayland client frames
+ * are COMPOSITED TEXTURES, not semantic nodes. A wl client's surface is
+ * imported as a texture into the scene store's layer-0 registry and blitted
+ * into a window node the compositor owns. The scene store owns meaning for
+ * native apps; wl clients arrive as pixels plus a window rect and title.
+ *
+ * The wl-window node layout (layer 0, the shell session):
+ *   WINDOW node  (role SCENE_ROLE_WINDOW, id < ID_BACKGROUND so the shell
+ *                 tracks it as a task button), text slot 0 = client title
+ *   IMAGE child  (role SCENE_ROLE_IMAGE, rect (0,0,w,h) in window space),
+ *                 texture ref = the client's frame, refreshed every commit
+ * The client draws its own chrome (NetSurf's framebuffer UI has its own
+ * titlebar), so the OS adds none.
+ *
+ * wlroots API facts this file rests on (verified against Debian trixie
+ * wlroots 0.17 headers, 2026-08-20): wlr_renderer_read_pixels reads
+ * back in the requested DRM format (XY conversions supported);
+ * wlr_surface_get_texture lives in wlr/types/wlr_compositor.h;
+ * wlr_render_pass_submit/pass options struct is wlr_render_texture_options
+ * (alpha is a const float*, blend_mode=0 is premultiplied, filter 0 =
+ * bilinear, transform 0 = normal); wlr_output_begin_render_pass takes
+ * (output, state-or-NULL, buffer_age-or-NULL, timer-or-NULL);
+ * wlr_output_preferred_mode (not wlr_output_get_preferred_mode);
+ * wlr_output_layout was removed in 0.17 (single-output, none used);
+ * wlr_headless_backend_create + wlr_headless_add_output are behind
+ * -DWLR_USE_UNSTABLE; DRM format macros come from drm_fourcc.h (fallback
+ * literals are defined below if the header is absent).
+ *
+ * Build: Linux only, -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L,
+ * queried via `pkg-config --cflags --libs wlroots wayland-server xkbcommon
+ * libdrm`. Not compiled by the Windows tree; the ISO build links the
+ * standalone binary `iso-wl` (ISO_WL_MAIN, guarded below).
  *
  * This file is Linux-only (wlroots dependency).                              */
 
 #define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
 #include "iso_compositor.h"
-#include "scene_shell.h"
 
+#include <errno.h>
+#include <inttypes.h>
+#include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
+
+#include <drm_fourcc.h>
 #include <wlr/backend.h>
+#include <wlr/backend/headless.h>
 #include <wlr/render/allocator.h>
-#include <wlr/render/renderer.h>
-#include <wlr/render/texture.h>
+#include <wlr/render/pass.h>
+#include <wlr/render/wlr_renderer.h>
+#include <wlr/render/wlr_texture.h>
 #include <wlr/types/wlr_compositor.h>
-#include <wlr/types/wlr_cursor.h>
-#include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_output.h>
-#include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_pointer.h>
 #include <wlr/types/wlr_seat.h>
-#include <wlr/types/wlr_surface.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 
-/* ======================================================================
- * Structures
- * ====================================================================== */
+#ifndef DRM_FORMAT_XRGB8888
+#define DRM_FORMAT_XRGB8888 0x34325258u
+#endif
 
-/* Per-client-surface state: maps a wlroots surface to a scene-store node.
- * The scene-store node is created by the shell (iso_compositor) and
- * populated by the actual Wayland client's frame data fed through
- * scene_server_feed().                                                     */
-typedef struct iso_surface {
-    struct wlr_surface    *wlr_surf;
-    scene_node_id          node_id;
-    struct iso_server     *server;     /* back-pointer for client/comp access */
-    struct wl_listener     on_map;
-    struct wl_listener     on_unmap;
-    struct wl_listener     on_commit;
-    struct wl_listener     on_destroy;
-    struct wl_list         link;   /* iso_server.surfaces */
-} iso_surface;
+#ifndef WLR_COMPOSITOR_VERSION
+#define WLR_COMPOSITOR_VERSION 5u
+#endif
+#ifndef WLR_XDG_SHELL_VERSION
+#define WLR_XDG_SHELL_VERSION 3u
+#endif
+
+/* Window position constants for the open cascade. */
+#define WL_WIN_TITLE_H    32u      /* unused in v1 (client draws chrome)  */
+#define WL_WIN_CASCADE_X  24       /* px between successive window origins */
+#define WL_WIN_CASCADE_Y  24
+#define WL_WIN_START_X    96
+#define WL_WIN_START_Y    88
+
+/* Node/texture id spaces (layer-0 store). Window nodes must sit below
+ * ID_BACKGROUND (10000) so the shell's task reconciliation tracks them. */
+#define WL_WIN_ID_BASE   9000u
+#define WL_WIN_ID_CAP    (10000u - WL_WIN_ID_BASE)
+#define WL_TEX_BASE      0x70000000u
+#define WL_TEX_CAP       4096u
+
+typedef struct iso_server iso_server;
+
+/* ---- per-xdg-toplevel window ------------------------------------------ */
+
+typedef struct iso_window {
+    struct iso_server   *srv;
+    struct wlr_xdg_toplevel *toplevel;
+    struct wlr_surface  *surface;      /* xdg_surface->surface            */
+    uint32_t              node_id;
+    uint32_t              content_id;  /* IMAGE child                     */
+    scene_texture_ref     tex_ref;     /* SCENE_NO_TEXTURE = none yet     */
+    uint32_t              buf_w, buf_h;/* dims of the currently held ref  */
+    int                   mapped;
+    int                   dead;
+    int                   slot;        /* index in the window id table    */
+    struct wl_listener    map;
+    struct wl_listener    unmap;
+    struct wl_listener    destroy;
+    struct wl_listener    commit;      /* wl_surface commit (new frame)   */
+    struct wl_listener    toplevel_unmap; /* xdg toplevel internal unmap  */
+    struct wl_listener    surface_destroy; /* wl_surface destroy          */
+    struct wl_list        link;
+} iso_window;
+
+/* ---- server ----------------------------------------------------------- */
 
 struct iso_server {
-    /* wlroots objects */
-    struct wl_display       *wl_display;
-    struct wlr_backend      *backend;
-    struct wlr_renderer     *renderer;
-    struct wlr_allocator    *allocator;
-    struct wlr_output       *output;
-    struct wlr_output_layout *output_layout;
-    struct wlr_compositor   *wlr_compositor;
-    struct wlr_xdg_shell    *xdg_shell;
-    struct wlr_seat         *seat;
-    struct wlr_cursor       *cursor;
-    struct wlr_cursor_manager *cursor_mgr;
+    struct wl_display   *wl_display;
+    struct wlr_backend  *backend;
+    struct wlr_renderer *renderer;
+    struct wlr_allocator *allocator;
+    struct wlr_compositor *compositor;
+    struct wlr_xdg_shell *xdg_shell;
+    struct wlr_seat     *seat;
 
-    /* scene engine (scene_compositor owns store + server seam) */
-    scene_compositor        *scene_comp;
+    /* scene engine + shell (layer 0) */
+    scene_compositor    *cp;
+    scene_loopback      *lb;
+    scene_transport     *server_ts;    /* server side of the loopback     */
+    scene_client        *cli;          /* owner client (shell + wl win)   */
+    scene_shell         *sh;
+    scene_shell_config   sh_cfg;
+    int                   welcomed;
 
-    /* loopback transport + shell client for creating desktop nodes */
-    scene_loopback          *loopback;
-    scene_transport         *shell_ts;       /* client end */
-    scene_transport         *server_ts;      /* server end (fed into server) */
-    scene_client            *shell_client;
+    /* wl windows */
+    struct wl_list        windows;
+    uint8_t               win_slots[WL_WIN_ID_CAP]; /* 1 = id in use      */
+    uint32_t              win_next;                 /* slot candidate     */
+    uint32_t              tx_next;                  /* texture ref counter */
+    uint32_t              win_count;                /* cascade order       */
 
-    /* desktop shell (optional, for themed shell) */
-    scene_shell             *shell;
-    scene_shell_config       shell_cfg;
+    /* output */
+    struct wlr_output    *output;      /* primary output (first one wins) */
+    struct wl_listener    new_output;
+    struct wl_listener    output_frame;
+    struct wl_listener    output_destroy;
 
-    /* tracked surfaces */
-    struct wl_list           surfaces;  /* iso_surface.link */
+    /* input */
+    struct wl_listener    new_input;
+    struct wl_listener    pointer_motion;
+    struct wl_listener    pointer_button;
+    struct wl_listener    keyboard_key;
+    struct wl_listener    keyboard_modifiers;
+    struct wl_listener    new_xdg_surface;
+    struct wlr_keyboard  *keyboard;    /* active keyboard, for seat focus */
 
-    /* next node ID for wlroots-mapped surfaces */
-    uint32_t                 next_node_id;
+    double                ptr_x, ptr_y;
+    struct wlr_surface   *focus_surface; /* seat-focused wl surface       */
 
-    /* output dimensions */
-    uint32_t                 width, height;
-
-    /* listeners */
-    struct wl_listener      on_new_output;
-    struct wl_listener      on_new_xdg_surface;
-    struct wl_listener      on_new_input;
-    struct wl_listener      on_cursor_motion;
-    struct wl_listener      on_cursor_button;
-    struct wl_listener      on_keyboard_key;
-    struct wl_listener      on_request_set_cursor;
-
-    /* per-output frame listener (dynamic, attached on output creation) */
-    struct wl_listener      on_frame;
+    uint64_t              frames;
+    const char           *dump_ppm;    /* env ISO_DUMP_PPM: write each fb */
 };
 
-/* Shell node IDs (owned by the compositor, not by clients). */
-#define ISO_SHELL_DESKTOP   1u
-#define ISO_SHELL_PANEL     2u
-
-/* wlroots-surface node IDs start here. */
-#define ISO_NODE_BASE  1000u
-
-/* Default desktop background color (dark). */
-#define ISO_DESKTOP_COLOR  0xFF1A1A1Au
-
 /* ======================================================================
- * Server pump: flush shell client, drain server responses
+ * Scene seam helpers
  * ====================================================================== */
 
-static void server_pump(iso_server *srv)
+/* ---- owner client callbacks (events the engine pushes at us) ---------- */
+
+static void cb_activate(void *ud, uint64_t seq, scene_node_id id)
 {
-    scene_client *sc = srv->shell_client;
-    scene_server *ss = scene_compositor_server(srv->scene_comp);
+    iso_server *srv = ud;
+    if (srv->sh)
+        scene_shell_handle_activate(srv->sh, id);
+    scene_client_ack(srv->cli, seq);
+}
 
-    scene_client_flush(sc);
+static void cb_pointer(void *ud, uint64_t seq, uint8_t device,
+                       int32_t x, int32_t y, uint8_t buttons)
+{
+    iso_server *srv = ud;
+    if (srv->sh)
+        scene_shell_handle_pointer(srv->sh, x, y, buttons);
+    scene_client_ack(srv->cli, seq);
+}
 
-    uint8_t buf[8192];
-    uint32_t got;
-    while (scene_transport_recv(srv->server_ts, buf, sizeof(buf), &got) == 0
-           && got) {
-        scene_server_feed(ss, buf, got);
+static void cb_focus(void *ud, uint64_t seq, scene_node_id id, uint8_t state)
+{
+    iso_server *srv = ud;
+    (void)id; (void)state;
+    scene_client_ack(srv->cli, seq);
+}
+
+static void cb_key(void *ud, uint64_t seq, uint32_t code, uint8_t state,
+                   uint8_t mods)
+{
+    iso_server *srv = ud;
+    if (srv->sh)
+        scene_shell_handle_key(srv->sh, code, state, mods);
+    scene_client_ack(srv->cli, seq);
+}
+
+static void cb_text(void *ud, uint64_t seq, const char *text, uint32_t len)
+{
+    iso_server *srv = ud;
+    (void)text; (void)len;
+    scene_client_ack(srv->cli, seq);
+}
+
+static void cb_welcome(void *ud, uint32_t scene_id, uint16_t version,
+                       const scene_limits *lim)
+{
+    iso_server *srv = ud;
+    (void)scene_id; (void)version; (void)lim;
+    srv->welcomed = 1;
+}
+
+static const scene_client_cbs owner_cbs = {
+    .welcome        = cb_welcome,
+    .input_activate = cb_activate,
+    .input_pointer  = cb_pointer,
+    .input_focus    = cb_focus,
+    .input_key      = cb_key,
+    .input_text     = cb_text,
+};
+
+/* ---- loopback pumping (one thread drives both ends) -------------------- */
+
+static void scene_tick(iso_server *srv)
+{
+    scene_server *sv = scene_compositor_server(srv->cp);
+
+    /* server -> client: drain the server adapter's outbound into the
+     * loopback; the owner client's pump() then dispatches it. */
+    scene_client_pump(srv->cli);
+    const uint8_t *frame = NULL;
+    uint32_t flen = 0;
+    while (scene_server_out_next_frame(sv, &frame, &flen) == 0 && flen > 0) {
+        if (scene_transport_send(srv->server_ts, frame, flen) != 0) return;
     }
+    scene_client_flush(srv->cli);
 
-    const uint8_t *f;
-    uint32_t flen;
-    while (scene_server_out_next_frame(ss, &f, &flen) == 1)
-        scene_transport_send(srv->server_ts, f, flen);
-
-    scene_client_pump(sc);
-}
-
-/* ======================================================================
- * Shell: desktop background + panel (fallback without scene_shell)
- * ====================================================================== */
-
-static void shell_create_desktop(iso_server *srv)
-{
-    scene_client *c = srv->shell_client;
-    scene_rect r = { 0, 0, (int32_t)srv->width, (int32_t)srv->height };
-
-    scene_client_create_node(c, SCENE_NO_PARENT, ISO_SHELL_DESKTOP,
-                             SCENE_ROLE_WINDOW, &r, SCENE_FLAG_VISIBLE);
-    scene_client_set_style(c, ISO_SHELL_DESKTOP, 0);
-}
-
-static void shell_create_panel(iso_server *srv)
-{
-    scene_client *c = srv->shell_client;
-    int32_t ph = 36;
-    scene_rect r = { 0, (int32_t)srv->height - ph,
-                     (int32_t)srv->width, ph };
-
-    scene_client_create_node(c, ISO_SHELL_DESKTOP, ISO_SHELL_PANEL,
-                             SCENE_ROLE_PANEL, &r, SCENE_FLAG_VISIBLE);
-}
-
-static void shell_resize(iso_server *srv, uint32_t w, uint32_t h)
-{
-    scene_client *c = srv->shell_client;
-    int32_t ph = 36;
-
-    scene_rect desktop_r = { 0, 0, (int32_t)w, (int32_t)h };
-    scene_client_set_rect(c, ISO_SHELL_DESKTOP, &desktop_r);
-
-    scene_rect panel_r = { 0, (int32_t)h - ph, (int32_t)w, ph };
-    scene_client_set_rect(c, ISO_SHELL_PANEL, &panel_r);
-}
-
-/* ======================================================================
- * Surface to scene-store mapping
- * ====================================================================== */
-
-static void surface_update_rect(iso_surface *surf)
-{
-    struct wlr_surface *ws = surf->wlr_surf;
-    scene_rect r = {
-        ws->current.x,
-        ws->current.y,
-        ws->current.width,
-        ws->current.height
-    };
-    scene_client_set_rect(surf->server->shell_client, surf->node_id, &r);
-}
-
-static void surface_update_texture(iso_surface *surf)
-{
-    struct wlr_surface *ws = surf->wlr_surf;
-    struct wlr_texture *tex;
-
-    if (!ws->buffer) return;
-    tex = wlr_surface_get_texture(ws);
-    if (!tex) return;
-
-    uint32_t pw = ws->current.width;
-    uint32_t ph = ws->current.height;
-    if (pw == 0 || ph == 0) return;
-
-    void *pixels = calloc((size_t)pw * (size_t)ph, 4);
-    if (!pixels) return;
-
-    wlr_texture_read_pixels(tex, WL_OUTPUT_FORMAT_ARGB8888,
-                            0, 0, pw, ph, pixels);
-
-    scene_texture_ref tex_ref = surf->node_id;
-    scene_compositor_register_texture(surf->server->scene_comp, tex_ref,
-                                      pw, ph,
-                                      1, /* SCENE_TEX_FMT_ARGB */
-                                      0, /* not opaque */
-                                      (const uint32_t *)pixels);
-    scene_client_set_texture(surf->server->shell_client, surf->node_id,
-                             tex_ref, NULL, 1, 255);
-
-    free(pixels);
-}
-
-/* ---- wlroots callbacks for surface lifecycle ---- */
-
-static void on_surface_map(struct wl_listener *l, void *data)
-{
-    iso_surface *surf = wl_container_of(l, surf, on_map);
-    (void)data;
-    surface_update_rect(surf);
-    scene_client_set_flags(surf->server->shell_client, surf->node_id,
-                           SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
-    surface_update_texture(surf);
-}
-
-static void on_surface_unmap(struct wl_listener *l, void *data)
-{
-    iso_surface *surf = wl_container_of(l, surf, on_unmap);
-    (void)data;
-    scene_client_set_flags(surf->server->shell_client, surf->node_id, 0);
-}
-
-static void on_surface_commit(struct wl_listener *l, void *data)
-{
-    iso_surface *surf = wl_container_of(l, surf, on_commit);
-    (void)data;
-    surface_update_rect(surf);
-    surface_update_texture(surf);
-}
-
-static void on_surface_destroy(struct wl_listener *l, void *data)
-{
-    iso_surface *surf = wl_container_of(l, surf, on_destroy);
-    (void)data;
-
-    wl_list_remove(&surf->on_map.link);
-    wl_list_remove(&surf->on_unmap.link);
-    wl_list_remove(&surf->on_commit.link);
-    wl_list_remove(&surf->on_destroy.link);
-    wl_list_remove(&surf->link);
-
-    scene_client_destroy_node(surf->server->shell_client, surf->node_id);
-    free(surf);
-}
-
-static iso_surface *iso_surface_create(iso_server *srv,
-                                       struct wlr_surface *ws)
-{
-    iso_surface *surf = calloc(1, sizeof(*surf));
-    if (!surf) return NULL;
-
-    surf->wlr_surf  = ws;
-    surf->server    = srv;
-    surf->node_id   = srv->next_node_id++;
-
-    scene_rect r = {
-        ws->current.x, ws->current.y,
-        ws->current.width, ws->current.height
-    };
-    scene_client_create_node(srv->shell_client,
-                             ISO_SHELL_DESKTOP, surf->node_id,
-                             SCENE_ROLE_WINDOW, &r, 0);
-
-    surf->on_map.notify      = on_surface_map;
-    surf->on_unmap.notify    = on_surface_unmap;
-    surf->on_commit.notify   = on_surface_commit;
-    surf->on_destroy.notify  = on_surface_destroy;
-    wl_signal_add(&ws->events.map,    &surf->on_map);
-    wl_signal_add(&ws->events.unmap,  &surf->on_unmap);
-    wl_signal_add(&ws->events.commit, &surf->on_commit);
-    wl_signal_add(&ws->events.destroy, &surf->on_destroy);
-
-    wl_list_insert(&srv->surfaces, &surf->link);
-    return surf;
-}
-
-/* ======================================================================
- * Output: present our framebuffer
- * ====================================================================== */
-
-static void on_output_frame(struct wl_listener *l, void *data)
-{
-    iso_server *srv = wl_container_of(l, srv, on_frame);
-    struct wlr_output *output = data;
-    (void)output;
-
-    /* Update shell (clock, task list, wallpaper). */
-    if (srv->shell)
-        scene_shell_tick(srv->shell);
-
-    /* Flush shell client ops and drain server responses. */
-    server_pump(srv);
-
-    /* Compose one frame: diff, effects, repaint. */
-    scene_compositor_frame(srv->scene_comp);
-
-    /* Read back the framebuffer and present to the output. */
-    const scene_fb *fb = scene_compositor_fb(srv->scene_comp);
-    if (!fb || !fb->px || fb->w == 0 || fb->h == 0) return;
-
-    uint32_t fb_w = fb->w;
-    uint32_t fb_h = fb->h;
-
-    struct wlr_render_pass *pass =
-        wlr_output_begin_render_pass(output, NULL);
-    if (!pass) return;
-
-    struct wlr_texture *tex = wlr_texture_from_pixels(
-        srv->renderer,
-        WL_OUTPUT_FORMAT_ARGB8888,
-        fb_w * 4,
-        fb_w, fb_h,
-        fb->px);
-    if (!tex) {
-        wlr_render_pass_submit(pass);
-        return;
-    }
-
-    struct wlr_texture_options opts = {
-        .texture = tex,
-        .src_box = { 0, 0, (int)fb_w, (int)fb_h },
-        .dst_box = { 0, 0, (int)fb_w, (int)fb_h },
-        .alpha = 1.0f,
-    };
-    wlr_render_pass_add_texture(pass, &opts);
-    wlr_texture_destroy(tex);
-    wlr_render_pass_submit(pass);
-}
-
-/* ======================================================================
- * Input: cursor + keyboard to scene store
- * ====================================================================== */
-
-static void on_cursor_motion(struct wl_listener *l, void *data)
-{
-    iso_server *srv = wl_container_of(l, srv, on_cursor_motion);
-    struct wlr_pointer_motion_event *evt = data;
-
-    wlr_cursor_move(srv->cursor, &evt->pointer->base,
-                    evt->delta_x, evt->delta_y);
-
-    /* Forward to shell for hover tracking. */
-    if (srv->shell)
-        scene_shell_handle_pointer(srv->shell,
-                                   (int32_t)srv->cursor->x,
-                                   (int32_t)srv->cursor->y, 0);
-
-    scene_compositor_input_pointer(srv->scene_comp, 0,
-                                   (int32_t)srv->cursor->x,
-                                   (int32_t)srv->cursor->y, 0);
-}
-
-static void on_cursor_button(struct wl_listener *l, void *data)
-{
-    iso_server *srv = wl_container_of(l, srv, on_cursor_button);
-    struct wlr_pointer_button_event *evt = data;
-
-    uint8_t btns = (evt->state == WL_POINTER_BUTTON_STATE_PRESSED) ? 0x01 : 0;
-
-    /* Forward to shell for click handling. */
-    if (srv->shell) {
-        scene_node_id hit = scene_shell_handle_pointer(
-            srv->shell,
-            (int32_t)srv->cursor->x,
-            (int32_t)srv->cursor->y, btns);
-        if (hit != 0 && btns) {
-            scene_shell_handle_activate(srv->shell, hit);
+    /* client -> server: read whatever the client put on the loopback and
+     * feed it into the server adapter (frame reassembly inside). */
+    for (;;) {
+        uint8_t buf[8192];
+        uint32_t got = 0;
+        int r = scene_transport_recv(srv->server_ts, buf, sizeof(buf), &got);
+        if (r != 0 || got == 0) break;
+        if (scene_server_feed(sv, buf, got) != 0) {
+            fprintf(stderr, "iso-wl: scene server engine error (fatal)\n");
+            break;
         }
     }
 
-    scene_compositor_input_pointer(srv->scene_comp, 0,
-                                   (int32_t)srv->cursor->x,
-                                   (int32_t)srv->cursor->y, btns);
+    if (srv->sh)
+        scene_shell_tick(srv->sh);
 }
 
-static void on_keyboard_key(struct wl_listener *l, void *data)
-{
-    iso_server *srv = wl_container_of(l, srv, on_keyboard_key);
-    struct wlr_keyboard_key_event *evt = data;
+/* ---- node ops through the owner client --------------------------------- */
 
-    struct wlr_keyboard *kb = srv->seat->keyboard_state.keyboard;
-    uint8_t mod = 0;
-    if (kb) {
-        xkb_mod_mask_t mods = xkb_state_serialize_mods(
-            kb->xkb_state, XKB_STATE_MODS_EFFECTIVE);
-        xkb_mod_index_t idx;
-        idx = xkb_map_mod_get_index(kb->keymap, XKB_MOD_NAME_SHIFT);
-        if (mods & (1u << idx)) mod |= SCENE_MOD_SHIFT;
-        idx = xkb_map_mod_get_index(kb->keymap, XKB_MOD_NAME_CTRL);
-        if (mods & (1u << idx)) mod |= SCENE_MOD_CTRL;
-        idx = xkb_map_mod_get_index(kb->keymap, XKB_MOD_NAME_ALT);
-        if (mods & (1u << idx)) mod |= SCENE_MOD_ALT;
-        idx = xkb_map_mod_get_index(kb->keymap, XKB_MOD_NAME_LOGO);
-        if (mods & (1u << idx)) mod |= SCENE_MOD_SUPER;
+static int wl_create_window_nodes(iso_server *srv, iso_window *win,
+                                  uint32_t x, uint32_t y,
+                                  uint32_t w, uint32_t h)
+{
+    scene_rect r;
+
+    r.x = (int32_t)x; r.y = (int32_t)y;
+    r.w = (uint32_t)w; r.h = (uint32_t)h;
+    if (scene_client_create_node(srv->cli, SCENE_NO_PARENT, win->node_id,
+            SCENE_ROLE_WINDOW, &r,
+            SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE) != 0)
+        return -1;
+
+    r.x = 0; r.y = 0; r.w = w; r.h = h;
+    if (scene_client_create_node(srv->cli, win->node_id, win->content_id,
+            SCENE_ROLE_IMAGE, &r, SCENE_FLAG_VISIBLE) != 0)
+        return -1;
+    return 0;
+}
+
+static void wl_set_title(iso_server *srv, iso_window *win)
+{
+    const char *title = win->toplevel ? win->toplevel->title : NULL;
+    const char *t = title ? title : "";
+    size_t len = strlen(t);
+    if (len > 512) len = 512;
+    scene_client_set_text(srv->cli, win->node_id, 0, t, (uint32_t)len);
+}
+
+static int wl_place_texture(iso_server *srv, iso_window *win,
+                            uint32_t w, uint32_t h)
+{
+    scene_rect r = { 0, 0, w, h };
+    return scene_client_set_texture(srv->cli, win->content_id, win->tex_ref,
+                                    &r, 0, 255);
+}
+
+/* Import the surface's current frame into the scene: read the pixels from
+ * the compositor's texture (wlr_renderer_read_pixels), bump the texture ref
+ * on size change, register it into the layer-0 store + compositor registry,
+ * and point the content node at it. Called from the surface commit path. */
+static void wl_import_frame(iso_server *srv, iso_window *win)
+{
+    struct wlr_surface *surf = win->surface;
+    if (!surf || !surf->buffer) return;
+
+    uint32_t w = surf->current.width;
+    uint32_t h = surf->current.height;
+    if (w == 0 || h == 0 || w > 8192 || h > 8192) return;
+
+    struct wlr_texture *tex = wlr_surface_get_texture(surf);
+    if (!tex) return;
+
+    uint8_t *px = malloc((size_t)w * h * 4);
+    if (!px) return;
+    if (!wlr_renderer_read_pixels(srv->renderer, DRM_FORMAT_XRGB8888,
+                                  w * 4, w, h, 0, 0, 0, 0, px)) {
+        free(px);
+        return;
     }
 
-    /* xkb_keycode is evdev + 8. */
-    uint32_t key_code = evt->keycode - 8;
-    uint8_t state = (evt->state == WL_KEYBOARD_KEY_STATE_PRESSED) ? 1 : 0;
+    if (win->tex_ref != SCENE_NO_TEXTURE &&
+        (win->buf_w != w || win->buf_h != h)) {
+        /* size change: retire the old ref entirely, take a fresh one */
+        scene_store_release_texture(scene_compositor_layer_store(srv->cp, 0),
+                                    win->tex_ref);
+        scene_compositor_release_texture(srv->cp, win->tex_ref);
+        win->tex_ref = SCENE_NO_TEXTURE;
+        win->buf_w = win->buf_h = 0;
+    }
 
-    /* Forward to shell for Alt+Tab, Escape, etc. */
-    if (srv->shell && state) {
-        if (scene_shell_handle_key(srv->shell, key_code, state, mod))
+    if (win->tex_ref == SCENE_NO_TEXTURE) {
+        if (srv->tx_next >= WL_TEX_CAP) { free(px); return; }
+        win->tex_ref = WL_TEX_BASE + srv->tx_next++;
+        win->buf_w = w; win->buf_h = h;
+        if (scene_store_register_texture(scene_compositor_layer_store(srv->cp, 0),
+                    win->tex_ref, w, h, SCENE_TEX_FMT_XRGB, 1) != 0) {
+            win->tex_ref = SCENE_NO_TEXTURE;
+            win->buf_w = win->buf_h = 0;
+            free(px);
             return;
+        }
     }
 
-    scene_compositor_input_key(srv->scene_comp, key_code, state, mod);
+    wl_place_texture(srv, win, w, h);
+    scene_compositor_register_texture(srv->cp, win->tex_ref, w, h,
+                                      SCENE_TEX_FMT_XRGB, 1,
+                                      (const uint32_t *)px);
+    free(px);
 }
 
-static void on_request_set_cursor(struct wl_listener *l, void *data)
+/* ---- wl-surface / xdg lifecycle --------------------------------------- */
+
+static void win_commit(struct wl_listener *listener, void *data)
 {
-    iso_server *srv = wl_container_of(l, srv, on_request_set_cursor);
-    struct wlr_seat_pointer_request_set_cursor_event *evt = data;
-    (void)srv;
-    wlr_cursor_set_surface(srv->cursor, evt->surface,
-                           evt->seat_client, evt->serial);
+    iso_window *win = wl_container_of(listener, win, commit);
+    (void)data;
+    if (win->dead) return;
+    wl_import_frame(win->srv, win);
+    wl_set_title(win->srv, win);
+}
+
+static void win_map(struct wl_listener *listener, void *data)
+{
+    iso_window *win = wl_container_of(listener, win, map);
+    iso_server *srv = win->srv;
+    (void)data;
+    if (win->mapped || win->dead) return;
+    win->mapped = 1;
+
+    uint32_t w = win->surface ? win->surface->current.width : 0;
+    uint32_t h = win->surface ? win->surface->current.height : 0;
+    if (w == 0 || h == 0) { w = 320; h = 240; }
+
+    uint32_t x, y;
+    if (srv->output) {
+        x = (uint32_t)(WL_WIN_START_X +
+            ((int)(srv->win_count % 8) * WL_WIN_CASCADE_X));
+        y = (uint32_t)(WL_WIN_START_Y +
+            ((int)(srv->win_count % 8) * WL_WIN_CASCADE_Y));
+    } else {
+        x = WL_WIN_START_X; y = WL_WIN_START_Y;
+    }
+    srv->win_count++;
+
+    if (wl_create_window_nodes(srv, win, x, y, w, h) != 0) {
+        win->mapped = 0;
+        return;
+    }
+    wl_set_title(srv, win);
+
+    /* If a frame already arrived before map, its texture was imported with
+     * the ref; point the freshly-created content node at it. */
+    if (win->tex_ref != SCENE_NO_TEXTURE)
+        wl_place_texture(srv, win, win->buf_w, win->buf_h);
+
+    /* The client becomes the seat keyboard focus (its window is new). */
+    if (srv->seat && srv->keyboard && win->surface) {
+        wlr_seat_keyboard_notify_enter(srv->seat, srv->keyboard, win->surface);
+        srv->focus_surface = win->surface;
+    }
+}
+
+static void win_unmap(struct wl_listener *listener, void *data)
+{
+    iso_window *win = wl_container_of(listener, win, unmap);
+    (void)data;
+    if (!win->mapped || win->dead) return;
+    win->mapped = 0;
+    if (win->srv->cli)
+        scene_client_set_flags(win->srv->cli, win->node_id, 0);
+}
+
+static void win_destroy(struct wl_listener *listener, void *data)
+{
+    iso_window *win = wl_container_of(listener, win, destroy);
+    iso_server *srv = win->srv;
+    (void)data;
+    if (win->dead) return;
+    win->dead = 1;
+
+    if (srv->cli && srv->welcomed) {
+        scene_client_destroy_node(srv->cli, win->content_id);
+        scene_client_destroy_node(srv->cli, win->node_id);
+    }
+    if (win->tex_ref != SCENE_NO_TEXTURE) {
+        scene_store_release_texture(scene_compositor_layer_store(srv->cp, 0),
+                                    win->tex_ref);
+        scene_compositor_release_texture(srv->cp, win->tex_ref);
+    }
+    if (win->surface && srv->focus_surface == win->surface) {
+        srv->focus_surface = NULL;
+        if (srv->seat)
+            wlr_seat_keyboard_clear_focus(srv->seat);
+    }
+    if (win->slot < WL_WIN_ID_CAP)
+        srv->win_slots[win->slot] = 0;
+
+    wl_list_remove(&win->map.link);
+    wl_list_remove(&win->unmap.link);
+    wl_list_remove(&win->destroy.link);
+    wl_list_remove(&win->commit.link);
+    wl_list_remove(&win->link);
+    free(win);
+}
+
+static void xdg_toplevel_new(struct wl_listener *listener, void *data)
+{
+    iso_server *srv = wl_container_of(listener, srv, new_xdg_surface);
+    struct wlr_xdg_surface *xdg_surface = data;
+    if (xdg_surface->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL)
+        return;
+
+    uint32_t slot;
+    for (slot = 0; slot < WL_WIN_ID_CAP; slot++) {
+        uint32_t c = (srv->win_next + slot) % WL_WIN_ID_CAP;
+        if (!srv->win_slots[c]) break;
+    }
+    if (slot >= WL_WIN_ID_CAP) return;
+
+    iso_window *win = calloc(1, sizeof(*win));
+    if (!win) return;
+    win->srv      = srv;
+    win->toplevel = xdg_surface->toplevel;
+    win->surface  = xdg_surface->surface;
+    win->node_id  = WL_WIN_ID_BASE + (slot * 3);
+    win->content_id = win->node_id + 1;
+    win->tex_ref  = SCENE_NO_TEXTURE;
+    win->slot     = (uint32_t)slot;
+    srv->win_slots[slot] = 1;
+    srv->win_next = (slot + 1) % WL_WIN_ID_CAP;
+    wl_list_insert(&srv->windows, &win->link);
+
+    wl_signal_add(&xdg_surface->events.map, &win->map);
+    win->map.notify = win_map;
+    wl_signal_add(&xdg_surface->events.unmap, &win->unmap);
+    win->unmap.notify = win_unmap;
+    wl_signal_add(&xdg_surface->events.destroy, &win->destroy);
+    win->destroy.notify = win_destroy;
+    wl_signal_add(&win->surface->events.commit, &win->commit);
+    win->commit.notify = win_commit;
 }
 
 /* ======================================================================
- * New-output / new-surface / new-input handlers
+ * Output
  * ====================================================================== */
 
-static void on_new_output(struct wl_listener *l, void *data)
+static void output_frame(struct wl_listener *listener, void *data)
 {
-    iso_server *srv = wl_container_of(l, srv, on_new_output);
-    struct wlr_output *output = data;
+    iso_server *srv = wl_container_of(listener, srv, output_frame);
+    (void)data;
 
-    wlr_output_layout_add(srv->output_layout, output, 0, 0);
+    scene_tick(srv);
+    if (scene_compositor_frame(srv->cp) != 0)
+        return;
+
+    const scene_fb *fb = scene_compositor_fb(srv->cp);
+    if (!fb || !srv->output)
+        return;
+    srv->frames++;
+
+    /* Optional pixel proof: dump the scene fb to a PPM every frame. */
+    if (srv->dump_ppm) {
+        FILE *pf = fopen(srv->dump_ppm, "wb");
+        if (pf) {
+            fprintf(pf, "P6\n%u %u\n255\n", fb->w, fb->h);
+            for (uint32_t i = 0; i < (uint32_t)(fb->w * fb->h); i++) {
+                uint32_t p = fb->pixels[i];
+                const uint8_t c[3] = {
+                    (uint8_t)((p >> 16) & 0xFF),
+                    (uint8_t)((p >> 8)  & 0xFF),
+                    (uint8_t)(p & 0xFF)
+                };
+                fwrite(c, 1, 3, pf);
+            }
+            fclose(pf);
+        }
+    }
+
+    struct wlr_texture *tex = wlr_texture_from_pixels(srv->renderer,
+            DRM_FORMAT_XRGB8888, fb->w * 4, fb->w, fb->h, fb->pixels);
+    if (!tex)
+        return;
+
+    struct wlr_render_pass *pass = wlr_output_begin_render_pass(srv->output,
+            NULL, NULL, NULL);
+    if (!pass) {
+        wlr_texture_destroy(tex);
+        return;
+    }
+
+    struct wlr_render_texture_options opt = { 0 };
+    opt.texture = tex;
+    opt.src_box = (struct wlr_fbox) {
+        .width = fb->w, .height = fb->h
+    };
+    opt.dst_box = (struct wlr_box) {
+        .width = srv->output->width, .height = srv->output->height
+    };
+    wlr_render_pass_add_texture(pass, &opt);
+    wlr_render_pass_submit(pass);
+    wlr_texture_destroy(tex);
+
+    if (wlr_output_commit_state(srv->output, NULL) != 0)
+        fprintf(stderr, "iso-wl: output commit failed\n");
+
+    /* Software path (headless / no vblank): keep frames flowing. */
+    wlr_output_schedule_frame(srv->output);
+}
+
+static void output_destroy(struct wl_listener *listener, void *data)
+{
+    iso_server *srv = wl_container_of(listener, srv, output_destroy);
+    (void)data;
+    srv->output = NULL;
+}
+
+static void output_new(struct wl_listener *listener, void *data)
+{
+    iso_server *srv = wl_container_of(listener, srv, new_output);
+    struct wlr_output *out = data;
+
+    /* Single output: keep the first one, ignore the rest. */
+    if (srv->output)
+        return;
+    srv->output = out;
 
     struct wlr_output_state state = { 0 };
-    wlr_output_state_set_enabled(&state, true);
-    struct wlr_output_mode *mode = wlr_output_get_preferred_mode(output);
-    if (mode)
-        wlr_output_state_set_mode(&state, mode);
-    wlr_output_commit_state(output, &state);
-    srv->output = output;
-
-    /* Get output dimensions. */
-    if (mode) {
-        srv->width  = (uint32_t)mode->width;
-        srv->height = (uint32_t)mode->height;
+    if (!wl_list_empty(&out->modes)) {
+        struct wlr_output_mode *mode = wlr_output_preferred_mode(out);
+        if (mode) wlr_output_state_set_mode(&state, mode);
     } else {
-        srv->width  = 1920;
-        srv->height = 1080;
+        /* Headless outputs carry their size already. */
     }
+    wlr_output_state_set_scale(&state, 1);
+    wlr_output_commit_state(out, &state);
 
-    /* Resize scene engine to match output. */
-    scene_compositor_resize(srv->scene_comp, srv->width, srv->height);
+    wl_signal_add(&out->events.frame, &srv->output_frame);
+    wl_signal_add(&out->events.destroy, &srv->output_destroy);
 
-    /* Resize shell. */
-    if (srv->shell) {
-        scene_shell_resize(srv->shell, (int32_t)srv->width,
-                           (int32_t)srv->height);
-    } else {
-        shell_resize(srv, srv->width, srv->height);
+    /* Size the scene engine to this output and build the desktop. */
+    scene_compositor_resize(srv->cp, out->width, out->height);
+    if (srv->sh) {
+        scene_shell_resize(srv->sh, out->width, out->height);
+    } else if (srv->welcomed) {
+        scene_shell_config_defaults(&srv->sh_cfg);
+        srv->sh_cfg.panel_height = 40;
+        srv->sh = scene_shell_new(srv->cli,
+                                  scene_compositor_layer_store(srv->cp, 0),
+                                  srv->cp, &srv->sh_cfg);
+        if (srv->sh) {
+            scene_compositor_setup_hover_style(srv->cp,
+                    srv->sh_cfg.hover_color, srv->sh_cfg.button_text);
+            scene_compositor_setup_active_style(srv->cp,
+                    srv->sh_cfg.button_color, srv->sh_cfg.button_text);
+            scene_shell_set_hover_style(srv->sh, 1);
+            scene_shell_set_active_style(srv->sh, 2);
+            scene_shell_build(srv->sh, out->width, out->height);
+            scene_client_flush(srv->cli);
+        }
     }
-
-    /* Attach the frame listener to this output. */
-    srv->on_frame.notify = on_output_frame;
-    wl_signal_add(&output->events.frame, &srv->on_frame);
 }
 
-static void on_new_xdg_surface(struct wl_listener *l, void *data)
+/* ======================================================================
+ * Input
+ * ====================================================================== */
+
+static uint8_t key_mods_to_scene(struct wlr_keyboard *kb)
 {
-    iso_server *srv = wl_container_of(l, srv, on_new_xdg_surface);
-    struct wlr_xdg_surface *xdg = data;
-
-    if (xdg->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL) return;
-
-    iso_surface_create(srv, xdg->surface);
+    uint8_t m = 0;
+    xkb_mod_mask_t dep = kb->modifiers.depressed;
+    xkb_keymap *km = kb->keymap;
+    if (!km) return 0;
+    xkb_mod_index_t ci = xkb_keymap_mod_get_index(km, XKB_MOD_NAME_CTRL);
+    xkb_mod_index_t si = xkb_keymap_mod_get_index(km, XKB_MOD_NAME_SHIFT);
+    xkb_mod_index_t ai = xkb_keymap_mod_get_index(km, XKB_MOD_NAME_ALT);
+    xkb_mod_index_t li = xkb_keymap_mod_get_index(km, XKB_MOD_NAME_LOGO);
+    if (ci != XKB_MOD_INVALID && (dep & (1u << ci))) m |= SCENE_MOD_CTRL;
+    if (si != XKB_MOD_INVALID && (dep & (1u << si))) m |= SCENE_MOD_SHIFT;
+    if (ai != XKB_MOD_INVALID && (dep & (1u << ai))) m |= SCENE_MOD_ALT;
+    if (li != XKB_MOD_INVALID && (dep & (1u << li))) m |= SCENE_MOD_SUPER;
+    return m;
 }
 
-static void on_new_input(struct wl_listener *l, void *data)
+static void pointer_motion(struct wl_listener *listener, void *data)
 {
-    iso_server *srv = wl_container_of(l, srv, on_new_input);
+    iso_server *srv = wl_container_of(listener, srv, pointer_motion);
+    struct wlr_pointer_motion_event *ev = data;
+    srv->ptr_x += ev->delta_x;
+    srv->ptr_y += ev->delta_y;
+    if (srv->cp)
+        scene_compositor_input_pointer(srv->cp, 0,
+                (int32_t)srv->ptr_x, (int32_t)srv->ptr_y, 0);
+    if (srv->seat && srv->focus_surface)
+        wlr_seat_pointer_notify_motion(srv->seat, ev->time_msec,
+                srv->ptr_x, srv->ptr_y);
+}
+
+static void pointer_button(struct wl_listener *listener, void *data)
+{
+    iso_server *srv = wl_container_of(listener, srv, pointer_button);
+    struct wlr_pointer_button_event *ev = data;
+    uint8_t btns = (ev->state == WL_POINTER_BUTTON_STATE_PRESSED) ? 1 : 0;
+    if (srv->cp)
+        scene_compositor_input_pointer(srv->cp, 0,
+                (int32_t)srv->ptr_x, (int32_t)srv->ptr_y, btns);
+
+    /* Seat routing: find the wl window the cursor is inside (topmost last-
+     * mapped wins) and give it pointer + keyboard focus. */
+    struct wlr_surface *hit = NULL;
+    iso_window *win;
+    wl_list_for_each(win, &srv->windows, link) {
+        if (!win->mapped || win->dead || !win->surface) continue;
+        struct wlr_surface *s = win->surface;
+        if (srv->ptr_x >= 0 && srv->ptr_y >= 0 &&
+            srv->ptr_x < s->current.width && srv->ptr_y < s->current.height)
+            hit = s;
+    }
+    if (srv->seat) {
+        if (hit && hit != srv->focus_surface) {
+            wlr_seat_pointer_notify_enter(srv->seat, hit, srv->ptr_x,
+                                          srv->ptr_y);
+            srv->focus_surface = hit;
+            if (srv->keyboard)
+                wlr_seat_keyboard_notify_enter(srv->seat, srv->keyboard, hit);
+        }
+        wlr_seat_pointer_notify_button(srv->seat, ev->time_msec,
+                ev->button, ev->state);
+    }
+}
+
+static void keyboard_key(struct wl_listener *listener, void *data)
+{
+    iso_server *srv = wl_container_of(listener, srv, keyboard_key);
+    struct wlr_keyboard_key_event *ev = data;
+    uint8_t state = (ev->state == WL_KEYBOARD_KEY_STATE_PRESSED) ? 1 : 0;
+    if (srv->cp)
+        scene_compositor_input_key(srv->cp, ev->keycode, state,
+                srv->keyboard ? key_mods_to_scene(srv->keyboard) : 0);
+    if (srv->seat)
+        wlr_seat_keyboard_notify_key(srv->seat, ev->time_msec,
+                ev->keycode, ev->state);
+}
+
+static void keyboard_modifiers(struct wl_listener *listener, void *data)
+{
+    iso_server *srv = wl_container_of(listener, srv, keyboard_modifiers);
+    (void)data;
+    if (srv->seat && srv->keyboard)
+        wlr_seat_keyboard_notify_modifiers(srv->seat, &srv->keyboard->modifiers);
+}
+
+static void new_input(struct wl_listener *listener, void *data)
+{
+    iso_server *srv = wl_container_of(listener, srv, new_input);
     struct wlr_input_device *dev = data;
-
     switch (dev->type) {
-    case WLR_INPUT_DEVICE_POINTER:
-        wlr_cursor_attach_input_device(srv->cursor, dev);
-        wlr_cursor_set_xcursor(srv->cursor, srv->cursor_mgr, "default");
+    case WLR_INPUT_DEVICE_POINTER: {
+        struct wlr_pointer *p = wlr_pointer_from_input_device(dev);
+        wl_signal_add(&p->events.motion, &srv->pointer_motion);
+        wl_signal_add(&p->events.button, &srv->pointer_button);
         break;
-    case WLR_INPUT_DEVICE_KEYBOARD:
-        wlr_seat_set_keyboard(srv->seat, dev);
+    }
+    case WLR_INPUT_DEVICE_KEYBOARD: {
+        struct wlr_keyboard *kb = wlr_keyboard_from_input_device(dev);
+        struct xkb_rule_names rules = {
+            .rules = NULL, .model = NULL, .layout = "us",
+            .variant = NULL, .options = NULL
+        };
+        struct xkb_context *ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+        struct xkb_keymap *km = ctx ?
+            xkb_keymap_new_from_names(ctx, &rules,
+                                      XKB_KEYMAP_COMPILE_NO_FLAGS) : NULL;
+        if (km) {
+            wlr_keyboard_set_keymap(kb, km);
+            xkb_keymap_unref(km);
+        }
+        xkb_context_unref(ctx);
+        wlr_keyboard_set_repeat_info(kb, 25, 600);
+        srv->keyboard = kb;
+        wl_signal_add(&kb->events.key, &srv->keyboard_key);
+        wl_signal_add(&kb->events.modifiers, &srv->keyboard_modifiers);
         break;
+    }
     default:
         break;
     }
-
-    wlr_seat_set_capabilities(srv->seat,
-                              WL_SEAT_CAPABILITY_POINTER |
-                              WL_SEAT_CAPABILITY_KEYBOARD);
 }
 
 /* ======================================================================
- * Create / destroy
+ * Server lifecycle
  * ====================================================================== */
 
 iso_server *iso_server_create(void)
 {
-    wlr_log(WLR_INFO, "iso-compositor: creating server");
-
     iso_server *srv = calloc(1, sizeof(*srv));
     if (!srv) return NULL;
-
-    wl_list_init(&srv->surfaces);
-    srv->next_node_id = ISO_NODE_BASE;
-
-    /* ---- wlroots init ---- */
+    wl_list_init(&srv->windows);
 
     srv->wl_display = wl_display_create();
-    if (!srv->wl_display) goto fail;
+    if (!srv->wl_display) { free(srv); return NULL; }
 
-    srv->backend = wlr_backend_autocreate(
-        wl_display_get_event_loop(srv->wl_display), NULL);
-    if (!srv->backend) goto fail;
+    /* Scene engine first: the desktop + all window nodes land in layer 0. */
+    srv->cp = scene_compositor_new(NULL, 1280, 800);
+    if (!srv->cp) { wl_display_destroy(srv->wl_display); free(srv); return NULL; }
+    scene_compositor_set_clear(srv->cp, 0xFF1A1A2E);
+    scene_compositor_set_effects(srv->cp, 1);
+
+    srv->lb = scene_loopback_new();
+    srv->server_ts = scene_loopback_server_end(srv->lb);
+    scene_server_attach(scene_compositor_server(srv->cp)); /* -> WELCOME */
+    srv->cli = scene_client_new();
+    if (scene_client_connect(srv->cli, scene_loopback_client_end(srv->lb),
+                             "shell", &owner_cbs, srv) != 0) {
+        fprintf(stderr, "iso-wl: scene client connect failed\n");
+        scene_client_free(srv->cli); srv->cli = NULL;
+    }
+    scene_tick(srv);   /* deliver WELCOME (client pump needs the loopback
+                          wiring; server_ts is set before this call) */
+
+    srv->dump_ppm = getenv("ISO_DUMP_PPM");
+    if (getenv("ISO_HEADLESS")) {
+        srv->backend = wlr_headless_backend_create(srv->wl_display);
+    } else {
+        srv->backend = wlr_backend_autocreate(srv->wl_display, NULL);
+    }
+    if (!srv->backend) {
+        fprintf(stderr, "iso-wl: failed to create the wlroots backend\n");
+        goto fail;
+    }
+    if (getenv("ISO_HEADLESS"))
+        wlr_headless_add_output(srv->backend, 1280, 800);
 
     srv->renderer = wlr_renderer_autocreate(srv->backend);
-    if (!srv->renderer) goto fail;
+    if (!srv->renderer) {
+        fprintf(stderr, "iso-wl: failed to create the renderer\n");
+        goto fail;
+    }
     wlr_renderer_init_wl_display(srv->renderer, srv->wl_display);
 
-    srv->allocator = wlr_allocator_autocreate(srv->backend,
-                                              srv->renderer);
-    if (!srv->allocator) goto fail;
-
-    srv->output_layout = wlr_output_layout_create(srv->wl_display);
-    if (!srv->output_layout) goto fail;
-
-    srv->wlr_compositor = wlr_compositor_create(
-        srv->wl_display, 5, srv->renderer);
-    if (!srv->wlr_compositor) goto fail;
-
-    srv->xdg_shell = wlr_xdg_shell_create(srv->wl_display, 5);
-    if (!srv->xdg_shell) goto fail;
-
-    srv->seat = wlr_seat_create(srv->wl_display, "seat0");
-    if (!srv->seat) goto fail;
-
-    srv->cursor = wlr_cursor_create();
-    if (!srv->cursor) goto fail;
-    wlr_cursor_attach_output_layout(srv->cursor, srv->output_layout);
-
-    srv->cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
-    if (!srv->cursor_mgr) goto fail;
-
-    /* ---- Scene engine init ---- */
-
-    srv->scene_comp = scene_compositor_new(NULL, 1920, 1080);
-    if (!srv->scene_comp) goto fail;
-
-    /* ---- Loopback transport + shell client ---- */
-
-    srv->loopback = scene_loopback_new();
-    if (!srv->loopback) goto fail;
-
-    srv->shell_ts  = scene_loopback_client_end(srv->loopback);
-    srv->server_ts = scene_loopback_server_end(srv->loopback);
-    if (!srv->shell_ts || !srv->server_ts) goto fail;
-
-    srv->shell_client = scene_client_new();
-    if (!srv->shell_client) goto fail;
-
-    if (scene_client_connect(srv->shell_client, srv->shell_ts,
-                             "iso-shell", &(scene_client_cbs){0}, srv) != 0)
+    srv->allocator = wlr_allocator_autocreate(srv->backend, srv->renderer);
+    if (!srv->allocator) {
+        fprintf(stderr, "iso-wl: failed to create the allocator\n");
         goto fail;
-
-    /* Pump the WELCOME response. */
-    server_pump(srv);
-
-    /* ---- Create desktop shell nodes ---- */
-
-    /* Use themed shell if available, otherwise fallback. */
-    scene_shell_config_defaults(&srv->shell_cfg);
-    (void)scene_shell_config_load(&srv->shell_cfg, "/etc/shell.conf");
-
-    srv->shell = scene_shell_new(srv->shell_client,
-                                 scene_compositor_store(srv->scene_comp),
-                                 srv->scene_comp,
-                                 &srv->shell_cfg);
-    if (srv->shell) {
-        /* Shell build creates its own nodes and calls apply_theme. */
-        scene_shell_build(srv->shell, 1920, 1080);
-        scene_compositor_set_effects(srv->scene_comp, 1);
-    } else {
-        /* Fallback: bare desktop + panel. */
-        shell_create_desktop(srv);
-        shell_create_panel(srv);
-
-        scene_style bg_style = {
-            .fill     = ISO_DESKTOP_COLOR,
-            .border   = 0,
-            .text     = 0,
-            .border_w = 0,
-            .radius   = 0
-        };
-        scene_compositor_set_style_count(srv->scene_comp, 1);
-        scene_compositor_set_style(srv->scene_comp, 0, &bg_style);
     }
 
-    /* ---- Listeners ---- */
+    srv->compositor = wlr_compositor_create(srv->wl_display,
+            WLR_COMPOSITOR_VERSION, srv->renderer);
+    srv->xdg_shell = wlr_xdg_shell_create(srv->wl_display,
+            WLR_XDG_SHELL_VERSION);
+    srv->seat = wlr_seat_create(srv->wl_display, "seat0");
+    if (!srv->compositor || !srv->xdg_shell || !srv->seat) {
+        fprintf(stderr, "iso-wl: failed to create protocol globals\n");
+        goto fail;
+    }
 
-    srv->on_new_output.notify    = on_new_output;
-    wl_signal_add(&srv->backend->events.new_output, &srv->on_new_output);
+    /* Register listeners before creating the headless output / starting
+     * the backend so new_output/new_input fire into wired handlers. */
+    srv->new_output.notify = output_new;
+    srv->new_input.notify = new_input;
+    srv->new_xdg_surface.notify = xdg_toplevel_new;
+    srv->output_frame.notify = output_frame;
+    srv->output_destroy.notify = output_destroy;
+    wl_signal_add(&srv->backend->events.new_output, &srv->new_output);
+    wl_signal_add(&srv->backend->events.new_input, &srv->new_input);
+    wl_signal_add(&srv->xdg_shell->events.new_surface, &srv->new_xdg_surface);
 
-    srv->on_new_xdg_surface.notify = on_new_xdg_surface;
-    wl_signal_add(&srv->xdg_shell->events.new_surface,
-                  &srv->on_new_xdg_surface);
+    if (getenv("ISO_HEADLESS"))
+        wlr_headless_add_output(srv->backend, 1280, 800);
 
-    srv->on_new_input.notify    = on_new_input;
-    wl_signal_add(&srv->backend->events.new_input, &srv->on_new_input);
-
-    srv->on_cursor_motion.notify  = on_cursor_motion;
-    wl_signal_add(&srv->cursor->events.motion, &srv->on_cursor_motion);
-
-    srv->on_cursor_button.notify  = on_cursor_button;
-    wl_signal_add(&srv->cursor->events.button, &srv->on_cursor_button);
-
-    srv->on_keyboard_key.notify   = on_keyboard_key;
-    wl_signal_add(&srv->seat->events.key, &srv->on_keyboard_key);
-
-    srv->on_request_set_cursor.notify = on_request_set_cursor;
-    wl_signal_add(&srv->seat->events.request_set_cursor,
-                  &srv->on_request_set_cursor);
-
-    wlr_log(WLR_INFO, "iso-compositor: server created");
+    if (!wlr_backend_start(srv->backend)) {
+        fprintf(stderr, "iso-wl: failed to start the backend\n");
+        goto fail;
+    }
     return srv;
 
 fail:
@@ -658,78 +833,71 @@ fail:
 void iso_server_destroy(iso_server *srv)
 {
     if (!srv) return;
-
-    if (srv->shell) scene_shell_free(srv->shell);
-
-    iso_surface *surf, *tmp;
-    wl_list_for_each_safe(surf, tmp, &srv->surfaces, link) {
-        scene_client_destroy_node(surf->server->shell_client, surf->node_id);
-        free(surf);
-    }
-
-    if (srv->shell_client) scene_client_free(srv->shell_client);
-    if (srv->shell_ts)     scene_transport_close(srv->shell_ts);
-    if (srv->server_ts)    scene_transport_close(srv->server_ts);
-    if (srv->loopback)     scene_loopback_free(srv->loopback);
-    if (srv->scene_comp)   scene_compositor_free(srv->scene_comp);
-
-    if (srv->cursor_mgr) wlr_xcursor_manager_destroy(srv->cursor_mgr);
-    if (srv->cursor)     wlr_cursor_destroy(srv->cursor);
-    if (srv->wl_display) wl_display_destroy(srv->wl_display);
-
+    if (srv->backend)
+        wlr_backend_destroy(srv->backend);
+    if (srv->sh)
+        scene_shell_free(srv->sh);
+    if (srv->cli)
+        scene_client_free(srv->cli);
+    if (srv->lb)
+        scene_loopback_free(srv->lb);
+    if (srv->cp)
+        scene_compositor_free(srv->cp);
+    if (srv->wl_display)
+        wl_display_destroy(srv->wl_display);
     free(srv);
 }
 
 scene_store *iso_server_store(iso_server *srv)
 {
-    return srv ? scene_compositor_store(srv->scene_comp) : NULL;
+    return srv ? scene_compositor_layer_store(srv->cp, 0) : NULL;
 }
 
 scene_compositor *iso_server_scene_comp(iso_server *srv)
 {
-    return srv ? srv->scene_comp : NULL;
+    return srv ? srv->cp : NULL;
 }
 
 scene_shell *iso_server_shell(iso_server *srv)
 {
-    return srv ? srv->shell : NULL;
+    return srv ? srv->sh : NULL;
 }
 
 /* ======================================================================
- * Entry point (standalone compositor, not a library)
+ * Standalone entry point (proves the compositor on the host/ISO)
  * ====================================================================== */
-#ifdef ISO_COMPOSITOR_STANDALONE
-int main(int argc, char *argv[])
-{
-    (void)argc;
-    (void)argv;
+#ifdef ISO_WL_MAIN
 
-    wlr_log_init(WLR_INFO, NULL);
+static void child_term(int sig)
+{
+    (void)sig;
+    /* no-op; SIGINT/SIGTERM end wl_display_run via the display listener */
+}
+
+int main(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    wlr_log_init(WLR_DEBUG, NULL);
+
+    signal(SIGINT, child_term);
+    signal(SIGTERM, child_term);
 
     iso_server *srv = iso_server_create();
-    if (!srv) {
-        wlr_log(WLR_ERROR, "failed to create iso-compositor");
-        return 1;
-    }
+    if (!srv) return 1;
 
-    wlr_log(WLR_INFO, "iso-compositor: starting backend");
-    if (!wlr_backend_start(srv->backend)) {
-        wlr_log(WLR_ERROR, "failed to start backend");
+    const char *socket = wl_display_add_socket_auto(srv->wl_display);
+    if (!socket) {
+        fprintf(stderr, "iso-wl: no WAYLAND socket available (%s)\n",
+                strerror(errno));
         iso_server_destroy(srv);
         return 1;
     }
-
-    char *sock = wl_display_add_socket_auto(srv->wl_display);
-    if (!sock) {
-        wlr_log(WLR_ERROR, "failed to create Wayland socket");
-        iso_server_destroy(srv);
-        return 1;
-    }
-    wlr_log(WLR_INFO, "iso-compositor: WAYLAND_DISPLAY=%s", sock);
-    setenv("WAYLAND_DISPLAY", sock, 1);
+    printf("iso-wl: WAYLAND_DISPLAY=%s\n", socket);
+    fflush(stdout);
 
     wl_display_run(srv->wl_display);
     iso_server_destroy(srv);
     return 0;
 }
-#endif /* ISO_COMPOSITOR_STANDALONE */
+
+#endif /* ISO_WL_MAIN */
