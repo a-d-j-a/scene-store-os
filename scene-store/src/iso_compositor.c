@@ -407,7 +407,7 @@ static void win_map(struct wl_listener *listener, void *data)
 
     /* The client becomes the seat keyboard focus (its window is new). */
     if (srv->seat && srv->keyboard && win->surface) {
-        wlr_seat_keyboard_notify_enter(srv->seat, srv->keyboard, win->surface);
+        wlr_seat_keyboard_notify_enter(srv->seat, win->surface, NULL, 0, NULL);
         srv->focus_surface = win->surface;
     }
 }
@@ -651,7 +651,7 @@ static void pointer_button(struct wl_listener *listener, void *data)
 {
     iso_server *srv = wl_container_of(listener, srv, pointer_button);
     struct wlr_pointer_button_event *ev = data;
-    uint8_t btns = (ev->state == WL_POINTER_BUTTON_STATE_PRESSED) ? 1 : 0;
+    uint8_t btns = (ev->state == WLR_BUTTON_PRESSED) ? 1 : 0;
     if (srv->cp)
         scene_compositor_input_pointer(srv->cp, 0,
                 (int32_t)srv->ptr_x, (int32_t)srv->ptr_y, btns);
@@ -673,7 +673,7 @@ static void pointer_button(struct wl_listener *listener, void *data)
                                           srv->ptr_y);
             srv->focus_surface = hit;
             if (srv->keyboard)
-                wlr_seat_keyboard_notify_enter(srv->seat, srv->keyboard, hit);
+                wlr_seat_keyboard_notify_enter(srv->seat, hit, NULL, 0, NULL);
         }
         wlr_seat_pointer_notify_button(srv->seat, ev->time_msec,
                 ev->button, ev->state);
