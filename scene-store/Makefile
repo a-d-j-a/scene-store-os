@@ -510,14 +510,14 @@ build/iso-wl: src/iso_compositor.c build/scene_fmt.o build/scene_store.o \
 	build/scene_wallpaper.o build/scene_image.o | build
 	$(CC) $(CFLAGS) -DISO_WL_MAIN -DWLR_USE_UNSTABLE \
 		-Ithird_party/wayland \
-		$(shell pkg-config --cflags --libs $(WLR_PC)) \
-		-lwlroots \
+		$(shell pkg-config --cflags $(WLR_PC)) \
 		src/iso_compositor.c build/scene_fmt.o build/scene_store.o \
 		build/scene_transport.o build/scene_client.o build/scene_server.o \
 		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
 		build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
 		build/scene_wallpaper.o build/scene_image.o \
-		-lwayland-server -lpthread -lm -o $@
+		$(shell pkg-config --libs $(WLR_PC)) \
+		-lwlroots -lwayland-server -lcrypt -lpthread -lm -o $@
 
 # Proof Wayland client: real libwayland-client + generated xdg-shell code.
 # third_party/wayland/xdg-shell-protocol.c+client.h are produced by
