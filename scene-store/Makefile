@@ -14,7 +14,7 @@ else
   SOCKLIB =
 endif
 
-all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE) build/iso_demo$(EXE) build/test_video_app$(EXE) build/iso_video$(EXE) build/test_app_wm$(EXE) build/test_hostwm$(EXE) build/test_shellwm$(EXE) build/iso_play$(EXE) build/iso_install$(EXE) build/test_play_app$(EXE) build/iso_files$(EXE) build/test_files_app$(EXE) build/iso_photo$(EXE) build/test_photo_app$(EXE) build/test_searchoverlay$(EXE) build/iso_edit$(EXE) build/test_edit_app$(EXE) build/test_codec$(EXE)
+all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE) build/iso_demo$(EXE) build/test_video_app$(EXE) build/iso_video$(EXE) build/test_app_wm$(EXE) build/test_hostwm$(EXE) build/test_shellwm$(EXE) build/iso_play$(EXE) build/iso_install$(EXE) build/test_play_app$(EXE) build/iso_files$(EXE) build/test_files_app$(EXE) build/iso_photo$(EXE) build/test_photo_app$(EXE) build/test_searchoverlay$(EXE) build/iso_edit$(EXE) build/test_edit_app$(EXE) build/test_codec$(EXE) build/test_wlshim$(EXE)
 
 # Vendored ffmpeg static build (see third_party/ffmpeg/LICENSE.md for
 # the locked configure and the written adoption justification). The ISO
@@ -337,7 +337,7 @@ build/test_photo_app$(EXE): tests/test_photo_app.c build/scene_fmt.o \
 		build/scene_font_data.o build/scene_compositor.o build/scene_image.o \
 		$(SOCKLIB) -o $@
 
-# Cross-app search overlay (Super+S) suite — the OS-layer flagship consumer
+# Cross-app search overlay (Super+S) suite ??? the OS-layer flagship consumer
 build/test_searchoverlay$(EXE): tests/test_searchoverlay.c build/scene_fmt.o \
 	build/scene_store.o build/scene_transport.o build/scene_client.o \
 	build/scene_server.o build/scene_fb.o build/scene_font.o \
@@ -481,6 +481,12 @@ test-searchoverlay: build/test_searchoverlay$(EXE)
 test-codec: build/test_codec$(EXE)
 	./build/test_codec$(EXE)
 
+build/test_wlshim$(EXE): tests/test_wlshim.c src/iso_wlshim.c include/iso_wlshim.h | build
+	$(CC) $(CFLAGS) tests/test_wlshim.c src/iso_wlshim.c -o $@
+
+test-wlshim: build/test_wlshim$(EXE)
+	./build/test_wlshim$(EXE)
+
 bench: build/bench$(EXE)
 	./build/bench$(EXE)
 
@@ -510,7 +516,7 @@ iso-compositor: build/iso_compositor$(EXE)
 
 # DRM/KMS compositor (Linux only): pure kernel-UAPI, no external libs.
 # ffmpeg static libs: the OS-side media importer (scene_codec) decodes
-# the shared clip at this seam — the honest-boundary adoption, whose
+# the shared clip at this seam ??? the honest-boundary adoption, whose
 # lock + justification live in third_party/ffmpeg/LICENSE.md.
 build/iso_drm$(EXE): src/iso_drm.c build/scene_fmt.o build/scene_store.o \
 	build/scene_transport.o build/scene_client.o build/scene_server.o \
