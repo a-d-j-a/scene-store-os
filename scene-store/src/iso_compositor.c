@@ -531,8 +531,8 @@ static void output_frame(struct wl_listener *listener, void *data)
         return;
     srv->frames++;
 
-    /* Optional pixel proof: dump the scene fb to a PPM every frame. */
-    if (srv->dump_ppm) {
+    /* Optional pixel proof: dump every 30th frame (3 MB write otherwise). */
+    if (srv->dump_ppm && (srv->frames % 30) == 0) {
         FILE *pf = fopen(srv->dump_ppm, "wb");
         if (pf) {
             fprintf(pf, "P6\n%u %u\n255\n", fb->w, fb->h);
@@ -829,11 +829,6 @@ iso_server *iso_server_create(void)
     srv->xdg_shell = wlr_xdg_shell_create(srv->wl_display,
             WLR_XDG_SHELL_VERSION);
     srv->seat = wlr_seat_create(srv->wl_display, "seat0");
-    // Explicit enumeration of wl_display globals via wl_global (test)
-    struct wl_global *g_shm = wl_global_create(srv->wl_display, &wl_shm_interface, 1, NULL, NULL);
-    struct wl_global *g_comp = wl_global_create(srv->wl_display, &wl_compositor_interface, 4, NULL, NULL);
-    // Test dummy global
-    struct wl_global *dummy = wl_global_create(srv->wl_display, &wl_compositor_interface, 1, NULL, NULL);
     if (!srv->compositor || !srv->xdg_shell || !srv->seat) {
         fprintf(stderr, "iso-wl: failed to create protocol globals\n");
         goto fail;
