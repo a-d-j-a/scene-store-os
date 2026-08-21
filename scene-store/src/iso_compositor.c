@@ -265,12 +265,16 @@ static void scene_tick(iso_server *srv)
      * loopback; the owner client's pump() then dispatches it. */
     const uint8_t *frame = NULL;
     uint32_t flen = 0;
-    while (scene_server_out_next_frame(sv, &frame, &flen) == 0 && flen > 0) {
+    int out_ret = scene_server_out_next_frame(sv, &frame, &flen);
+    fprintf(stderr, "DEBUG: out_next ret=%d flen=%u\n", out_ret, flen); fflush(stderr);
+    while (out_ret == 0 && flen > 0) {
         fprintf(stderr, "DEBUG: server out frame len=%u\n", flen); fflush(stderr);
         if (scene_transport_send(srv->server_ts, frame, flen) != 0) return;
+        out_ret = scene_server_out_next_frame(sv, &frame, &flen);
+        fprintf(stderr, "DEBUG: out_next ret=%d flen=%u\n", out_ret, flen); fflush(stderr);
     }
-    scene_client_pump(srv->cli);
-    fprintf(stderr, "DEBUG: after pump welcomed=%d\n", srv->welcomed); fflush(stderr);
+    int pump_rc = scene_client_pump(srv->cli);
+    fprintf(stderr, "DEBUG: pump rc=%d after pump welcomed=%d\n", pump_rc, srv->welcomed); fflush(stderr);
     scene_client_flush(srv->cli);
 
     /* client -> server: read whatever the client put on the loopback and
