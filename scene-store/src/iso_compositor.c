@@ -584,6 +584,10 @@ static void output_frame(struct wl_listener *listener, void *data)
             fclose(pf);
         }
     }
+    if (getenv("ISO_HEADLESS")) {
+        wlr_output_schedule_frame(srv->output);
+        return;
+    }
 
     fprintf(stderr, "DEBUG: output_frame create tex\n"); fflush(stderr);
     struct wlr_texture *tex = wlr_texture_from_pixels(srv->renderer,
