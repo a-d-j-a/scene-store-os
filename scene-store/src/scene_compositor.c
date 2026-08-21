@@ -1098,13 +1098,13 @@ scene_server *scene_compositor_server(scene_compositor *cp)
 
 scene_store *scene_compositor_layer_store(scene_compositor *cp, int layer)
 {
-    if (!cp || layer <= 0 || (uint32_t)layer >= cp->ly_count) return NULL;
+    if (!cp || layer < 0 || (uint32_t)layer >= cp->ly_count) return NULL;
     return cp->ly[layer].store;
 }
 
 scene_server *scene_compositor_layer_server(scene_compositor *cp, int layer)
 {
-    if (!cp || layer <= 0 || (uint32_t)layer >= cp->ly_count) return NULL;
+    if (!cp || layer < 0 || (uint32_t)layer >= cp->ly_count) return NULL;
     return cp->ly[layer].sv;
 }
 
