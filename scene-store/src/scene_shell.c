@@ -786,6 +786,7 @@ static int app_walk_cb(scene_node_id id, void *ud)
 
 int scene_shell_tick(scene_shell *sh)
 {
+    fprintf(stderr, "DEBUG: shell_tick sh=%p store=%p cp=%p built=%d\n", (void*)sh, (void*)(sh?sh->store:0), (void*)(sh?sh->cp:0), sh?sh->built:0); fflush(stderr);
     if (!sh || !sh->built) return -1;
 
     /* --- Clock update --- */

@@ -1787,7 +1787,7 @@ const scene_limits *scene_store_limits(const scene_store *s) { return &s->lim; }
 uint32_t scene_store_style_count(const scene_store *s) { return s->style_count; }
 uint32_t scene_store_effect_count(const scene_store *s) { return s->effect_count; }
 uint32_t scene_store_texture_count(const scene_store *s) { return s->tex_count; }
-scene_node_id scene_store_focus(const scene_store *s) { return s->focus; }
+scene_node_id scene_store_focus(const scene_store *s) { return s ? s->focus : SCENE_NO_PARENT; }
 
 scene_node_id scene_store_region_at(const scene_store *s,
                                     int32_t x, int32_t y)
