@@ -543,6 +543,8 @@ static void xdg_toplevel_new(struct wl_listener *listener, void *data)
     win->destroy.notify = win_destroy;
     wl_signal_add(&win->surface->events.commit, &win->commit);
     win->commit.notify = win_commit;
+
+    wlr_xdg_surface_schedule_configure(xdg_surface);
 }
 
 /* ======================================================================
