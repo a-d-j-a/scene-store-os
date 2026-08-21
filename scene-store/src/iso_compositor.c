@@ -544,7 +544,9 @@ static void xdg_toplevel_new(struct wl_listener *listener, void *data)
     wl_signal_add(&win->surface->events.commit, &win->commit);
     win->commit.notify = win_commit;
 
+    fprintf(stderr, "DEBUG: xdg_toplevel_new schedule configure\n"); fflush(stderr);
     wlr_xdg_surface_schedule_configure(xdg_surface);
+    fprintf(stderr, "DEBUG: xdg_toplevel_new done\n"); fflush(stderr);
 }
 
 /* ======================================================================

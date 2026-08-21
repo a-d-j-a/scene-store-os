@@ -104,6 +104,7 @@ static const struct xdg_wm_base_listener wm_base_listener = {
 static void xdg_surface_configure(void *data, struct xdg_surface *surface,
         uint32_t serial)
 {
+    fprintf(stderr, "iso-wl-client: xdg_surface_configure serial=%u\n", serial); fflush(stderr);
     struct client *c = data;
     xdg_surface_ack_configure(surface, serial);
     c->configured = 1;
@@ -204,7 +205,9 @@ static int run(struct client *c)
     /* registry + globals */
     c->registry = wl_display_get_registry(c->display);
     wl_registry_add_listener(c->registry, &registry_listener, c);
+    fprintf(stderr, "iso-wl-client: before roundtrip globals\n"); fflush(stderr);
     wl_display_roundtrip(c->display);
+    fprintf(stderr, "iso-wl-client: after roundtrip globals comp=%p shm=%p wm_base=%p\n", c->compositor, c->shm, c->wm_base); fflush(stderr);
     if (!c->compositor || !c->shm || !c->wm_base) {
         fprintf(stderr, "iso-wl-client: missing globals\n");
         return 1;
@@ -218,8 +221,10 @@ static int run(struct client *c)
     xdg_toplevel_set_title(c->toplevel, TITLE);
     xdg_toplevel_set_app_id(c->toplevel, "org.scene.iso-wl-test");
 
+    fprintf(stderr, "iso-wl-client: before commit+roundtrip configure\n"); fflush(stderr);
     wl_surface_commit(c->surface);
     wl_display_roundtrip(c->display);   /* deliver xdg configure */
+    fprintf(stderr, "iso-wl-client: after roundtrip configure configured=%d\n", c->configured); fflush(stderr);
 
     if (create_buffer(c) != 0) {
         fprintf(stderr, "iso-wl-client: shm buffer failed\n");
