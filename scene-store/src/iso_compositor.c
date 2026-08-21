@@ -281,15 +281,17 @@ static int wl_create_window_nodes(iso_server *srv, iso_window *win,
 
     r.x = (int32_t)x; r.y = (int32_t)y;
     r.w = (uint32_t)w; r.h = (uint32_t)h;
-    if (scene_client_create_node(srv->cli, SCENE_NO_PARENT, win->node_id,
+    int rc = scene_client_create_node(srv->cli, SCENE_NO_PARENT, win->node_id,
             SCENE_ROLE_WINDOW, &r,
-            SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE) != 0)
-        return -1;
+            SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
+    fprintf(stderr, "DEBUG: create WINDOW rc=%d\n", rc); fflush(stderr);
+    if (rc != 0) return -1;
 
     r.x = 0; r.y = 0; r.w = w; r.h = h;
-    if (scene_client_create_node(srv->cli, win->node_id, win->content_id,
-            SCENE_ROLE_IMAGE, &r, SCENE_FLAG_VISIBLE) != 0)
-        return -1;
+    rc = scene_client_create_node(srv->cli, win->node_id, win->content_id,
+            SCENE_ROLE_IMAGE, &r, SCENE_FLAG_VISIBLE);
+    fprintf(stderr, "DEBUG: create IMAGE rc=%d\n", rc); fflush(stderr);
+    if (rc != 0) return -1;
     return 0;
 }
 
@@ -319,6 +321,7 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
 {
     fprintf(stderr, "DEBUG: wl_import_frame surf=%p\n", (void*)win->surface); fflush(stderr);
     struct wlr_surface *surf = win->surface;
+    fprintf(stderr, "DEBUG: wl_import surf=%p buf=%p w=%u h=%u\n", (void*)surf, (void*)(surf?surf->buffer:0), surf?surf->current.width:0, surf?surf->current.height:0); fflush(stderr);
     if (!surf || !surf->buffer) return;
 
     uint32_t w = surf->current.width;
