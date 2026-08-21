@@ -267,7 +267,7 @@ static void scene_tick(iso_server *srv)
     uint32_t flen = 0;
     int out_ret = scene_server_out_next_frame(sv, &frame, &flen);
     fprintf(stderr, "DEBUG: out_next ret=%d flen=%u\n", out_ret, flen); fflush(stderr);
-    while (out_ret == 0 && flen > 0) {
+    while (out_ret == 1 && flen > 0) {
         fprintf(stderr, "DEBUG: server out frame len=%u\n", flen); fflush(stderr);
         if (scene_transport_send(srv->server_ts, frame, flen) != 0) return;
         out_ret = scene_server_out_next_frame(sv, &frame, &flen);
