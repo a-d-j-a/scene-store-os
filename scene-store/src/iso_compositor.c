@@ -227,6 +227,7 @@ static void cb_welcome(void *ud, uint32_t scene_id, uint16_t version,
 {
     iso_server *srv = ud;
     (void)scene_id; (void)version; (void)lim;
+    fprintf(stderr, "DEBUG: cb_welcome scene_id=%u version=%u\n", scene_id, version); fflush(stderr);
     srv->welcomed = 1;
 }
 
@@ -243,11 +244,13 @@ static const scene_client_cbs owner_cbs = {
 
 static void scene_tick(iso_server *srv)
 {
+    fprintf(stderr, "DEBUG: scene_tick welcomed=%d\n", srv->welcomed); fflush(stderr);
     scene_server *sv = scene_compositor_server(srv->cp);
 
     /* server -> client: drain the server adapter's outbound into the
      * loopback; the owner client's pump() then dispatches it. */
     scene_client_pump(srv->cli);
+    fprintf(stderr, "DEBUG: after pump welcomed=%d\n", srv->welcomed); fflush(stderr);
     const uint8_t *frame = NULL;
     uint32_t flen = 0;
     while (scene_server_out_next_frame(sv, &frame, &flen) == 0 && flen > 0) {
