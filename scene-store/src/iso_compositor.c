@@ -618,6 +618,8 @@ static void output_new(struct wl_listener *listener, void *data)
         return;
     srv->output = out;
 
+    wlr_output_init_render(out, srv->allocator, srv->renderer);
+
     struct wlr_output_state state = { 0 };
     wlr_output_state_set_enabled(&state, true);
     if (!wl_list_empty(&out->modes)) {
