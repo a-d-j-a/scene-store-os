@@ -874,6 +874,7 @@ iso_server *iso_server_create(void)
     srv->xdg_shell = wlr_xdg_shell_create(srv->wl_display,
             WLR_XDG_SHELL_VERSION);
     srv->seat = wlr_seat_create(srv->wl_display, "seat0");
+    fprintf(stderr, "DEBUG: compositor=%p xdg_shell=%p seat=%p display=%p\n", (void*)srv->compositor, (void*)srv->xdg_shell, (void*)srv->seat, (void*)srv->wl_display); fflush(stderr);
     if (!srv->compositor || !srv->xdg_shell || !srv->seat) {
         fprintf(stderr, "iso-wl: failed to create protocol globals\n");
         goto fail;
