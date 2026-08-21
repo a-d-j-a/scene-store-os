@@ -275,7 +275,9 @@ static void scene_tick(iso_server *srv)
     }
     int pump_rc = scene_client_pump(srv->cli);
     fprintf(stderr, "DEBUG: pump rc=%d after pump welcomed=%d\n", pump_rc, srv->welcomed); fflush(stderr);
+    fprintf(stderr, "DEBUG: scene_tick before flush\n"); fflush(stderr);
     scene_client_flush(srv->cli);
+    fprintf(stderr, "DEBUG: scene_tick after flush\n"); fflush(stderr);
 
     /* client -> server: read whatever the client put on the loopback and
      * feed it into the server adapter (frame reassembly inside). */
@@ -283,15 +285,18 @@ static void scene_tick(iso_server *srv)
         uint8_t buf[8192];
         uint32_t got = 0;
         int r = scene_transport_recv(srv->server_ts, buf, sizeof(buf), &got);
+        fprintf(stderr, "DEBUG: scene_tick recv r=%d got=%u\n", r, got); fflush(stderr);
         if (r != 0 || got == 0) break;
+        fprintf(stderr, "DEBUG: scene_tick feed got=%u\n", got); fflush(stderr);
         if (scene_server_feed(sv, buf, got) != 0) {
             fprintf(stderr, "iso-wl: scene server engine error (fatal)\n");
             break;
         }
     }
-
+    fprintf(stderr, "DEBUG: scene_tick before shell_tick sh=%p\n", (void*)srv->sh); fflush(stderr);
     if (srv->sh)
         scene_shell_tick(srv->sh);
+    fprintf(stderr, "DEBUG: scene_tick done\n"); fflush(stderr);
 }
 
 /* ---- node ops through the owner client --------------------------------- */
