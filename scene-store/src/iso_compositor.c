@@ -295,6 +295,7 @@ static int wl_create_window_nodes(iso_server *srv, iso_window *win,
 
 static void wl_set_title(iso_server *srv, iso_window *win)
 {
+    fprintf(stderr, "DEBUG: wl_set_title\n"); fflush(stderr);
     const char *title = win->toplevel ? win->toplevel->title : NULL;
     const char *t = title ? title : "";
     size_t len = strlen(t);
@@ -407,21 +408,28 @@ static void win_map_derive(iso_window *win)
     }
     srv->win_count++;
 
+    fprintf(stderr, "DEBUG: win_map create nodes x=%u y=%u w=%u h=%u\n", x, y, w, h); fflush(stderr);
     if (wl_create_window_nodes(srv, win, x, y, w, h) != 0) {
+        fprintf(stderr, "DEBUG: win_map create nodes failed\n"); fflush(stderr);
         win->mapped = 0;
         return;
     }
+    fprintf(stderr, "DEBUG: win_map set title\n"); fflush(stderr);
     wl_set_title(srv, win);
 
     /* If a frame already arrived before map, its texture was imported with
      * the ref; point the freshly-created content node at it. */
-    if (win->tex_ref != SCENE_NO_TEXTURE)
+    if (win->tex_ref != SCENE_NO_TEXTURE) {
+        fprintf(stderr, "DEBUG: win_map place texture\n"); fflush(stderr);
         wl_place_texture(srv, win, win->buf_w, win->buf_h);
+    }
 
     /* The client becomes the seat keyboard focus (its window is new). */
     if (srv->seat && srv->keyboard && win->surface) {
+        fprintf(stderr, "DEBUG: win_map notify enter\n"); fflush(stderr);
         wlr_seat_keyboard_notify_enter(srv->seat, win->surface, NULL, 0, NULL);
         srv->focus_surface = win->surface;
+        fprintf(stderr, "DEBUG: win_map done\n"); fflush(stderr);
     }
 }
 
