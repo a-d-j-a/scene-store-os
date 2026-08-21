@@ -229,6 +229,20 @@ static void cb_welcome(void *ud, uint32_t scene_id, uint16_t version,
     (void)scene_id; (void)version; (void)lim;
     fprintf(stderr, "DEBUG: cb_welcome scene_id=%u version=%u\n", scene_id, version); fflush(stderr);
     srv->welcomed = 1;
+    if (srv->output && !srv->sh) {
+        scene_shell_config_defaults(&srv->sh_cfg);
+        srv->sh_cfg.panel_height = 40;
+        srv->sh = scene_shell_new(srv->cli, scene_compositor_layer_store(srv->cp, 0), srv->cp, &srv->sh_cfg);
+        if (srv->sh) {
+            scene_compositor_setup_hover_style(srv->cp, srv->sh_cfg.hover_color, srv->sh_cfg.button_text);
+            scene_compositor_setup_active_style(srv->cp, srv->sh_cfg.button_color, srv->sh_cfg.button_text);
+            scene_shell_set_hover_style(srv->sh, 1);
+            scene_shell_set_active_style(srv->sh, 2);
+            scene_shell_build(srv->sh, srv->output->width, srv->output->height);
+            scene_client_flush(srv->cli);
+            wlr_output_schedule_frame(srv->output);
+        }
+    }
 }
 
 static const scene_client_cbs owner_cbs = {
@@ -638,6 +652,7 @@ static void output_new(struct wl_listener *listener, void *data)
             scene_client_flush(srv->cli);
         }
     }
+    wlr_output_schedule_frame(srv->output);
 }
 
 /* ======================================================================
