@@ -227,11 +227,8 @@ static void cb_welcome(void *ud, uint32_t scene_id, uint16_t version,
 {
     iso_server *srv = ud;
     (void)scene_id; (void)version; (void)lim;
-    fprintf(stderr, "DEBUG: cb_welcome scene_id=%u version=%u store=%p cp=%p output=%p sh=%p\n", scene_id, version, (void*)scene_compositor_layer_store(srv->cp, 0), (void*)srv->cp, (void*)srv->output, (void*)srv->sh); fflush(stderr);
     srv->welcomed = 1;
-    fprintf(stderr, "DEBUG: cb_welcome after welcomed=%d output=%p sh=%p store=%p\n", srv->welcomed, (void*)srv->output, (void*)srv->sh, (void*)scene_compositor_layer_store(srv->cp, 0)); fflush(stderr);
     if (srv->output && !srv->sh) {
-        fprintf(stderr, "DEBUG: cb_welcome create shell\n"); fflush(stderr);
         scene_shell_config_defaults(&srv->sh_cfg);
         srv->sh_cfg.panel_height = 40;
         srv->sh = scene_shell_new(srv->cli, scene_compositor_layer_store(srv->cp, 0), srv->cp, &srv->sh_cfg);
@@ -260,7 +257,6 @@ static const scene_client_cbs owner_cbs = {
 
 static void scene_tick(iso_server *srv)
 {
-    fprintf(stderr, "DEBUG: scene_tick welcomed=%d\n", srv->welcomed); fflush(stderr);
     scene_server *sv = scene_compositor_server(srv->cp);
 
     /* server -> client: drain the server adapter's outbound into the
@@ -268,18 +264,12 @@ static void scene_tick(iso_server *srv)
     const uint8_t *frame = NULL;
     uint32_t flen = 0;
     int out_ret = scene_server_out_next_frame(sv, &frame, &flen);
-    fprintf(stderr, "DEBUG: out_next ret=%d flen=%u\n", out_ret, flen); fflush(stderr);
     while (out_ret == 1 && flen > 0) {
-        fprintf(stderr, "DEBUG: server out frame len=%u\n", flen); fflush(stderr);
         if (scene_transport_send(srv->server_ts, frame, flen) != 0) return;
         out_ret = scene_server_out_next_frame(sv, &frame, &flen);
-        fprintf(stderr, "DEBUG: out_next ret=%d flen=%u\n", out_ret, flen); fflush(stderr);
     }
     int pump_rc = scene_client_pump(srv->cli);
-    fprintf(stderr, "DEBUG: pump rc=%d after pump welcomed=%d\n", pump_rc, srv->welcomed); fflush(stderr);
-    fprintf(stderr, "DEBUG: scene_tick before flush\n"); fflush(stderr);
     scene_client_flush(srv->cli);
-    fprintf(stderr, "DEBUG: scene_tick after flush\n"); fflush(stderr);
 
     /* client -> server: read whatever the client put on the loopback and
      * feed it into the server adapter (frame reassembly inside). */
@@ -287,18 +277,14 @@ static void scene_tick(iso_server *srv)
         uint8_t buf[8192];
         uint32_t got = 0;
         int r = scene_transport_recv(srv->server_ts, buf, sizeof(buf), &got);
-        fprintf(stderr, "DEBUG: scene_tick recv r=%d got=%u\n", r, got); fflush(stderr);
         if (r != 0 || got == 0) break;
-        fprintf(stderr, "DEBUG: scene_tick feed got=%u\n", got); fflush(stderr);
         if (scene_server_feed(sv, buf, got) != 0) {
             fprintf(stderr, "iso-wl: scene server engine error (fatal)\n");
             break;
         }
     }
-    fprintf(stderr, "DEBUG: scene_tick before shell_tick sh=%p\n", (void*)srv->sh); fflush(stderr);
     if (srv->sh)
         scene_shell_tick(srv->sh);
-    fprintf(stderr, "DEBUG: scene_tick done\n"); fflush(stderr);
 }
 
 /* ---- node ops through the owner client --------------------------------- */
@@ -307,7 +293,6 @@ static int wl_create_window_nodes(iso_server *srv, iso_window *win,
                                    uint32_t x, uint32_t y,
                                    uint32_t w, uint32_t h)
 {
-    fprintf(stderr, "DEBUG: wl_create_nodes win=%u content=%u x=%u y=%u w=%u h=%u welcomed=%d cli=%p\n", win->node_id, win->content_id, x, y, w, h, srv->welcomed, (void*)srv->cli); fflush(stderr);
     scene_rect r;
 
     r.x = (int32_t)x; r.y = (int32_t)y;
@@ -315,20 +300,17 @@ static int wl_create_window_nodes(iso_server *srv, iso_window *win,
     int rc = scene_client_create_node(srv->cli, SCENE_NO_PARENT, win->node_id,
             SCENE_ROLE_WINDOW, &r,
             SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
-    fprintf(stderr, "DEBUG: create WINDOW rc=%d\n", rc); fflush(stderr);
     if (rc != 0) return -1;
 
     r.x = 0; r.y = 0; r.w = w; r.h = h;
     rc = scene_client_create_node(srv->cli, win->node_id, win->content_id,
             SCENE_ROLE_IMAGE, &r, SCENE_FLAG_VISIBLE);
-    fprintf(stderr, "DEBUG: create IMAGE rc=%d\n", rc); fflush(stderr);
     if (rc != 0) return -1;
     return 0;
 }
 
 static void wl_set_title(iso_server *srv, iso_window *win)
 {
-    fprintf(stderr, "DEBUG: wl_set_title\n"); fflush(stderr);
     const char *title = win->toplevel ? win->toplevel->title : NULL;
     const char *t = title ? title : "";
     size_t len = strlen(t);
@@ -350,30 +332,23 @@ static int wl_place_texture(iso_server *srv, iso_window *win,
  * and point the content node at it. Called from the surface commit path. */
 static void wl_import_frame(iso_server *srv, iso_window *win)
 {
-    fprintf(stderr, "DEBUG: wl_import_frame surf=%p\n", (void*)win->surface); fflush(stderr);
     struct wlr_surface *surf = win->surface;
-    fprintf(stderr, "DEBUG: wl_import surf=%p buf=%p w=%u h=%u\n", (void*)surf, (void*)(surf?surf->buffer:0), surf?surf->current.width:0, surf?surf->current.height:0); fflush(stderr);
     if (!surf || !surf->buffer) return;
 
     uint32_t w = surf->current.width;
     uint32_t h = surf->current.height;
     if (w == 0 || h == 0 || w > 8192 || h > 8192) return;
 
-    fprintf(stderr, "DEBUG: wl_import before get_texture\n"); fflush(stderr);
     struct wlr_texture *tex = wlr_surface_get_texture(surf);
-    fprintf(stderr, "DEBUG: wl_import after get_texture tex=%p\n", (void*)tex); fflush(stderr);
-    if (!tex) { fprintf(stderr, "DEBUG: wl_import no tex\n"); fflush(stderr); return; }
+    if (!tex) return;
 
     uint8_t *px = malloc((size_t)w * h * 4);
-    if (!px) { fprintf(stderr, "DEBUG: wl_import malloc fail\n"); fflush(stderr); return; }
-    fprintf(stderr, "DEBUG: wl_import read_pixels w=%u h=%u\n", w, h); fflush(stderr);
+    if (!px) return;
     if (!wlr_renderer_read_pixels(srv->renderer, DRM_FORMAT_XRGB8888,
                                    w * 4, w, h, 0, 0, 0, 0, px)) {
-        fprintf(stderr, "DEBUG: wl_import read_pixels failed\n"); fflush(stderr);
         free(px);
         return;
     }
-    fprintf(stderr, "DEBUG: wl_import read_pixels ok\n"); fflush(stderr);
 
     if (win->tex_ref != SCENE_NO_TEXTURE &&
         (win->buf_w != w || win->buf_h != h)) {
@@ -409,7 +384,6 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
 
 static void win_commit(struct wl_listener *listener, void *data)
 {
-    fprintf(stderr, "DEBUG: win_commit\n"); fflush(stderr);
     iso_window *win = wl_container_of(listener, win, commit);
     (void)data;
     if (win->dead) return;
@@ -427,7 +401,6 @@ static void win_commit(struct wl_listener *listener, void *data)
 
 static void win_map_derive(iso_window *win)
 {
-    fprintf(stderr, "DEBUG: win_map_derive\n"); fflush(stderr);
     iso_server *srv = win->srv;
     if (win->mapped || win->dead) return;
     win->mapped = 1;
@@ -447,28 +420,22 @@ static void win_map_derive(iso_window *win)
     }
     srv->win_count++;
 
-    fprintf(stderr, "DEBUG: win_map create nodes x=%u y=%u w=%u h=%u\n", x, y, w, h); fflush(stderr);
     if (wl_create_window_nodes(srv, win, x, y, w, h) != 0) {
-        fprintf(stderr, "DEBUG: win_map create nodes failed\n"); fflush(stderr);
         win->mapped = 0;
         return;
     }
-    fprintf(stderr, "DEBUG: win_map set title\n"); fflush(stderr);
     wl_set_title(srv, win);
 
     /* If a frame already arrived before map, its texture was imported with
      * the ref; point the freshly-created content node at it. */
     if (win->tex_ref != SCENE_NO_TEXTURE) {
-        fprintf(stderr, "DEBUG: win_map place texture\n"); fflush(stderr);
         wl_place_texture(srv, win, win->buf_w, win->buf_h);
     }
 
     /* The client becomes the seat keyboard focus (its window is new). */
     if (srv->seat && srv->keyboard && win->surface) {
-        fprintf(stderr, "DEBUG: win_map notify enter\n"); fflush(stderr);
         wlr_seat_keyboard_notify_enter(srv->seat, win->surface, NULL, 0, NULL);
         srv->focus_surface = win->surface;
-        fprintf(stderr, "DEBUG: win_map done\n"); fflush(stderr);
     }
 }
 
@@ -513,7 +480,6 @@ static void win_destroy(struct wl_listener *listener, void *data)
 
 static void xdg_toplevel_new(struct wl_listener *listener, void *data)
 {
-    fprintf(stderr, "DEBUG: xdg_toplevel_new role=%d\n", ((struct wlr_xdg_surface*)data)->role); fflush(stderr);
     iso_server *srv = wl_container_of(listener, srv, new_xdg_surface);
     struct wlr_xdg_surface *xdg_surface = data;
     if (xdg_surface->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL)
@@ -544,9 +510,7 @@ static void xdg_toplevel_new(struct wl_listener *listener, void *data)
     wl_signal_add(&win->surface->events.commit, &win->commit);
     win->commit.notify = win_commit;
 
-    fprintf(stderr, "DEBUG: xdg_toplevel_new schedule configure\n"); fflush(stderr);
     wlr_xdg_surface_schedule_configure(xdg_surface);
-    fprintf(stderr, "DEBUG: xdg_toplevel_new done\n"); fflush(stderr);
 }
 
 /* ======================================================================
@@ -555,20 +519,16 @@ static void xdg_toplevel_new(struct wl_listener *listener, void *data)
 
 static void output_frame(struct wl_listener *listener, void *data)
 {
-    fprintf(stderr, "DEBUG: output_frame start\n"); fflush(stderr);
     iso_server *srv = wl_container_of(listener, srv, output_frame);
     (void)data;
 
     scene_tick(srv);
-    fprintf(stderr, "DEBUG: output_frame after scene_tick\n"); fflush(stderr);
-    fprintf(stderr, "DEBUG: output_frame after tick welcomed=%d\n", srv->welcomed); fflush(stderr);
-    if (scene_compositor_frame(srv->cp) != 0) { fprintf(stderr, "DEBUG: compositor_frame failed\n"); fflush(stderr); return; }
-    fprintf(stderr, "DEBUG: output_frame after compositor_frame\n"); fflush(stderr);
+    if (scene_compositor_frame(srv->cp) != 0)
+        return;
 
     const scene_fb *fb = scene_compositor_fb(srv->cp);
-    fprintf(stderr, "DEBUG: output_frame fb=%p output=%p\n", (void*)fb, (void*)srv->output); fflush(stderr);
-    if (!fb || !srv->output) { fprintf(stderr, "DEBUG: no fb or output\n"); fflush(stderr); return; }
-    fprintf(stderr, "DEBUG: output_frame fb w=%u h=%u\n", fb->w, fb->h); fflush(stderr);
+    if (!fb || !srv->output)
+        return;
     srv->frames++;
 
     /* Optional pixel proof: dump the scene fb to a PPM every frame. */
@@ -593,18 +553,13 @@ static void output_frame(struct wl_listener *listener, void *data)
         return;
     }
 
-    fprintf(stderr, "DEBUG: output_frame create tex\n"); fflush(stderr);
     struct wlr_texture *tex = wlr_texture_from_pixels(srv->renderer,
             DRM_FORMAT_XRGB8888, fb->w * 4, fb->w, fb->h, fb->px);
-    fprintf(stderr, "DEBUG: tex=%p\n", (void*)tex); fflush(stderr);
-    if (!tex) { fprintf(stderr, "DEBUG: no tex\n"); fflush(stderr); return; }
-    fprintf(stderr, "DEBUG: output_frame before begin_render_pass out=%p renderer=%p allocator=%p\n", (void*)srv->output, (void*)srv->renderer, (void*)srv->allocator); fflush(stderr);
-    fprintf(stderr, "DEBUG: out renderer=%p allocator=%p\n", (void*)srv->output->renderer, (void*)srv->output->allocator); fflush(stderr);
+    if (!tex)
+        return;
     struct wlr_render_pass *pass = wlr_output_begin_render_pass(srv->output,
             NULL, NULL, NULL);
-    fprintf(stderr, "DEBUG: pass=%p\n", (void*)pass); fflush(stderr);
     if (!pass) {
-        fprintf(stderr, "DEBUG: no pass\n"); fflush(stderr);
         wlr_texture_destroy(tex);
         return;
     }
@@ -624,8 +579,11 @@ static void output_frame(struct wl_listener *listener, void *data)
     if (wlr_output_commit_state(srv->output, NULL) != 0)
         fprintf(stderr, "iso-wl: output commit failed\n");
 
-    /* Software path (headless / no vblank): keep frames flowing. */
-    wlr_output_schedule_frame(srv->output);
+    /* Headless schedule_frame arms an IDLE callback; rescheduling here
+     * spins the loop busy and starves the wayland socket + timers.
+     * Headless frames are pumped by the main-loop timer instead. */
+    if (!getenv("ISO_HEADLESS"))
+        wlr_output_schedule_frame(srv->output);
 }
 
 static void output_destroy(struct wl_listener *listener, void *data)
@@ -639,7 +597,6 @@ static void output_new(struct wl_listener *listener, void *data)
 {
     iso_server *srv = wl_container_of(listener, srv, new_output);
     struct wlr_output *out = data;
-    fprintf(stderr, "DEBUG: output_new welcomed=%d sh=%p out=%p\n", srv->welcomed, (void*)srv->sh, (void*)out); fflush(stderr);
 
     /* Single output: keep the first one, ignore the rest. */
     if (srv->output)
@@ -664,11 +621,9 @@ static void output_new(struct wl_listener *listener, void *data)
 
     /* Size the scene engine to this output and build the desktop. */
     scene_compositor_resize(srv->cp, out->width, out->height);
-    fprintf(stderr, "DEBUG: output_new2 welcomed=%d sh=%p\n", srv->welcomed, (void*)srv->sh); fflush(stderr);
     if (srv->sh) {
         scene_shell_resize(srv->sh, out->width, out->height);
     } else if (srv->welcomed) {
-        fprintf(stderr, "DEBUG: output_new create shell store=%p\n", (void*)scene_compositor_layer_store(srv->cp, 0)); fflush(stderr);
         scene_shell_config_defaults(&srv->sh_cfg);
         srv->sh_cfg.panel_height = 40;
         srv->sh = scene_shell_new(srv->cli,
@@ -857,7 +812,6 @@ iso_server *iso_server_create(void)
     }
 
     srv->renderer = wlr_renderer_autocreate(srv->backend);
-    fprintf(stderr, "DEBUG: renderer %p backend %p\n", (void*)srv->renderer, (void*)srv->backend); fflush(stderr);
     if (!srv->renderer) {
         fprintf(stderr, "iso-wl: failed to create the renderer\n");
         goto fail;
@@ -875,14 +829,11 @@ iso_server *iso_server_create(void)
     srv->xdg_shell = wlr_xdg_shell_create(srv->wl_display,
             WLR_XDG_SHELL_VERSION);
     srv->seat = wlr_seat_create(srv->wl_display, "seat0");
-    fprintf(stderr, "DEBUG: compositor=%p xdg_shell=%p seat=%p display=%p\n", (void*)srv->compositor, (void*)srv->xdg_shell, (void*)srv->seat, (void*)srv->wl_display); fflush(stderr);
     // Explicit enumeration of wl_display globals via wl_global (test)
     struct wl_global *g_shm = wl_global_create(srv->wl_display, &wl_shm_interface, 1, NULL, NULL);
     struct wl_global *g_comp = wl_global_create(srv->wl_display, &wl_compositor_interface, 4, NULL, NULL);
-    fprintf(stderr, "DEBUG: explicit shm global %p compositor global %p\n", (void*)g_shm, (void*)g_comp); fflush(stderr);
     // Test dummy global
     struct wl_global *dummy = wl_global_create(srv->wl_display, &wl_compositor_interface, 1, NULL, NULL);
-    fprintf(stderr, "DEBUG: dummy wl_compositor global %p\n", (void*)dummy); fflush(stderr);
     if (!srv->compositor || !srv->xdg_shell || !srv->seat) {
         fprintf(stderr, "iso-wl: failed to create protocol globals\n");
         goto fail;
@@ -961,11 +912,15 @@ static void child_term(int sig)
     /* no-op; SIGINT/SIGTERM end wl_display_run via the display listener */
 }
 
-static int timer_cb(void *data)
+/* Headless frame pump: headless schedule_frame is an idle source, so a
+ * self-rescheduling output_frame starves the loop. A real timer yields to
+ * epoll between ticks, keeping the wayland socket serviced. */
+static int frame_pump_cb(void *data)
 {
-    fprintf(stderr, "DEBUG: event_loop alive\n");
-    fflush(stderr);
-    wl_event_source_timer_update((struct wl_event_source *)data, 1000);
+    iso_server *srv = data;
+    if (srv->output)
+        wlr_output_schedule_frame(srv->output);
+    wl_event_source_timer_update((struct wl_event_source *)data, 16);
     return 0;
 }
 
@@ -991,8 +946,11 @@ int main(int argc, char **argv)
     fflush(stdout);
 
     struct wl_event_loop *loop = wl_display_get_event_loop(srv->wl_display);
-    struct wl_event_source *timer = wl_event_loop_add_timer(loop, timer_cb, NULL);
-    if (timer) wl_event_source_timer_update(timer, 1000);
+    if (getenv("ISO_HEADLESS")) {
+        struct wl_event_source *pump =
+            wl_event_loop_add_timer(loop, frame_pump_cb, srv);
+        if (pump) wl_event_source_timer_update(pump, 16);
+    }
 
     wl_display_run(srv->wl_display);
     iso_server_destroy(srv);
