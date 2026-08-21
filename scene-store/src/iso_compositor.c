@@ -857,6 +857,7 @@ iso_server *iso_server_create(void)
     }
 
     srv->renderer = wlr_renderer_autocreate(srv->backend);
+    fprintf(stderr, "DEBUG: renderer %p backend %p\n", (void*)srv->renderer, (void*)srv->backend); fflush(stderr);
     if (!srv->renderer) {
         fprintf(stderr, "iso-wl: failed to create the renderer\n");
         goto fail;
@@ -875,6 +876,10 @@ iso_server *iso_server_create(void)
             WLR_XDG_SHELL_VERSION);
     srv->seat = wlr_seat_create(srv->wl_display, "seat0");
     fprintf(stderr, "DEBUG: compositor=%p xdg_shell=%p seat=%p display=%p\n", (void*)srv->compositor, (void*)srv->xdg_shell, (void*)srv->seat, (void*)srv->wl_display); fflush(stderr);
+    // Explicit enumeration of wl_display globals via wl_global (test)
+    struct wl_global *g_shm = wl_global_create(srv->wl_display, &wl_shm_interface, 1, NULL, NULL);
+    struct wl_global *g_comp = wl_global_create(srv->wl_display, &wl_compositor_interface, 4, NULL, NULL);
+    fprintf(stderr, "DEBUG: explicit shm global %p compositor global %p\n", (void*)g_shm, (void*)g_comp); fflush(stderr);
     // Test dummy global
     struct wl_global *dummy = wl_global_create(srv->wl_display, &wl_compositor_interface, 1, NULL, NULL);
     fprintf(stderr, "DEBUG: dummy wl_compositor global %p\n", (void*)dummy); fflush(stderr);
