@@ -57,6 +57,7 @@
 #include <unistd.h>
 
 #include <drm_fourcc.h>
+#include "scene_client.h"
 #include <wlr/backend.h>
 #include <wlr/backend/headless.h>
 #include <wlr/render/allocator.h>
@@ -274,9 +275,10 @@ static void scene_tick(iso_server *srv)
 /* ---- node ops through the owner client --------------------------------- */
 
 static int wl_create_window_nodes(iso_server *srv, iso_window *win,
-                                  uint32_t x, uint32_t y,
-                                  uint32_t w, uint32_t h)
+                                   uint32_t x, uint32_t y,
+                                   uint32_t w, uint32_t h)
 {
+    fprintf(stderr, "DEBUG: wl_create_nodes win=%u content=%u x=%u y=%u w=%u h=%u welcomed=%d cli=%p\n", win->node_id, win->content_id, x, y, w, h, srv->welcomed, (void*)srv->cli); fflush(stderr);
     scene_rect r;
 
     r.x = (int32_t)x; r.y = (int32_t)y;
@@ -328,16 +330,21 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
     uint32_t h = surf->current.height;
     if (w == 0 || h == 0 || w > 8192 || h > 8192) return;
 
+    fprintf(stderr, "DEBUG: wl_import before get_texture\n"); fflush(stderr);
     struct wlr_texture *tex = wlr_surface_get_texture(surf);
-    if (!tex) return;
+    fprintf(stderr, "DEBUG: wl_import after get_texture tex=%p\n", (void*)tex); fflush(stderr);
+    if (!tex) { fprintf(stderr, "DEBUG: wl_import no tex\n"); fflush(stderr); return; }
 
     uint8_t *px = malloc((size_t)w * h * 4);
-    if (!px) return;
+    if (!px) { fprintf(stderr, "DEBUG: wl_import malloc fail\n"); fflush(stderr); return; }
+    fprintf(stderr, "DEBUG: wl_import read_pixels w=%u h=%u\n", w, h); fflush(stderr);
     if (!wlr_renderer_read_pixels(srv->renderer, DRM_FORMAT_XRGB8888,
-                                  w * 4, w, h, 0, 0, 0, 0, px)) {
+                                   w * 4, w, h, 0, 0, 0, 0, px)) {
+        fprintf(stderr, "DEBUG: wl_import read_pixels failed\n"); fflush(stderr);
         free(px);
         return;
     }
+    fprintf(stderr, "DEBUG: wl_import read_pixels ok\n"); fflush(stderr);
 
     if (win->tex_ref != SCENE_NO_TEXTURE &&
         (win->buf_w != w || win->buf_h != h)) {
