@@ -229,7 +229,9 @@ static void cb_welcome(void *ud, uint32_t scene_id, uint16_t version,
     (void)scene_id; (void)version; (void)lim;
     fprintf(stderr, "DEBUG: cb_welcome scene_id=%u version=%u store=%p cp=%p output=%p sh=%p\n", scene_id, version, (void*)scene_compositor_layer_store(srv->cp, 0), (void*)srv->cp, (void*)srv->output, (void*)srv->sh); fflush(stderr);
     srv->welcomed = 1;
+    fprintf(stderr, "DEBUG: cb_welcome after welcomed=%d output=%p sh=%p store=%p\n", srv->welcomed, (void*)srv->output, (void*)srv->sh, (void*)scene_compositor_layer_store(srv->cp, 0)); fflush(stderr);
     if (srv->output && !srv->sh) {
+        fprintf(stderr, "DEBUG: cb_welcome create shell\n"); fflush(stderr);
         scene_shell_config_defaults(&srv->sh_cfg);
         srv->sh_cfg.panel_height = 40;
         srv->sh = scene_shell_new(srv->cli, scene_compositor_layer_store(srv->cp, 0), srv->cp, &srv->sh_cfg);
@@ -626,6 +628,7 @@ static void output_new(struct wl_listener *listener, void *data)
 {
     iso_server *srv = wl_container_of(listener, srv, new_output);
     struct wlr_output *out = data;
+    fprintf(stderr, "DEBUG: output_new welcomed=%d sh=%p out=%p\n", srv->welcomed, (void*)srv->sh, (void*)out); fflush(stderr);
 
     /* Single output: keep the first one, ignore the rest. */
     if (srv->output)
@@ -650,9 +653,11 @@ static void output_new(struct wl_listener *listener, void *data)
 
     /* Size the scene engine to this output and build the desktop. */
     scene_compositor_resize(srv->cp, out->width, out->height);
+    fprintf(stderr, "DEBUG: output_new2 welcomed=%d sh=%p\n", srv->welcomed, (void*)srv->sh); fflush(stderr);
     if (srv->sh) {
         scene_shell_resize(srv->sh, out->width, out->height);
     } else if (srv->welcomed) {
+        fprintf(stderr, "DEBUG: output_new create shell store=%p\n", (void*)scene_compositor_layer_store(srv->cp, 0)); fflush(stderr);
         scene_shell_config_defaults(&srv->sh_cfg);
         srv->sh_cfg.panel_height = 40;
         srv->sh = scene_shell_new(srv->cli,
