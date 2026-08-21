@@ -244,9 +244,10 @@ int main(void)
     struct client c;
     memset(&c, 0, sizeof(c));
     c.run = 1;
+    fprintf(stderr, "iso-wl-client: WAYLAND_DISPLAY=%s XDG_RUNTIME_DIR=%s\n", getenv("WAYLAND_DISPLAY") ? getenv("WAYLAND_DISPLAY") : "(null)", getenv("XDG_RUNTIME_DIR") ? getenv("XDG_RUNTIME_DIR") : "(null)"); fflush(stderr);
     c.display = wl_display_connect(NULL);
     if (!c.display) {
-        fprintf(stderr, "iso-wl-client: cannot connect to WAYLAND_DISPLAY\n");
+        fprintf(stderr, "iso-wl-client: cannot connect to WAYLAND_DISPLAY (%s)\n", strerror(errno));
         return 1;
     }
     int rc = run(&c);
