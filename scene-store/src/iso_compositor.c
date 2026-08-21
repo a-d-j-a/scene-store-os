@@ -589,12 +589,14 @@ static void output_frame(struct wl_listener *listener, void *data)
     struct wlr_texture *tex = wlr_texture_from_pixels(srv->renderer,
             DRM_FORMAT_XRGB8888, fb->w * 4, fb->w, fb->h, fb->px);
     fprintf(stderr, "DEBUG: tex=%p\n", (void*)tex); fflush(stderr);
-    if (!tex)
-        return;
-
+    if (!tex) { fprintf(stderr, "DEBUG: no tex\n"); fflush(stderr); return; }
+    fprintf(stderr, "DEBUG: output_frame before begin_render_pass out=%p renderer=%p allocator=%p\n", (void*)srv->output, (void*)srv->renderer, (void*)srv->allocator); fflush(stderr);
+    fprintf(stderr, "DEBUG: out renderer=%p allocator=%p\n", (void*)srv->output->renderer, (void*)srv->output->allocator); fflush(stderr);
     struct wlr_render_pass *pass = wlr_output_begin_render_pass(srv->output,
             NULL, NULL, NULL);
+    fprintf(stderr, "DEBUG: pass=%p\n", (void*)pass); fflush(stderr);
     if (!pass) {
+        fprintf(stderr, "DEBUG: no pass\n"); fflush(stderr);
         wlr_texture_destroy(tex);
         return;
     }
