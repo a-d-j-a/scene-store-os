@@ -227,7 +227,7 @@ static void cb_welcome(void *ud, uint32_t scene_id, uint16_t version,
 {
     iso_server *srv = ud;
     (void)scene_id; (void)version; (void)lim;
-    fprintf(stderr, "DEBUG: cb_welcome scene_id=%u version=%u\n", scene_id, version); fflush(stderr);
+    fprintf(stderr, "DEBUG: cb_welcome scene_id=%u version=%u store=%p cp=%p output=%p sh=%p\n", scene_id, version, (void*)scene_compositor_layer_store(srv->cp, 0), (void*)srv->cp, (void*)srv->output, (void*)srv->sh); fflush(stderr);
     srv->welcomed = 1;
     if (srv->output && !srv->sh) {
         scene_shell_config_defaults(&srv->sh_cfg);
