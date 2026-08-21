@@ -59,6 +59,8 @@ struct client {
 
 /* ---- registry / interface globals -------------------------------------- */
 
+static const struct xdg_wm_base_listener wm_base_listener;
+
 static void registry_handle_global(void *data, struct wl_registry *registry,
         uint32_t name, const char *interface, uint32_t version)
 {
@@ -71,6 +73,7 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
         c->wm_base = wl_registry_bind(registry, name,
                 &xdg_wm_base_interface, version < 1 ? version : 1);
+        xdg_wm_base_add_listener(c->wm_base, &wm_base_listener, c);
     }
 }
 
