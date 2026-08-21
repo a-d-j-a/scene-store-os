@@ -544,17 +544,19 @@ static void xdg_toplevel_new(struct wl_listener *listener, void *data)
 
 static void output_frame(struct wl_listener *listener, void *data)
 {
-    // fprintf(stderr, "DEBUG: output_frame\n"); fflush(stderr);
+    fprintf(stderr, "DEBUG: output_frame start\n"); fflush(stderr);
     iso_server *srv = wl_container_of(listener, srv, output_frame);
     (void)data;
 
     scene_tick(srv);
-    if (scene_compositor_frame(srv->cp) != 0)
-        return;
+    fprintf(stderr, "DEBUG: output_frame after tick welcomed=%d\n", srv->welcomed); fflush(stderr);
+    if (scene_compositor_frame(srv->cp) != 0) { fprintf(stderr, "DEBUG: compositor_frame failed\n"); fflush(stderr); return; }
+    fprintf(stderr, "DEBUG: output_frame after compositor_frame\n"); fflush(stderr);
 
     const scene_fb *fb = scene_compositor_fb(srv->cp);
-    if (!fb || !srv->output)
-        return;
+    fprintf(stderr, "DEBUG: output_frame fb=%p output=%p\n", (void*)fb, (void*)srv->output); fflush(stderr);
+    if (!fb || !srv->output) { fprintf(stderr, "DEBUG: no fb or output\n"); fflush(stderr); return; }
+    fprintf(stderr, "DEBUG: output_frame fb w=%u h=%u\n", fb->w, fb->h); fflush(stderr);
     srv->frames++;
 
     /* Optional pixel proof: dump the scene fb to a PPM every frame. */
@@ -575,8 +577,10 @@ static void output_frame(struct wl_listener *listener, void *data)
         }
     }
 
+    fprintf(stderr, "DEBUG: output_frame create tex\n"); fflush(stderr);
     struct wlr_texture *tex = wlr_texture_from_pixels(srv->renderer,
             DRM_FORMAT_XRGB8888, fb->w * 4, fb->w, fb->h, fb->px);
+    fprintf(stderr, "DEBUG: tex=%p\n", (void*)tex); fflush(stderr);
     if (!tex)
         return;
 
