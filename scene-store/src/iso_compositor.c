@@ -556,6 +556,7 @@ static void output_frame(struct wl_listener *listener, void *data)
     (void)data;
 
     scene_tick(srv);
+    fprintf(stderr, "DEBUG: output_frame after scene_tick\n"); fflush(stderr);
     fprintf(stderr, "DEBUG: output_frame after tick welcomed=%d\n", srv->welcomed); fflush(stderr);
     if (scene_compositor_frame(srv->cp) != 0) { fprintf(stderr, "DEBUG: compositor_frame failed\n"); fflush(stderr); return; }
     fprintf(stderr, "DEBUG: output_frame after compositor_frame\n"); fflush(stderr);
