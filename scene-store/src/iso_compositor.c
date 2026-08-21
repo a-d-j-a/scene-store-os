@@ -961,6 +961,14 @@ static void child_term(int sig)
     /* no-op; SIGINT/SIGTERM end wl_display_run via the display listener */
 }
 
+static int timer_cb(void *data)
+{
+    fprintf(stderr, "DEBUG: event_loop alive\n");
+    fflush(stderr);
+    wl_event_source_timer_update((struct wl_event_source *)data, 1000);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -981,6 +989,10 @@ int main(int argc, char **argv)
     }
     printf("iso-wl: WAYLAND_DISPLAY=%s\n", socket);
     fflush(stdout);
+
+    struct wl_event_loop *loop = wl_display_get_event_loop(srv->wl_display);
+    struct wl_event_source *timer = wl_event_loop_add_timer(loop, timer_cb, NULL);
+    if (timer) wl_event_source_timer_update(timer, 1000);
 
     wl_display_run(srv->wl_display);
     iso_server_destroy(srv);
