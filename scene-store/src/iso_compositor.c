@@ -316,6 +316,7 @@ static int wl_place_texture(iso_server *srv, iso_window *win,
  * and point the content node at it. Called from the surface commit path. */
 static void wl_import_frame(iso_server *srv, iso_window *win)
 {
+    fprintf(stderr, "DEBUG: wl_import_frame surf=%p\n", (void*)win->surface); fflush(stderr);
     struct wlr_surface *surf = win->surface;
     if (!surf || !surf->buffer) return;
 
@@ -368,6 +369,7 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
 
 static void win_commit(struct wl_listener *listener, void *data)
 {
+    fprintf(stderr, "DEBUG: win_commit\n"); fflush(stderr);
     iso_window *win = wl_container_of(listener, win, commit);
     (void)data;
     if (win->dead) return;
@@ -385,6 +387,7 @@ static void win_commit(struct wl_listener *listener, void *data)
 
 static void win_map_derive(iso_window *win)
 {
+    fprintf(stderr, "DEBUG: win_map_derive\n"); fflush(stderr);
     iso_server *srv = win->srv;
     if (win->mapped || win->dead) return;
     win->mapped = 1;
@@ -463,6 +466,7 @@ static void win_destroy(struct wl_listener *listener, void *data)
 
 static void xdg_toplevel_new(struct wl_listener *listener, void *data)
 {
+    fprintf(stderr, "DEBUG: xdg_toplevel_new role=%d\n", ((struct wlr_xdg_surface*)data)->role); fflush(stderr);
     iso_server *srv = wl_container_of(listener, srv, new_xdg_surface);
     struct wlr_xdg_surface *xdg_surface = data;
     if (xdg_surface->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL)
@@ -500,6 +504,7 @@ static void xdg_toplevel_new(struct wl_listener *listener, void *data)
 
 static void output_frame(struct wl_listener *listener, void *data)
 {
+    // fprintf(stderr, "DEBUG: output_frame\n"); fflush(stderr);
     iso_server *srv = wl_container_of(listener, srv, output_frame);
     (void)data;
 
