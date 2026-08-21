@@ -148,7 +148,7 @@ static const struct wl_buffer_listener buffer_listener = {
 
 static int make_shm_file(size_t size)
 {
-    char name[] = "/iso-wl-shm-XXXXXX";
+    char name[] = "/tmp/iso-wl-shm-XXXXXX";
     int fd = mkstemp(name);
     if (fd < 0) return -1;
     unlink(name);
