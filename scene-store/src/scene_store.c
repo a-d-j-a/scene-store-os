@@ -31,6 +31,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "scene_store.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1991,8 +1992,11 @@ int scene_store_ingest(scene_store *s, uint16_t opcode,
 
     if (plen < 8) return fatal_error(s, SCENE_ERR_PROTOCOL, "no seq");
     uint64_t seq = scene_get_u64(payload);
-    if (seq != s->next_seq)
+    if (seq != s->next_seq) {
+        fprintf(stderr, "scene_store: SEQ MISMATCH opcode 0x%04x got %llu expected %llu\n",
+                opcode, (unsigned long long)seq, (unsigned long long)s->next_seq);
         return fatal_error(s, SCENE_ERR_SEQ, "non-monotonic seq");
+    }
     s->next_seq = seq + 1;
 
     switch (opcode) {

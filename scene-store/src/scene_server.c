@@ -157,10 +157,12 @@ int scene_server_feed(scene_server *sv, const uint8_t *bytes, uint32_t len)
                 }
             }
         }
-        if (scene_store_ingest(sv->s, h.opcode, f + SCENE_HEADER_SIZE, plen)
-            != 0) {
-            sv->dead = 1;                  /* engine emitted ERROR itself   */
-            return -1;
+        {
+            int r = scene_store_ingest(sv->s, h.opcode, f + SCENE_HEADER_SIZE, plen);
+            if (r != 0) {
+                sv->dead = 1;                  /* engine emitted ERROR itself   */
+                return r;
+            }
         }
         sv->in.off += total;
         if (sv->in.off == sv->in.len) { sv->in.len = 0; sv->in.off = 0; }
