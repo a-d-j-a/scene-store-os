@@ -64,6 +64,7 @@
 #include <wlr/render/pass.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/render/wlr_texture.h>
+#include <wlr/types/wlr_buffer.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
@@ -327,10 +328,10 @@ static int wl_place_texture(iso_server *srv, iso_window *win,
                                     &r, 0, 255);
 }
 
-/* Import the surface's current frame into the scene: read the pixels from
- * the compositor's texture (wlr_renderer_read_pixels), bump the texture ref
- * on size change, register it into the layer-0 store + compositor registry,
- * and point the content node at it. Called from the surface commit path. */
+/* Import the surface's current frame into the scene: read the pixels directly
+ * from the client's shm buffer via wlr_buffer_begin_data_ptr_access, bump the
+ * texture ref on size change, register it into the layer-0 store + compositor
+ * registry, and point the content node at it. Called from the surface commit path. */
 static void wl_import_frame(iso_server *srv, iso_window *win)
 {
     struct wlr_surface *surf = win->surface;
@@ -340,16 +341,27 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
     uint32_t h = surf->current.height;
     if (w == 0 || h == 0 || w > 8192 || h > 8192) return;
 
-    struct wlr_texture *tex = wlr_surface_get_texture(surf);
-    if (!tex) return;
-
-    uint8_t *px = malloc((size_t)w * h * 4);
-    if (!px) return;
-    if (!wlr_renderer_read_pixels(srv->renderer, DRM_FORMAT_XRGB8888,
-                                   w * 4, w, h, 0, 0, 0, 0, px)) {
-        free(px);
+    struct wlr_buffer *buf = surf->buffer;
+    if (!buf) return;
+    void *data = NULL;
+    uint32_t fmt = 0;
+    size_t stride = 0;
+    if (!wlr_buffer_begin_data_ptr_access(buf, WLR_BUFFER_DATA_PTR_ACCESS_READ,
+                                          &data, &fmt, &stride)) {
         return;
     }
+    // Only XRGB8888 is expected from our test client; other formats would need conversion.
+    if (fmt != DRM_FORMAT_XRGB8888 && fmt != DRM_FORMAT_ARGB8888) {
+        wlr_buffer_end_data_ptr_access(buf);
+        return;
+    }
+    uint8_t *px = malloc((size_t)w * h * 4);
+    if (!px) { wlr_buffer_end_data_ptr_access(buf); return; }
+    // Copy row by row, handling stride
+    for (uint32_t y = 0; y < h; y++) {
+        memcpy(px + y * w * 4, (uint8_t *)data + y * stride, w * 4);
+    }
+    wlr_buffer_end_data_ptr_access(buf);
 
     if (win->tex_ref != SCENE_NO_TEXTURE &&
         (win->buf_w != w || win->buf_h != h)) {
