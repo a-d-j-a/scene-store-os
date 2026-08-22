@@ -173,6 +173,7 @@ struct iso_server {
 
     uint64_t              frames;
     const char           *dump_ppm;    /* env ISO_DUMP_PPM: write each fb */
+    struct wl_event_source *frame_timer; /* headless 16ms pump */
 };
 
 /* ======================================================================
@@ -549,7 +550,6 @@ static void output_frame(struct wl_listener *listener, void *data)
         }
     }
     if (getenv("ISO_HEADLESS")) {
-        wlr_output_schedule_frame(srv->output);
         return;
     }
 
@@ -915,7 +915,8 @@ static int frame_pump_cb(void *data)
     iso_server *srv = data;
     if (srv->output)
         wlr_output_schedule_frame(srv->output);
-    wl_event_source_timer_update((struct wl_event_source *)data, 16);
+    if (srv->frame_timer)
+        wl_event_source_timer_update(srv->frame_timer, 16);
     return 0;
 }
 
@@ -942,9 +943,8 @@ int main(int argc, char **argv)
 
     struct wl_event_loop *loop = wl_display_get_event_loop(srv->wl_display);
     if (getenv("ISO_HEADLESS")) {
-        struct wl_event_source *pump =
-            wl_event_loop_add_timer(loop, frame_pump_cb, srv);
-        if (pump) wl_event_source_timer_update(pump, 16);
+        srv->frame_timer = wl_event_loop_add_timer(loop, frame_pump_cb, srv);
+        if (srv->frame_timer) wl_event_source_timer_update(srv->frame_timer, 16);
     }
 
     wl_display_run(srv->wl_display);
