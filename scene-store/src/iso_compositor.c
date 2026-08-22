@@ -341,7 +341,7 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
     uint32_t h = surf->current.height;
     if (w == 0 || h == 0 || w > 8192 || h > 8192) return;
 
-    struct wlr_buffer *buf = surf->buffer;
+    struct wlr_buffer *buf = (struct wlr_buffer *)surf->buffer;
     if (!buf) return;
     void *data = NULL;
     uint32_t fmt = 0;
