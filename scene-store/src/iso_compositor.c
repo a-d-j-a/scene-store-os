@@ -280,8 +280,11 @@ static void scene_tick(iso_server *srv)
         uint32_t got = 0;
         int r = scene_transport_recv(srv->server_ts, buf, sizeof(buf), &got);
         if (r != 0 || got == 0) break;
-        if (scene_server_feed(sv, buf, got) != 0) {
-            fprintf(stderr, "iso-wl: scene server engine error (fatal)\n");
+        int feed_rc = scene_server_feed(sv, buf, got);
+        if (feed_rc != 0) {
+            fprintf(stderr, "iso-wl: scene server feed failed rc=%d got=%u\n", feed_rc, got);
+            for (uint32_t i = 0; i < got && i < 64; i++) fprintf(stderr, "%02x ", buf[i]);
+            fprintf(stderr, "\n");
             break;
         }
     }
