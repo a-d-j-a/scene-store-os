@@ -12,6 +12,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "scene_server.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -107,6 +108,14 @@ int scene_server_feed(scene_server *sv, const uint8_t *bytes, uint32_t len)
         h.opcode = scene_get_u16(f + 6);
         h.length = plen;
         h.checksum = scene_get_u32(f + 12);
+        if (plen >= 8) {
+            uint64_t seq = scene_get_u64(f + SCENE_HEADER_SIZE);
+            fprintf(stderr, "scene_server: frame opcode 0x%04x plen %u seq %llu\n",
+                    h.opcode, plen, (unsigned long long)seq);
+        } else {
+            fprintf(stderr, "scene_server: frame opcode 0x%04x plen %u (no seq)\n",
+                    h.opcode, plen);
+        }
         if (scene_frame_check(&h, f, total) != 0) {
             scene_store_fail(sv->s, SCENE_ERR_CKSUM, "bad frame");
             sv->dead = 1;
