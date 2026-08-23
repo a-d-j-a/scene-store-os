@@ -535,6 +535,8 @@ static void xdg_toplevel_new(struct wl_listener *listener, void *data)
 {
     iso_server *srv = wl_container_of(listener, srv, new_xdg_surface);
     struct wlr_xdg_surface *xdg_surface = data;
+    fprintf(stderr, "xdg_toplevel_new: role %d\n", xdg_surface->role);
+    fflush(stderr);
     if (xdg_surface->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL)
         return;
 
@@ -557,6 +559,9 @@ static void xdg_toplevel_new(struct wl_listener *listener, void *data)
     srv->win_slots[slot] = 1;
     srv->win_next = (slot + 1) % WL_WIN_ID_CAP;
     wl_list_insert(&srv->windows, &win->link);
+    fprintf(stderr, "xdg_toplevel_new: created win %p node %u content %u slot %u\n",
+            (void*)win, win->node_id, win->content_id, win->slot);
+    fflush(stderr);
 
     wl_signal_add(&xdg_surface->events.destroy, &win->destroy);
     win->destroy.notify = win_destroy;
