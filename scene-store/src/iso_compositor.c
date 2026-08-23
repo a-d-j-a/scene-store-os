@@ -367,6 +367,10 @@ static int wl_place_texture(iso_server *srv, iso_window *win,
 static void wl_import_frame(iso_server *srv, iso_window *win)
 {
     struct wlr_surface *surf = win->surface;
+    fprintf(stderr, "wl_import_frame: enter win %u surf %p buffer %p w %u h %u\n",
+            win->node_id, (void*)surf, surf ? (void*)surf->buffer : NULL,
+            surf ? surf->current.width : 0, surf ? surf->current.height : 0);
+    fflush(stderr);
     if (!surf || !surf->buffer) return;
 
     uint32_t w = surf->current.width;
