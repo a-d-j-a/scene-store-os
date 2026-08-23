@@ -113,6 +113,7 @@ void scene_store_set_effect_count(scene_store *s, uint32_t n);
 
 /* Direct queries (used by compositor consumers / tests) ------------------ */
 uint64_t scene_store_committed_seq(const scene_store *s);
+uint64_t scene_store_next_seq(const scene_store *s);
 uint64_t scene_store_view_seq(const scene_store *s);
 uint32_t scene_store_node_count(const scene_store *s);
 const scene_limits *scene_store_limits(const scene_store *s);

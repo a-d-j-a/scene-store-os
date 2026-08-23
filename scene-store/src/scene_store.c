@@ -1771,6 +1771,7 @@ int scene_store_out_next_frame(scene_store *s,
 }
 
 uint64_t scene_store_committed_seq(const scene_store *s) { return s->scene_seq; }
+uint64_t scene_store_next_seq(const scene_store *s) { return s ? s->next_seq : 0; }
 uint64_t scene_store_view_seq(const scene_store *s)
 {
     if (!s) return 0;
