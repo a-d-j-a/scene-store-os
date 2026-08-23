@@ -394,6 +394,9 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
         memcpy(px + y * w * 4, (uint8_t *)data + y * stride, w * 4);
     }
     wlr_buffer_end_data_ptr_access(buf);
+    fprintf(stderr, "wl_import_frame: win %u w %u h %u fmt 0x%x stride %zu\n",
+            win->node_id, w, h, fmt, stride);
+    fflush(stderr);
 
     if (win->tex_ref != SCENE_NO_TEXTURE &&
         (win->buf_w != w || win->buf_h != h)) {
@@ -418,7 +421,12 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
         }
     }
 
+    fprintf(stderr, "wl_import_frame: register tex %u w %u h %u\n",
+            win->tex_ref, w, h);
+    fflush(stderr);
     wl_place_texture(srv, win, w, h);
+    fprintf(stderr, "wl_import_frame: place tex %u\n", win->tex_ref);
+    fflush(stderr);
     scene_compositor_register_texture(srv->cp, win->tex_ref, w, h,
                                       SCENE_TEX_FMT_XRGB, 1,
                                       (const uint32_t *)px);
@@ -588,6 +596,8 @@ static void output_frame(struct wl_listener *listener, void *data)
     const scene_fb *fb = scene_compositor_fb(srv->cp);
     if (!fb || !srv->output)
         return;
+    fprintf(stderr, "output_frame: fb %ux%u frames %llu\n", fb->w, fb->h, (unsigned long long)srv->frames);
+    fflush(stderr);
     srv->frames++;
 
     /* Optional pixel proof: dump every 30th frame (3 MB write otherwise). */
