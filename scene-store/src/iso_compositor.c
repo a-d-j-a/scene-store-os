@@ -273,31 +273,15 @@ static void scene_tick(iso_server *srv)
         out_ret = scene_server_out_next_frame(sv, &frame, &flen);
     }
     int pump_rc = scene_client_pump(srv->cli);
-    fprintf(stderr, "scene_tick: pump_rc %d cli_next %llu store_next %llu\n",
-            pump_rc, (unsigned long long)scene_client_next_seq(srv->cli),
-            (unsigned long long)scene_store_next_seq(scene_compositor_layer_store(srv->cp, 0)));
-    fflush(stderr);
-    int flush_rc = scene_client_flush(srv->cli);
-    fprintf(stderr, "scene_tick: flush_rc %d cli_next %llu\n",
-            flush_rc, (unsigned long long)scene_client_next_seq(srv->cli));
-    fflush(stderr);
+    scene_client_flush(srv->cli);
 
     /* client -> server: read whatever the client put on the loopback and
      * feed it into the server adapter (frame reassembly inside). */
-    fprintf(stderr, "scene_tick: cli_next %llu store_next %llu committed %llu\n",
-            (unsigned long long)scene_client_next_seq(srv->cli),
-            (unsigned long long)scene_store_next_seq(scene_compositor_layer_store(srv->cp, 0)),
-            (unsigned long long)scene_store_committed_seq(scene_compositor_layer_store(srv->cp, 0)));
-    fflush(stderr);
     for (;;) {
         uint8_t buf[8192];
         uint32_t got = 0;
         int r = scene_transport_recv(srv->server_ts, buf, sizeof(buf), &got);
         if (r != 0 || got == 0) break;
-        fprintf(stderr, "scene_tick: recv r %d got %u cli_next %llu store_next %llu\n",
-                r, got, (unsigned long long)scene_client_next_seq(srv->cli),
-                (unsigned long long)scene_store_next_seq(scene_compositor_layer_store(srv->cp, 0)));
-        fflush(stderr);
         int feed_rc = scene_server_feed(sv, buf, got);
         if (feed_rc != 0) {
             fprintf(stderr, "iso-wl: scene server feed failed rc=%d got=%u\n", feed_rc, got);
@@ -323,19 +307,11 @@ static int wl_create_window_nodes(iso_server *srv, iso_window *win,
     int rc = scene_client_create_node(srv->cli, SCENE_NO_PARENT, win->node_id,
             SCENE_ROLE_WINDOW, &r,
             SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
-    fprintf(stderr, "wl_create_window_nodes: WINDOW %u rc %d cli_next %llu store_next %llu committed %llu\n",
-            win->node_id, rc, (unsigned long long)scene_client_next_seq(srv->cli),
-            (unsigned long long)scene_store_next_seq(scene_compositor_layer_store(srv->cp, 0)),
-            (unsigned long long)scene_store_committed_seq(scene_compositor_layer_store(srv->cp, 0)));
-    fflush(stderr);
     if (rc != 0) return -1;
 
     r.x = 0; r.y = 0; r.w = w; r.h = h;
     rc = scene_client_create_node(srv->cli, win->node_id, win->content_id,
             SCENE_ROLE_IMAGE, &r, SCENE_FLAG_VISIBLE);
-    fprintf(stderr, "wl_create_window_nodes: IMAGE %u parent %u rc %d cli_next %llu\n",
-            win->content_id, win->node_id, rc, (unsigned long long)scene_client_next_seq(srv->cli));
-    fflush(stderr);
     if (rc != 0) return -1;
     return 0;
 }
@@ -346,9 +322,6 @@ static void wl_set_title(iso_server *srv, iso_window *win)
     const char *t = title ? title : "";
     size_t len = strlen(t);
     if (len > 512) len = 512;
-    fprintf(stderr, "wl_set_title: node %u text '%s' len %zu cli_next %llu\n",
-            win->node_id, t, len, (unsigned long long)scene_client_next_seq(srv->cli));
-    fflush(stderr);
     scene_client_set_text(srv->cli, win->node_id, 0, t, (uint32_t)len);
 }
 
@@ -367,10 +340,6 @@ static int wl_place_texture(iso_server *srv, iso_window *win,
 static void wl_import_frame(iso_server *srv, iso_window *win)
 {
     struct wlr_surface *surf = win->surface;
-    fprintf(stderr, "wl_import_frame: enter win %u surf %p buffer %p w %u h %u\n",
-            win->node_id, (void*)surf, surf ? (void*)surf->buffer : NULL,
-            surf ? surf->current.width : 0, surf ? surf->current.height : 0);
-    fflush(stderr);
     if (!surf || !surf->buffer) return;
 
     uint32_t w = surf->current.width;
@@ -398,9 +367,6 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
         memcpy(px + y * w * 4, (uint8_t *)data + y * stride, w * 4);
     }
     wlr_buffer_end_data_ptr_access(buf);
-    fprintf(stderr, "wl_import_frame: win %u w %u h %u fmt 0x%x stride %zu\n",
-            win->node_id, w, h, fmt, stride);
-    fflush(stderr);
 
     if (win->tex_ref != SCENE_NO_TEXTURE &&
         (win->buf_w != w || win->buf_h != h)) {
@@ -425,12 +391,7 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
         }
     }
 
-    fprintf(stderr, "wl_import_frame: register tex %u w %u h %u\n",
-            win->tex_ref, w, h);
-    fflush(stderr);
     wl_place_texture(srv, win, w, h);
-    fprintf(stderr, "wl_import_frame: place tex %u\n", win->tex_ref);
-    fflush(stderr);
     scene_compositor_register_texture(srv->cp, win->tex_ref, w, h,
                                       SCENE_TEX_FMT_XRGB, 1,
                                       (const uint32_t *)px);
@@ -443,11 +404,6 @@ static void win_commit(struct wl_listener *listener, void *data)
 {
     iso_window *win = wl_container_of(listener, win, commit);
     (void)data;
-    fprintf(stderr, "win_commit: win %p surf %p buffer %p mapped %d win_mapped %d cli_next %llu\n",
-            (void*)win, (void*)win->surface, win->surface ? (void*)win->surface->buffer : NULL,
-            win->surface ? win->surface->mapped : -1, win->mapped,
-            (unsigned long long)scene_client_next_seq(win->srv->cli));
-    fflush(stderr);
     if (win->dead) return;
 
     /* wlroots 0.17 removed xdg map/unmap signals; the mapped state is
@@ -465,9 +421,6 @@ static void win_commit(struct wl_listener *listener, void *data)
 static void win_map_derive(iso_window *win)
 {
     iso_server *srv = win->srv;
-    fprintf(stderr, "win_map_derive: win %p surf %p cli_next %llu\n",
-            (void*)win, (void*)win->surface, (unsigned long long)scene_client_next_seq(srv->cli));
-    fflush(stderr);
     if (win->mapped || win->dead) return;
     win->mapped = 1;
 
@@ -548,8 +501,6 @@ static void xdg_toplevel_new(struct wl_listener *listener, void *data)
 {
     iso_server *srv = wl_container_of(listener, srv, new_xdg_surface);
     struct wlr_xdg_surface *xdg_surface = data;
-    fprintf(stderr, "xdg_toplevel_new: role %d\n", xdg_surface->role);
-    fflush(stderr);
     if (xdg_surface->role != WLR_XDG_SURFACE_ROLE_TOPLEVEL)
         return;
 
@@ -572,10 +523,6 @@ static void xdg_toplevel_new(struct wl_listener *listener, void *data)
     srv->win_slots[slot] = 1;
     srv->win_next = (slot + 1) % WL_WIN_ID_CAP;
     wl_list_insert(&srv->windows, &win->link);
-    fprintf(stderr, "xdg_toplevel_new: created win %p node %u content %u slot %u\n",
-            (void*)win, win->node_id, win->content_id, win->slot);
-    fflush(stderr);
-
     wl_signal_add(&xdg_surface->events.destroy, &win->destroy);
     win->destroy.notify = win_destroy;
     wl_signal_add(&win->surface->events.commit, &win->commit);
@@ -600,8 +547,6 @@ static void output_frame(struct wl_listener *listener, void *data)
     const scene_fb *fb = scene_compositor_fb(srv->cp);
     if (!fb || !srv->output)
         return;
-    fprintf(stderr, "output_frame: fb %ux%u frames %llu\n", fb->w, fb->h, (unsigned long long)srv->frames);
-    fflush(stderr);
     srv->frames++;
 
     /* Optional pixel proof: dump every 30th frame (3 MB write otherwise). */

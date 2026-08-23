@@ -189,12 +189,7 @@ static int cli_emit(scene_client *c, uint16_t opcode,
                     const uint8_t *body, uint32_t blen,
                     int is_ack, int log_it)
 {
-    if (!c->conn_open || !c->welcomed || c->fatal) {
-        fprintf(stderr, "cli_emit blocked: conn_open %d welcomed %d fatal %d opcode 0x%04x\n",
-                c->conn_open, c->welcomed, c->fatal, opcode);
-        fflush(stderr);
-        return -1;
-    }
+    if (!c->conn_open || !c->welcomed || c->fatal) return -1;
     uint64_t seq = 0;
     uint32_t plen;
     if (is_ack) {
@@ -222,9 +217,6 @@ static int cli_emit(scene_client *c, uint16_t opcode,
     uint32_t ck = scene_fnv1a32(f, total);
     scene_put_u32(f + 12, ck);
     c->out.len += total;
-    fprintf(stderr, "cli_emit: queued opcode 0x%04x seq %llu out_len %u\n",
-            opcode, (unsigned long long)seq, c->out.len);
-    fflush(stderr);
     if (log_it) {
         if (clog_append(c, opcode, body, blen) != 0) return -1;
     }
@@ -233,9 +225,6 @@ static int cli_emit(scene_client *c, uint16_t opcode,
 
 int scene_client_flush(scene_client *c)
 {
-    fprintf(stderr, "scene_client_flush: conn_open %d out_len %u out_off %u next_seq %llu t %p\n",
-            c->conn_open, c->out.len, c->out_off, (unsigned long long)c->next_seq, (void*)c->t);
-    fflush(stderr);
     if (!c->conn_open) return -1;
     if (c->out_off < c->out.len) {
         if (scene_transport_send(c->t, c->out.data + c->out_off,
