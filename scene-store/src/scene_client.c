@@ -189,7 +189,12 @@ static int cli_emit(scene_client *c, uint16_t opcode,
                     const uint8_t *body, uint32_t blen,
                     int is_ack, int log_it)
 {
-    if (!c->conn_open || !c->welcomed || c->fatal) return -1;
+    if (!c->conn_open || !c->welcomed || c->fatal) {
+        fprintf(stderr, "cli_emit blocked: conn_open %d welcomed %d fatal %d opcode 0x%04x\n",
+                c->conn_open, c->welcomed, c->fatal, opcode);
+        fflush(stderr);
+        return -1;
+    }
     uint64_t seq = 0;
     uint32_t plen;
     if (is_ack) {
