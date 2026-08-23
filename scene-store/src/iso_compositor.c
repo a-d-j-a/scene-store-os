@@ -431,6 +431,11 @@ static void win_commit(struct wl_listener *listener, void *data)
 {
     iso_window *win = wl_container_of(listener, win, commit);
     (void)data;
+    fprintf(stderr, "win_commit: win %p surf %p buffer %p mapped %d win_mapped %d cli_next %llu\n",
+            (void*)win, (void*)win->surface, win->surface ? (void*)win->surface->buffer : NULL,
+            win->surface ? win->surface->mapped : -1, win->mapped,
+            (unsigned long long)scene_client_next_seq(win->srv->cli));
+    fflush(stderr);
     if (win->dead) return;
 
     /* wlroots 0.17 removed xdg map/unmap signals; the mapped state is
@@ -447,6 +452,9 @@ static void win_commit(struct wl_listener *listener, void *data)
 static void win_map_derive(iso_window *win)
 {
     iso_server *srv = win->srv;
+    fprintf(stderr, "win_map_derive: win %p surf %p cli_next %llu\n",
+            (void*)win, (void*)win->surface, (unsigned long long)scene_client_next_seq(srv->cli));
+    fflush(stderr);
     if (win->mapped || win->dead) return;
     win->mapped = 1;
 

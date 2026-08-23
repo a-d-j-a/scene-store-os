@@ -222,6 +222,9 @@ static int cli_emit(scene_client *c, uint16_t opcode,
     uint32_t ck = scene_fnv1a32(f, total);
     scene_put_u32(f + 12, ck);
     c->out.len += total;
+    fprintf(stderr, "cli_emit: queued opcode 0x%04x seq %llu out_len %u\n",
+            opcode, (unsigned long long)seq, c->out.len);
+    fflush(stderr);
     if (log_it) {
         if (clog_append(c, opcode, body, blen) != 0) return -1;
     }
