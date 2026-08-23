@@ -810,3 +810,94 @@ for fresh persist-disk first boot). QEMU screendump pixel truth
   (git status clean), full ISO rebuilt from committed sources,
   proof rerun: pixels byte-identical to the targets above.
   THE PASS-18 ISO VERIFICATION ITEM IS NOW CLOSED.
+
+--------------------------------------------------------------------------------
+17. PASSES 19-28 + CURRENT WIP (f779c7f..d98431a, 2026-08-23)
+--------------------------------------------------------------------------------
+Pass 19 (persist + GRUB -cdrom + resize, ceee597..990960c, AGENTS.md §17):
+persist=DEV switch_root, pkgtest=check:PKG two-boot proof (htop), GRUB
+photo-entry proof (-cdrom, terminal 0x0C0C0C), shell pointer resize.
+
+Pass 20 (audio, iso_play raw ALSA, 37ed316 tail pad, 98ff594 guards):
+SYN 440/554Hz melody, track_convert 44100 stereo, ALSA UAPI (rmask=~0U),
+QEMU HDA wav capture 0/183k mismatches byte-identical (aud12/13), volume
+halving exact.
+
+Pass 21 (iso_install, 8bb14f8..b36178c): sfdisk + SIGCHLD=DFL fix (system() rc=-1
+wall), copy mkdir -p, baked grub.cfg console=ttyS0, QEMU install-proof
+diskboot pixel-exact.
+
+Pass 22 (files open-with, iso_files, wlroots skeleton): iso_files spawns
+iso-edit/iso-photo/iso-play by extension, wlroots compositor skeleton
+(src/iso_compositor.c Linux-only, not on Windows).
+
+Pass 23-28 (codec, wlshim, wlroots bridge WIP):
+- Pass 27 (adab0b2): iso_wlshim.c tiny legacy-Wayland seam (wl_compositor/
+  wl_shm/wl_shell, one reused shm buffer, XRGB8888) + host proof client
+  tools/iso_wl_client.c (wayland-scanner xdg-shell, deterministic red/blue/
+  white/green pattern, 480x300).
+- Pass 28 WIP (5bd3b7c..d98431a): wlroots 0.17.1 bridge into scene engine
+  (src/iso_compositor.c ~955 lines, honest boundary: wl_shm XRGB8888 ->
+  wlr_buffer shm -> scene texture ref 0x70000000+ -> IMAGE node 9001).
+  Verified against trixie wlroots headers (wlr_compositor_create 424,
+  wlr_output_begin_render_pass 729, wlr_renderer_read_pixels 128,
+  wlr_render_texture_options 71, wlr_seat_create 339, xdg_toplevel map/unmap
+  moved to wlr_surface.mapped in 0.17).
+
+WIP fixes landed at d98431a (all pushed, local == origin/master):
+- a7a529c..f779c7f: include path -Ithird_party/wayland for xdg-shell-protocol.h
+  (Makefile:498,60), wlr_seat_keyboard_notify_enter sig fix (410,676) and
+  WLR_BUTTON_PRESSED (654), toplevel map/unmap -> wlr_surface.mapped derive
+  (365,383,422,485), scene_fb px not pixels (519,532), struct xkb_keymap
+  (623), frame_timer field (174) + headless self-reschedule removal (551) +
+  wl_event_loop timer re-arm via srv->frame_timer (913-947), duplicate
+  wlr_headless_add_output removal (782), link order + -lcrypt (498,60).
+- 47e9552..6fe62be: wl_import_frame via wlr_buffer_begin_data_ptr_access
+  (src/iso_compositor.c:334, wlr/types/wlr_buffer.h:98,131) instead of
+  wlr_renderer_read_pixels segfault at libwlroots.so:0x736ee48878c9;
+  wlr_client_buffer cast fix (344).
+- 23b807a: win_commit guard until mapped (365) — fixes SET_TEXT 9000 before
+  CREATE 9000 BAD_NODE (src/scene_store.c:1994 SEQ_MISMATCH -> fatal).
+- d98431a: stripped all fprintf verbose, kept next_seq accessor
+  (include/scene_store.h:116, src/scene_store.c:1773) and propagate fix
+  (src/scene_server.c:160 return r).
+
+Current headless proof at d98431a (codespace effective-system, 2c/8GB):
+- `XDG_RUNTIME_DIR=/tmp/xdg-wl (0700) wayland-0 srwxr-xr--` + `WAYLAND_DEBUG=1`
+  shows `wl_display@1.get_registry -> wl_registry@2.global wl_shm/wl_compositor/
+  xdg_wm_base/wl_seat -> wl_compositor.create_surface -> xdg_wm_base.get_xdg_surface
+  -> xdg_toplevel.set_title -> wl_surface.commit -> xdg_surface.configure -> ack
+  -> wl_shm.create_pool fd 5 576000 -> create_buffer 480x300 -> attach -> commit`
+  all ok; `xdg_toplevel_new: created win 9000 content 9001` and `win_commit
+  buffer 0x... mapped 1` and `wl_create_window_nodes: WINDOW 9000 rc 0` now
+  succeed, `store_next 279 committed 278` in sync, `wl-frame.ppm` 3.0M
+  `1280x800` exists but still `(106,93)=(26,26,46)` desktop at window rect
+  `(96,88)` instead of `(204,0,0)` red — texture is imported (w/h 480x300 fmt
+  0x34325258) but `scene_compositor_frame` at src/iso_compositor.c:520 +
+  scene_compositor.c:500 is not yet blitting `IMAGE 9001`'s tex_ref into
+  `fb->px`.
+
+Next step (no new deps, single scene_compositor blit debug cycle, ~1 pass):
+`src/scene_compositor.c` `wlr_render_texture_options` vs `scene_fb_blit`
+for `SCENE_ROLE_IMAGE` `SCENE_TEX_FMT_XRGB` `1` at `src/iso_compositor.c:326`.
+
+Codespace limit: both `effective-system` and `glowing-memory` are `Shutdown`
+(`gh codespace list` 2026-08-23, `30m` idle). Quota hit (30h free). Free a slot
+with `gh codespace delete -c glowing-memory-gxjv9j7jw65fv997` or wait for cycle,
+then `gh codespace create -r a-d-j-a/scene-store-os -m basicLinux32gb` and
+`gh codespace cp -e -c <id> wl-debug2.sh remote:/tmp/wl-debug2.sh` + `make -B
+build/iso-wl` + `timeout 30 bash /tmp/wl-debug2.sh` + `python3` probe of
+`/tmp/wl-frame.ppm` at `(106,93)` etc. will close the one-pixel gap.
+Local Windows suite remains the gate for non-Wayland work (`w64devkit` has no
+ASan, `make test-dbg` dead by environment).
+
+Git log d98431a (local == origin/master, 0 ahead/behind after pull):
+d98431a cleanup: strip verbose logs, keep wl_buffer shm import + frame_timer + win_commit guard + next_seq
+f779c7f iso-wl: log wl_import_frame enter
+cc1a75e iso-wl: verbose wl_import_frame and output_frame
+23b807a iso-wl: guard wl_set_title in win_commit until mapped
+ade2e25 iso-wl: log xdg_toplevel_new
+... (see `git log --oneline f779c7f..d98431a` for full WIP chain)
+5bd3b7c pass 28: wlroots compositor bridge into the scene engine (WIP)
+adab0b2 pass 27: legacy-wayland client seam - wlshim
+... (passes 19-26: ceee597..f779c7f)
