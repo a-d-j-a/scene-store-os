@@ -225,6 +225,9 @@ static int cli_emit(scene_client *c, uint16_t opcode,
 
 int scene_client_flush(scene_client *c)
 {
+    fprintf(stderr, "scene_client_flush: conn_open %d out_len %u out_off %u next_seq %llu t %p\n",
+            c->conn_open, c->out.len, c->out_off, (unsigned long long)c->next_seq, (void*)c->t);
+    fflush(stderr);
     if (!c->conn_open) return -1;
     if (c->out_off < c->out.len) {
         if (scene_transport_send(c->t, c->out.data + c->out_off,
