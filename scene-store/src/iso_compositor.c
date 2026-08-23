@@ -281,12 +281,14 @@ static void scene_tick(iso_server *srv)
             (unsigned long long)scene_client_next_seq(srv->cli),
             (unsigned long long)scene_store_next_seq(scene_compositor_layer_store(srv->cp, 0)),
             (unsigned long long)scene_store_committed_seq(scene_compositor_layer_store(srv->cp, 0)));
+    fflush(stderr);
     for (;;) {
         uint8_t buf[8192];
         uint32_t got = 0;
         int r = scene_transport_recv(srv->server_ts, buf, sizeof(buf), &got);
         if (r != 0 || got == 0) break;
         fprintf(stderr, "scene_tick: got %u cli_next %llu\n", got, (unsigned long long)scene_client_next_seq(srv->cli));
+        fflush(stderr);
         int feed_rc = scene_server_feed(sv, buf, got);
         if (feed_rc != 0) {
             fprintf(stderr, "iso-wl: scene server feed failed rc=%d got=%u\n", feed_rc, got);
@@ -316,6 +318,7 @@ static int wl_create_window_nodes(iso_server *srv, iso_window *win,
             win->node_id, rc, (unsigned long long)scene_client_next_seq(srv->cli),
             (unsigned long long)scene_store_next_seq(scene_compositor_layer_store(srv->cp, 0)),
             (unsigned long long)scene_store_committed_seq(scene_compositor_layer_store(srv->cp, 0)));
+    fflush(stderr);
     if (rc != 0) return -1;
 
     r.x = 0; r.y = 0; r.w = w; r.h = h;
@@ -323,6 +326,7 @@ static int wl_create_window_nodes(iso_server *srv, iso_window *win,
             SCENE_ROLE_IMAGE, &r, SCENE_FLAG_VISIBLE);
     fprintf(stderr, "wl_create_window_nodes: IMAGE %u parent %u rc %d cli_next %llu\n",
             win->content_id, win->node_id, rc, (unsigned long long)scene_client_next_seq(srv->cli));
+    fflush(stderr);
     if (rc != 0) return -1;
     return 0;
 }
@@ -335,6 +339,7 @@ static void wl_set_title(iso_server *srv, iso_window *win)
     if (len > 512) len = 512;
     fprintf(stderr, "wl_set_title: node %u text '%s' len %zu cli_next %llu\n",
             win->node_id, t, len, (unsigned long long)scene_client_next_seq(srv->cli));
+    fflush(stderr);
     scene_client_set_text(srv->cli, win->node_id, 0, t, (uint32_t)len);
 }
 

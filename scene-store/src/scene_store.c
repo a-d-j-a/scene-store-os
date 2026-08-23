@@ -1996,6 +1996,7 @@ int scene_store_ingest(scene_store *s, uint16_t opcode,
     if (seq != s->next_seq) {
         fprintf(stderr, "scene_store: SEQ MISMATCH opcode 0x%04x got %llu expected %llu\n",
                 opcode, (unsigned long long)seq, (unsigned long long)s->next_seq);
+        fflush(stderr);
         return fatal_error(s, SCENE_ERR_SEQ, "non-monotonic seq");
     }
     s->next_seq = seq + 1;
