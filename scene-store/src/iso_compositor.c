@@ -446,7 +446,8 @@ static void win_commit(struct wl_listener *listener, void *data)
         win_unmap_derive(win);
 
     wl_import_frame(win->srv, win);
-    wl_set_title(win->srv, win);
+    if (win->mapped)
+        wl_set_title(win->srv, win);
 }
 
 static void win_map_derive(iso_window *win)
