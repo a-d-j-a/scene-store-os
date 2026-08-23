@@ -273,7 +273,14 @@ static void scene_tick(iso_server *srv)
         out_ret = scene_server_out_next_frame(sv, &frame, &flen);
     }
     int pump_rc = scene_client_pump(srv->cli);
-    scene_client_flush(srv->cli);
+    fprintf(stderr, "scene_tick: pump_rc %d cli_next %llu store_next %llu\n",
+            pump_rc, (unsigned long long)scene_client_next_seq(srv->cli),
+            (unsigned long long)scene_store_next_seq(scene_compositor_layer_store(srv->cp, 0)));
+    fflush(stderr);
+    int flush_rc = scene_client_flush(srv->cli);
+    fprintf(stderr, "scene_tick: flush_rc %d cli_next %llu\n",
+            flush_rc, (unsigned long long)scene_client_next_seq(srv->cli));
+    fflush(stderr);
 
     /* client -> server: read whatever the client put on the loopback and
      * feed it into the server adapter (frame reassembly inside). */
@@ -287,7 +294,9 @@ static void scene_tick(iso_server *srv)
         uint32_t got = 0;
         int r = scene_transport_recv(srv->server_ts, buf, sizeof(buf), &got);
         if (r != 0 || got == 0) break;
-        fprintf(stderr, "scene_tick: got %u cli_next %llu\n", got, (unsigned long long)scene_client_next_seq(srv->cli));
+        fprintf(stderr, "scene_tick: recv r %d got %u cli_next %llu store_next %llu\n",
+                r, got, (unsigned long long)scene_client_next_seq(srv->cli),
+                (unsigned long long)scene_store_next_seq(scene_compositor_layer_store(srv->cp, 0)));
         fflush(stderr);
         int feed_rc = scene_server_feed(sv, buf, got);
         if (feed_rc != 0) {
