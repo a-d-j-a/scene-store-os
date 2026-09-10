@@ -389,7 +389,7 @@ build/iso_preview$(EXE): src/iso_preview.c build/scene_fmt.o build/scene_store.o
 		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
 		build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
 		build/scene_wallpaper.o build/scene_image.o \
-		$(SOCKLIB) -lgdi32 -o $@
+		$(SOCKLIB) -o $@
 
 build/test_store_dbg$(EXE): tests/test_store.c src/scene_fmt.c src/scene_store.c | build
 	$(CC) $(CFLAGS_DBG) tests/test_store.c src/scene_fmt.c src/scene_store.c -o $@
