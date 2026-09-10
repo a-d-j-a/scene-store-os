@@ -63,6 +63,7 @@
 #include <wlr/backend.h>
 #include <wlr/backend/headless.h>
 #include <wlr/render/allocator.h>
+#include <wlr/render/drm_format_set.h>
 #include <wlr/render/pass.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/render/wlr_texture.h>
@@ -333,40 +334,77 @@ static int wl_place_texture(iso_server *srv, iso_window *win,
                                     &r, 0, 255);
 }
 
-/* Import the surface's current frame into the scene: read the pixels directly
- * from the client's shm buffer via wlr_buffer_begin_data_ptr_access, bump the
- * texture ref on size change, register it into the layer-0 store + compositor
- * registry, and point the content node at it. Called from the surface commit path. */
+/* Import the surface's current frame into the scene: get the wlr_texture via
+ * wlr_surface_get_texture, render it into a temporary allocator-backed buffer
+ * (because wlr_client_buffer does not implement begin_data_ptr_access in
+ * wlroots 0.17), read pixels from that buffer, bump the texture ref on size
+ * change, register it into the layer-0 store + compositor registry, and point
+ * the content node at it. Called from the surface commit path. */
 static void wl_import_frame(iso_server *srv, iso_window *win)
 {
     struct wlr_surface *surf = win->surface;
     if (!surf || !surf->buffer) return;
 
+    struct wlr_texture *tex = wlr_surface_get_texture(surf);
+    if (!tex) return;
+
     uint32_t w = surf->current.width;
     uint32_t h = surf->current.height;
     if (w == 0 || h == 0 || w > 8192 || h > 8192) return;
 
-    struct wlr_buffer *buf = (struct wlr_buffer *)surf->buffer;
-    if (!buf) return;
+    /* Render the client texture into a temporary buffer we own.
+     * wlr_client_buffer wraps the source buffer but its wlr_buffer base
+     * does not implement begin_data_ptr_access, so we cannot read from
+     * it directly. Instead, we use the renderer to blit the texture into
+     * an allocator-backed buffer that does support data access. */
+    static const uint64_t mod_linear = DRM_FORMAT_MOD_LINEAR;
+    struct wlr_drm_format xrgb_fmt = {
+        .format   = DRM_FORMAT_XRGB8888,
+        .len      = 1,
+        .capacity = 1,
+        .modifiers = (uint64_t *)&mod_linear,
+    };
+    struct wlr_buffer *tmp = wlr_allocator_create_buffer(srv->allocator,
+            (int)w, (int)h, &xrgb_fmt);
+    if (!tmp) return;
+
+    struct wlr_render_pass *pass = wlr_renderer_begin_buffer_pass(
+            srv->renderer, tmp, NULL);
+    if (!pass) {
+        wlr_buffer_drop(tmp);
+        return;
+    }
+    struct wlr_render_texture_options topt = { 0 };
+    topt.texture  = tex;
+    topt.src_box  = (struct wlr_fbox){ .width = w, .height = h };
+    topt.dst_box  = (struct wlr_box){ .width = (int)w, .height = (int)h };
+    wlr_render_pass_add_texture(pass, &topt);
+    wlr_render_pass_submit(pass);
+
+    /* Read pixels from the temporary buffer. */
     void *data = NULL;
     uint32_t fmt = 0;
     size_t stride = 0;
-    if (!wlr_buffer_begin_data_ptr_access(buf, WLR_BUFFER_DATA_PTR_ACCESS_READ,
+    if (!wlr_buffer_begin_data_ptr_access(tmp, WLR_BUFFER_DATA_PTR_ACCESS_READ,
                                           &data, &fmt, &stride)) {
+        wlr_buffer_drop(tmp);
         return;
     }
-    // Only XRGB8888 is expected from our test client; other formats would need conversion.
     if (fmt != DRM_FORMAT_XRGB8888 && fmt != DRM_FORMAT_ARGB8888) {
-        wlr_buffer_end_data_ptr_access(buf);
+        wlr_buffer_end_data_ptr_access(tmp);
+        wlr_buffer_drop(tmp);
         return;
     }
     uint8_t *px = malloc((size_t)w * h * 4);
-    if (!px) { wlr_buffer_end_data_ptr_access(buf); return; }
-    // Copy row by row, handling stride
-    for (uint32_t y = 0; y < h; y++) {
-        memcpy(px + y * w * 4, (uint8_t *)data + y * stride, w * 4);
+    if (!px) {
+        wlr_buffer_end_data_ptr_access(tmp);
+        wlr_buffer_drop(tmp);
+        return;
     }
-    wlr_buffer_end_data_ptr_access(buf);
+    for (uint32_t y = 0; y < h; y++)
+        memcpy(px + y * w * 4, (uint8_t *)data + y * stride, w * 4);
+    wlr_buffer_end_data_ptr_access(tmp);
+    wlr_buffer_drop(tmp);
 
     if (win->tex_ref != SCENE_NO_TEXTURE &&
         (win->buf_w != w || win->buf_h != h)) {
