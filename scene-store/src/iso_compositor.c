@@ -306,7 +306,20 @@ static int wl_create_window_nodes(iso_server *srv, iso_window *win,
 
     r.x = (int32_t)x; r.y = (int32_t)y;
     r.w = (uint32_t)w; r.h = (uint32_t)h;
-    int rc = scene_client_create_node(srv->cli, SCENE_NO_PARENT, win->node_id,
+    /* Parent the window under the CANVAS (ID_BACKGROUND=10000) so the
+     * pre-order DFS walk paints the CANVAS first, then the window on top.
+     * Without this, the CANVAS (id=10000) paints AFTER the window (id=9000)
+     * and covers it with bg_color. Only when the CANVAS exists in the same
+     * store (headless iso-wl single-layer case). */
+    uint32_t parent = SCENE_NO_PARENT;
+    if (srv->sh) {
+        scene_node_vis cv_chk;
+        if (scene_store_node_vis(
+                scene_compositor_layer_store(srv->cp, 0),
+                10000u, &cv_chk) == 0)
+            parent = 10000u;
+    }
+    int rc = scene_client_create_node(srv->cli, parent, win->node_id,
             SCENE_ROLE_WINDOW, &r,
             SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
     if (rc != 0) return -1;
