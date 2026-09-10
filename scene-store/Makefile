@@ -9,9 +9,11 @@ IS_WINDOWS := $(strip $(findstring MINGW,$(UNAME_S))$(findstring MSYS,$(UNAME_S)
 ifdef IS_WINDOWS
   EXE    = .exe
   SOCKLIB = -lws2_32
+  WINLIB = -lgdi32
 else
   EXE    =
   SOCKLIB = -lm -lcrypt
+  WINLIB =
 endif
 
 all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE) build/iso_demo$(EXE) build/test_video_app$(EXE) build/iso_video$(EXE) build/test_app_wm$(EXE) build/test_hostwm$(EXE) build/test_shellwm$(EXE) build/iso_play$(EXE) build/iso_install$(EXE) build/test_play_app$(EXE) build/iso_files$(EXE) build/test_files_app$(EXE) build/iso_photo$(EXE) build/test_photo_app$(EXE) build/test_searchoverlay$(EXE) build/iso_edit$(EXE) build/test_edit_app$(EXE) build/test_codec$(EXE) build/test_wlshim$(EXE)
@@ -389,7 +391,7 @@ build/iso_preview$(EXE): src/iso_preview.c build/scene_fmt.o build/scene_store.o
 		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
 		build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
 		build/scene_wallpaper.o build/scene_image.o \
-		$(SOCKLIB) -o $@
+		$(SOCKLIB) $(WINLIB) -o $@
 
 build/test_store_dbg$(EXE): tests/test_store.c src/scene_fmt.c src/scene_store.c | build
 	$(CC) $(CFLAGS_DBG) tests/test_store.c src/scene_fmt.c src/scene_store.c -o $@
