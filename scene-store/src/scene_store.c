@@ -1993,6 +1993,8 @@ int scene_store_ingest(scene_store *s, uint16_t opcode,
 
     if (plen < 8) return fatal_error(s, SCENE_ERR_PROTOCOL, "no seq");
     uint64_t seq = scene_get_u64(payload);
+    fprintf(stderr, "INGEST: op=%u payload_seq=%lu expected_seq=%lu\n",
+            (unsigned)opcode, (unsigned long)seq, (unsigned long)s->next_seq);
     if (seq != s->next_seq)
         return fatal_error(s, SCENE_ERR_SEQ, "non-monotonic seq");
     s->next_seq = seq + 1;
@@ -2032,6 +2034,8 @@ int scene_store_ingest(scene_store *s, uint16_t opcode,
                 return fatal_error(s, SCENE_ERR_LIMIT, "macro cap");
         }
         s->scene_seq = seq;
+        fprintf(stderr, "INGEST: op=%u seq=%lu node_seq=%lu\n",
+                (unsigned)opcode, (unsigned long)seq, (unsigned long)s->scene_seq);
         if (log_append(s, opcode, payload, plen) != 0)
             return fatal_error(s, SCENE_ERR_LIMIT, "log");
         return 0;

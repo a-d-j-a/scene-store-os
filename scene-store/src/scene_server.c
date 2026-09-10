@@ -115,6 +115,9 @@ int scene_server_feed(scene_server *sv, const uint8_t *bytes, uint32_t len)
         }
         if (sv->ghosted && h.opcode != SCENE_OP_ACK) {
             uint64_t seq = scene_get_u64(f + SCENE_HEADER_SIZE);
+            fprintf(stderr, "FEED: ghost rejoin opcode=%u seq=%lu next_seq=%lu\n",
+                    (unsigned)h.opcode, (unsigned long)seq,
+                    (unsigned long)sv->s->next_seq);
             if (scene_store_rejoin(sv->s, seq) != 0) {
                 scene_store_fail(sv->s, SCENE_ERR_SEQ, "ghost rejoin seq");
                 sv->dead = 1;
@@ -159,8 +162,12 @@ int scene_server_feed(scene_server *sv, const uint8_t *bytes, uint32_t len)
             }
         }
         {
+            fprintf(stderr, "FEED: opcode=%u plen=%u dead=%d\n",
+                    (unsigned)h.opcode, plen, sv->dead);
             int r = scene_store_ingest(sv->s, h.opcode, f + SCENE_HEADER_SIZE, plen);
             if (r != 0) {
+                fprintf(stderr, "FEED: ingest FAILED opcode=%u r=%d\n",
+                        (unsigned)h.opcode, r);
                 sv->dead = 1;                  /* engine emitted ERROR itself   */
                 return r;
             }
