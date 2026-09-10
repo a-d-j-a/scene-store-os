@@ -591,9 +591,15 @@ static scene_tex_ent *tex_find(const scene_layer *ly, scene_texture_ref ref)
 {
     uint32_t i;
 
-    for (i = 0; i < ly->tex_cap; i++)
-        if (ly->tex_ents[i].used && ly->tex_ents[i].ref == ref)
+    for (i = 0; i < ly->tex_cap; i++) {
+        if (ly->tex_ents[i].used && ly->tex_ents[i].ref == ref) {
+            fprintf(stderr, "TEX_FIND: ref=%u found at [%u]\n",
+                    (unsigned)ref, i);
             return &ly->tex_ents[i];
+        }
+    }
+    fprintf(stderr, "TEX_FIND: ref=%u NOT FOUND (cap=%u)\n",
+            (unsigned)ref, ly->tex_cap);
     return NULL;
 }
 
