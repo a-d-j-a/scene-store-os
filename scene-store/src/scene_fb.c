@@ -381,6 +381,12 @@ void scene_fb_blit(scene_fb *fb, int32_t dx, int32_t dy,
                 for (x = (uint32_t)ddx0; x < (uint32_t)ddx1; x++)
                     drow[x] = (srow[(size_t)((int64_t)sx0 + x - dox)]
                                & UINT32_C(0x00FFFFFF)) | UINT32_C(0xFF000000);
+                if (y == 88u && ddx0 <= 96u && ddx1 > 96u)
+                    fprintf(stderr, "BLIT_WRITE: y=88 drow[96]=%08x src_px=%08x drow=%p src=%p sx0=%lld dox=%lld\n",
+                            drow[96],
+                            srow[(size_t)((int64_t)sx0 + 96u - dox)],
+                            (void*)&drow[96], (void*)src,
+                            (long long)sx0, (long long)dox);
             } else {
                 uint32_t inv = 255u - opacity;
                 for (x = (uint32_t)ddx0; x < (uint32_t)ddx1; x++) {

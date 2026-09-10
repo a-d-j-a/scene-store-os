@@ -844,6 +844,17 @@ static void repaint_rect(scene_compositor *cp, const scene_rect *r)
         scene_store_walk(ly->store, paint_cb, cp);
         anim_paint_exits(cp, ly, r);
     }
+    /* PROBE 1: direct FB write to confirm pointer validity */
+    if (r->x <= 96 && r->y <= 88 &&
+        r->x + r->w > 96 && r->y + r->h > 88) {
+        uint32_t px_before = cp->fb.px[88u * cp->fb.w + 96u];
+        cp->fb.px[88u * cp->fb.w + 96u] = 0xFF00FF00u;
+        uint32_t px_after = cp->fb.px[88u * cp->fb.w + 96u];
+        fprintf(stderr, "DIRECT_WRITE: before=%08x after=%08x fb_px=%p w=%u pitch=%u\n",
+                px_before, px_after, (void*)cp->fb.px, cp->fb.w, cp->fb.pitch);
+        /* restore so we can still see what POST_REPAINT reads */
+        cp->fb.px[88u * cp->fb.w + 96u] = px_before;
+    }
     /* POST-REPAINT DIAG: sample pixel at (96,88) after the full walk */
     if (r->x <= 96 && r->y <= 88 &&
         r->x + r->w > 96 && r->y + r->h > 88) {
