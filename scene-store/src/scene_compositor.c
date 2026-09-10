@@ -592,14 +592,9 @@ static scene_tex_ent *tex_find(const scene_layer *ly, scene_texture_ref ref)
     uint32_t i;
 
     for (i = 0; i < ly->tex_cap; i++) {
-        if (ly->tex_ents[i].used && ly->tex_ents[i].ref == ref) {
-            fprintf(stderr, "TEX_FIND: ref=%u found at [%u]\n",
-                    (unsigned)ref, i);
+        if (ly->tex_ents[i].used && ly->tex_ents[i].ref == ref)
             return &ly->tex_ents[i];
-        }
     }
-    fprintf(stderr, "TEX_FIND: ref=%u NOT FOUND (cap=%u)\n",
-            (unsigned)ref, ly->tex_cap);
     return NULL;
 }
 
@@ -683,39 +678,15 @@ static void paint_node(scene_compositor *cp, const scene_layer *ly,
         style_chrome(&cp->fb, &rc, st, eff, &c);
     if (v->tex != SCENE_NO_TEXTURE) {
         scene_tex_ent *te = tex_find(ly, v->tex);
-        if (v->id >= 9000) {
-            fprintf(stderr, "BLIT: id=%u ref=%u found=%d ly=%p tex_ents=%p cap=%u r=[%d,%d,%u,%u] eff=%u src=[%d,%d,%u,%u]\n",
-                    (unsigned)v->id, (unsigned)v->tex, te ? 1 : 0,
-                    (void*)ly, (void*)ly->tex_ents, ly->tex_cap,
-                    r[0], r[1], r[2], r[3], eff,
-                    v->tex_src[0], v->tex_src[1], v->tex_src[2], v->tex_src[3]);
-            fprintf(stderr, "TEX_TABLE: cap=%u\n", ly->tex_cap);
-            for (uint32_t _ti = 0; _ti < ly->tex_cap; _ti++) {
-                scene_tex_ent *_te = &ly->tex_ents[_ti];
-                if (_te->used)
-                    fprintf(stderr, "  [%u] ref=%u w=%u h=%u fmt=%u px=%p\n",
-                            _ti, (unsigned)_te->ref, _te->w, _te->h,
-                            _te->fmt, (void*)_te->px);
-            }
-        }
         if (te) {
             scene_rect src;
             src.x = v->tex_src[0];
             src.y = v->tex_src[1];
             src.w = v->tex_src[2];
             src.h = v->tex_src[3];
-            if (v->id >= 9000)
-                fprintf(stderr, "BLIT_BEFORE: px(96,88)=%08x tex[0]=%08x src=[%d,%d,%u,%u] tw=%u th=%u fmt=%u op=%u\n",
-                        cp->fb.px[88u * cp->fb.w + 96u],
-                        te->px[0], src.x, src.y, src.w, src.h,
-                        te->w, te->h, te->fmt,
-                        (uint8_t)(v->opacity * eff / 255u));
             scene_fb_blit(&cp->fb, r[0], r[1], te->px, te->w, te->h,
                           &src, (uint8_t)(v->opacity * eff / 255u), te->fmt,
                           &c);
-            if (v->id >= 9000)
-                fprintf(stderr, "BLIT_AFTER: px(96,88)=%08x\n",
-                        cp->fb.px[88u * cp->fb.w + 96u]);
         }
     }
     n = scene_store_node_texts(ly->store, v->id, t,
@@ -750,12 +721,6 @@ static int paint_cb(scene_node_id id, void *out)
         rc.w = r[2];
         rc.h = r[3];
         if (!rects_intersect(&rc, &cp->paint_clip)) return 0;
-        if (id >= 9000)
-            fprintf(stderr, "PAINT: id=%u rect=[%d,%d,%u,%u] anim_r=[%d,%d,%u,%u] a=%u clip=[%d,%d,%u,%u] tex=%u\n",
-                    (unsigned)id, v.rect[0], v.rect[1], v.rect[2], v.rect[3],
-                    r[0], r[1], r[2], r[3], a,
-                    cp->paint_clip.x, cp->paint_clip.y,
-                    cp->paint_clip.w, cp->paint_clip.h, (unsigned)v.tex);
     }
     paint_node(cp, ly, &v, &cp->paint_clip);
     return 0;
@@ -842,33 +807,7 @@ static void repaint_rect(scene_compositor *cp, const scene_rect *r)
         if (ly->dead) continue;
         cp->walk_ly = ly;
         scene_store_walk(ly->store, paint_cb, cp);
-        if (r->x <= 96 && r->y <= 88 &&
-            r->x + r->w > 96 && r->y + r->h > 88)
-            fprintf(stderr, "POST_WALK: layer=%u px(96,88)=%08x\n",
-                    i, cp->fb.px[88u * cp->fb.w + 96u]);
         anim_paint_exits(cp, ly, r);
-        if (r->x <= 96 && r->y <= 88 &&
-            r->x + r->w > 96 && r->y + r->h > 88)
-            fprintf(stderr, "POST_EXIT: layer=%u px(96,88)=%08x\n",
-                    i, cp->fb.px[88u * cp->fb.w + 96u]);
-    }
-    /* PROBE 1: direct FB write to confirm pointer validity */
-    if (r->x <= 96 && r->y <= 88 &&
-        r->x + r->w > 96 && r->y + r->h > 88) {
-        uint32_t px_before = cp->fb.px[88u * cp->fb.w + 96u];
-        cp->fb.px[88u * cp->fb.w + 96u] = 0xFF00FF00u;
-        uint32_t px_after = cp->fb.px[88u * cp->fb.w + 96u];
-        fprintf(stderr, "DIRECT_WRITE: before=%08x after=%08x fb_px=%p w=%u pitch=%u\n",
-                px_before, px_after, (void*)cp->fb.px, cp->fb.w, cp->fb.pitch);
-        /* restore so we can still see what POST_REPAINT reads */
-        cp->fb.px[88u * cp->fb.w + 96u] = px_before;
-    }
-    /* POST-REPAINT DIAG: sample pixel at (96,88) after the full walk */
-    if (r->x <= 96 && r->y <= 88 &&
-        r->x + r->w > 96 && r->y + r->h > 88) {
-        uint32_t px = cp->fb.px[88u * cp->fb.w + 96u];
-        fprintf(stderr, "POST_REPAINT: clip=[%d,%d,%u,%u] px(96,88)=%08x\n",
-                r->x, r->y, r->w, r->h, px);
     }
 }
 

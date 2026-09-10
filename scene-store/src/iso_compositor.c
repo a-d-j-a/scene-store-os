@@ -290,7 +290,6 @@ static void scene_tick(iso_server *srv)
             fprintf(stderr, "\n");
             break;
         }
-        fprintf(stderr, "DIAG: tick fed %u bytes to server\n", got);
     }
     if (srv->sh)
         scene_shell_tick(srv->sh);
@@ -344,11 +343,8 @@ static int wl_place_texture(iso_server *srv, iso_window *win,
                             uint32_t w, uint32_t h)
 {
     scene_rect r = { 0, 0, w, h };
-    fprintf(stderr, "DIAG: place_tex content=%u ref=%u %ux%u\n",
-            win->content_id, win->tex_ref, w, h);
     int rc = scene_client_set_texture(srv->cli, win->content_id, win->tex_ref,
                                     &r, 0, 255);
-    fprintf(stderr, "DIAG: place_tex rc=%d\n", rc);
     return rc;
 }
 
@@ -364,14 +360,11 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
     if (!surf || !surf->buffer) return;
 
     struct wlr_texture *tex = wlr_surface_get_texture(surf);
-    if (!tex) { fprintf(stderr, "DIAG: no tex\n"); return; }
+    if (!tex) return;
 
     uint32_t w = surf->current.width;
     uint32_t h = surf->current.height;
     if (w == 0 || h == 0 || w > 8192 || h > 8192) return;
-
-    fprintf(stderr, "DIAG: enter win %u surf %p buf %p w=%u h=%u mapped=%d\n",
-            win->node_id, (void*)surf, (void*)surf->buffer, w, h, surf->mapped);
 
     /* Render the client texture into a temporary buffer we own.
      * wlr_client_buffer wraps the source buffer but its wlr_buffer base
@@ -387,12 +380,11 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
     };
     struct wlr_buffer *tmp = wlr_allocator_create_buffer(srv->allocator,
             (int)w, (int)h, &xrgb_fmt);
-    if (!tmp) { fprintf(stderr, "DIAG: alloc failed\n"); return; }
+    if (!tmp) return;
 
     struct wlr_render_pass *pass = wlr_renderer_begin_buffer_pass(
             srv->renderer, tmp, NULL);
     if (!pass) {
-        fprintf(stderr, "DIAG: begin_pass failed\n");
         wlr_buffer_drop(tmp);
         return;
     }
@@ -409,7 +401,6 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
     size_t stride = 0;
     if (!wlr_buffer_begin_data_ptr_access(tmp, WLR_BUFFER_DATA_PTR_ACCESS_READ,
                                           &data, &fmt, &stride)) {
-        fprintf(stderr, "DIAG: begin_data_ptr_access FAILED on tmp buf\n");
         wlr_buffer_drop(tmp);
         return;
     }
@@ -428,8 +419,6 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
         memcpy(px + y * w * 4, (uint8_t *)data + y * stride, w * 4);
     wlr_buffer_end_data_ptr_access(tmp);
     wlr_buffer_drop(tmp);
-    fprintf(stderr, "DIAG: got %ux%u pixels, stride=%zu, px[0..3]=%02x%02x%02x%02x\n",
-            w, h, stride, px[0], px[1], px[2], px[3]);
 
     if (win->tex_ref != SCENE_NO_TEXTURE &&
         (win->buf_w != w || win->buf_h != h)) {
@@ -605,8 +594,6 @@ static void output_frame(struct wl_listener *listener, void *data)
 
     scene_tick(srv);
     int fc = scene_compositor_frame(srv->cp);
-    if (srv->frames < 10 || (srv->frames % 30) == 0)
-        fprintf(stderr, "DIAG: frame %lu compositor_frame=%d\n", (unsigned long)srv->frames, fc);
     if (fc != 0)
         return;
 
@@ -617,19 +604,6 @@ static void output_frame(struct wl_listener *listener, void *data)
 
     /* Optional pixel proof: dump every 30th frame (3 MB write otherwise). */
     if (srv->dump_ppm && (srv->frames % 30) == 0) {
-        /* FB sample before write */
-        {
-            uint32_t samples[] = {
-                fb->px[0],                          /* (0,0) */
-                fb->px[88 * fb->w + 96],            /* (96,88) - window top */
-                fb->px[150 * fb->w + 200],          /* (200,150) - window center */
-                fb->px[400 * fb->w + 640],          /* (640,400) - desktop center */
-                fb->px[700 * fb->w + 700],          /* (700,700) - desktop bottom */
-            };
-            fprintf(stderr, "FB_SAMPLE: %08x %08x %08x %08x %08x  fb=%p pitch=%u w=%u h=%u\n",
-                    samples[0], samples[1], samples[2], samples[3], samples[4],
-                    (void*)fb->px, fb->pitch, fb->w, fb->h);
-        }
         FILE *pf = fopen(srv->dump_ppm, "wb");
         if (pf) {
             fprintf(pf, "P6\n%u %u\n255\n", fb->w, fb->h);
