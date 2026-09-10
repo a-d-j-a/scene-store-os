@@ -290,6 +290,7 @@ static void scene_tick(iso_server *srv)
             fprintf(stderr, "\n");
             break;
         }
+        fprintf(stderr, "DIAG: tick fed %u bytes to server\n", got);
     }
     if (srv->sh)
         scene_shell_tick(srv->sh);
@@ -330,8 +331,12 @@ static int wl_place_texture(iso_server *srv, iso_window *win,
                             uint32_t w, uint32_t h)
 {
     scene_rect r = { 0, 0, w, h };
-    return scene_client_set_texture(srv->cli, win->content_id, win->tex_ref,
+    fprintf(stderr, "DIAG: place_tex content=%u ref=%u %ux%u\n",
+            win->content_id, win->tex_ref, w, h);
+    int rc = scene_client_set_texture(srv->cli, win->content_id, win->tex_ref,
                                     &r, 0, 255);
+    fprintf(stderr, "DIAG: place_tex rc=%d\n", rc);
+    return rc;
 }
 
 /* Import the surface's current frame into the scene: get the wlr_texture via
@@ -586,7 +591,10 @@ static void output_frame(struct wl_listener *listener, void *data)
     (void)data;
 
     scene_tick(srv);
-    if (scene_compositor_frame(srv->cp) != 0)
+    int fc = scene_compositor_frame(srv->cp);
+    if (srv->frames < 10 || (srv->frames % 30) == 0)
+        fprintf(stderr, "DIAG: frame %lu compositor_frame=%d\n", (unsigned long)srv->frames, fc);
+    if (fc != 0)
         return;
 
     const scene_fb *fb = scene_compositor_fb(srv->cp);
