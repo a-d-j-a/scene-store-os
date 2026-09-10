@@ -604,6 +604,19 @@ static void output_frame(struct wl_listener *listener, void *data)
 
     /* Optional pixel proof: dump every 30th frame (3 MB write otherwise). */
     if (srv->dump_ppm && (srv->frames % 30) == 0) {
+        /* FB sample before write */
+        {
+            uint32_t samples[] = {
+                fb->px[0],                          /* (0,0) */
+                fb->px[88 * fb->w + 96],            /* (96,88) - window top */
+                fb->px[150 * fb->w + 200],          /* (200,150) - window center */
+                fb->px[400 * fb->w + 640],          /* (640,400) - desktop center */
+                fb->px[700 * fb->w + 700],          /* (700,700) - desktop bottom */
+            };
+            fprintf(stderr, "FB_SAMPLE: %08x %08x %08x %08x %08x  fb=%p pitch=%u w=%u h=%u\n",
+                    samples[0], samples[1], samples[2], samples[3], samples[4],
+                    (void*)fb->px, fb->pitch, fb->w, fb->h);
+        }
         FILE *pf = fopen(srv->dump_ppm, "wb");
         if (pf) {
             fprintf(pf, "P6\n%u %u\n255\n", fb->w, fb->h);
