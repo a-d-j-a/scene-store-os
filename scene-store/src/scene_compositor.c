@@ -677,12 +677,21 @@ static void paint_node(scene_compositor *cp, const scene_layer *ly,
         style_chrome(&cp->fb, &rc, st, eff, &c);
     if (v->tex != SCENE_NO_TEXTURE) {
         scene_tex_ent *te = tex_find(ly, v->tex);
-        if (v->id >= 9000)
+        if (v->id >= 9000) {
             fprintf(stderr, "BLIT: id=%u ref=%u found=%d ly=%p tex_ents=%p cap=%u r=[%d,%d,%u,%u] eff=%u src=[%d,%d,%u,%u]\n",
                     (unsigned)v->id, (unsigned)v->tex, te ? 1 : 0,
                     (void*)ly, (void*)ly->tex_ents, ly->tex_cap,
                     r[0], r[1], r[2], r[3], eff,
                     v->tex_src[0], v->tex_src[1], v->tex_src[2], v->tex_src[3]);
+            fprintf(stderr, "TEX_TABLE: cap=%u\n", ly->tex_cap);
+            for (uint32_t _ti = 0; _ti < ly->tex_cap; _ti++) {
+                scene_tex_ent *_te = &ly->tex_ents[_ti];
+                if (_te->used)
+                    fprintf(stderr, "  [%u] ref=%u w=%u h=%u fmt=%u px=%p\n",
+                            _ti, (unsigned)_te->ref, _te->w, _te->h,
+                            _te->fmt, (void*)_te->px);
+            }
+        }
         if (te) {
             scene_rect src;
             src.x = v->tex_src[0];
