@@ -854,6 +854,12 @@ static int diff_cb(scene_node_id id, void *out)
     if (!rn) {
         rn = map_insert(ly, id);
         if (!rn) return 0;
+        if (id >= 9000)
+            fprintf(stderr, "DIFF: NEW id=%u role=%u flags=0x%02x tex=%u vis=%d eff=%d replay=%d rect=[%d,%d,%u,%u]\n",
+                    (unsigned)id, (unsigned)v.role, (unsigned)v.flags,
+                    (unsigned)v.tex, !!(v.flags & SCENE_FLAG_VISIBLE),
+                    cp->effects_on, anim_replaying(ly),
+                    v.rect[0], v.rect[1], v.rect[2], v.rect[3]);
         rn->seen = 1;
         rn->role = v.role;
         rn->flags = v.flags;
