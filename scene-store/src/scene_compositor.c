@@ -678,19 +678,29 @@ static void paint_node(scene_compositor *cp, const scene_layer *ly,
     if (v->tex != SCENE_NO_TEXTURE) {
         scene_tex_ent *te = tex_find(ly, v->tex);
         if (v->id >= 9000)
-            fprintf(stderr, "BLIT: id=%u ref=%u found=%d ly=%p tex_ents=%p cap=%u r=[%d,%d,%u,%u] eff=%u\n",
+            fprintf(stderr, "BLIT: id=%u ref=%u found=%d ly=%p tex_ents=%p cap=%u r=[%d,%d,%u,%u] eff=%u src=[%d,%d,%u,%u]\n",
                     (unsigned)v->id, (unsigned)v->tex, te ? 1 : 0,
                     (void*)ly, (void*)ly->tex_ents, ly->tex_cap,
-                    r[0], r[1], r[2], r[3], eff);
+                    r[0], r[1], r[2], r[3], eff,
+                    v->tex_src[0], v->tex_src[1], v->tex_src[2], v->tex_src[3]);
         if (te) {
             scene_rect src;
             src.x = v->tex_src[0];
             src.y = v->tex_src[1];
             src.w = v->tex_src[2];
             src.h = v->tex_src[3];
+            if (v->id >= 9000)
+                fprintf(stderr, "BLIT_BEFORE: px(96,88)=%08x tex[0]=%08x src=[%d,%d,%u,%u] tw=%u th=%u fmt=%u op=%u\n",
+                        cp->fb.px[88u * cp->fb.w + 96u],
+                        te->px[0], src.x, src.y, src.w, src.h,
+                        te->w, te->h, te->fmt,
+                        (uint8_t)(v->opacity * eff / 255u));
             scene_fb_blit(&cp->fb, r[0], r[1], te->px, te->w, te->h,
                           &src, (uint8_t)(v->opacity * eff / 255u), te->fmt,
                           &c);
+            if (v->id >= 9000)
+                fprintf(stderr, "BLIT_AFTER: px(96,88)=%08x\n",
+                        cp->fb.px[88u * cp->fb.w + 96u]);
         }
     }
     n = scene_store_node_texts(ly->store, v->id, t,
