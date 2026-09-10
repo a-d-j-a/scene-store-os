@@ -311,7 +311,7 @@ static int wl_create_window_nodes(iso_server *srv, iso_window *win,
             SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
     if (rc != 0) return -1;
 
-    r.x = 0; r.y = 0; r.w = w; r.h = h;
+    r.x = (int32_t)x; r.y = (int32_t)y; r.w = (uint32_t)w; r.h = (uint32_t)h;
     rc = scene_client_create_node(srv->cli, win->node_id, win->content_id,
             SCENE_ROLE_IMAGE, &r, SCENE_FLAG_VISIBLE);
     if (rc != 0) return -1;

@@ -677,6 +677,11 @@ static void paint_node(scene_compositor *cp, const scene_layer *ly,
         style_chrome(&cp->fb, &rc, st, eff, &c);
     if (v->tex != SCENE_NO_TEXTURE) {
         scene_tex_ent *te = tex_find(ly, v->tex);
+        if (v->id >= 9000)
+            fprintf(stderr, "BLIT: id=%u ref=%u found=%d ly=%p tex_ents=%p cap=%u r=[%d,%d,%u,%u] eff=%u\n",
+                    (unsigned)v->id, (unsigned)v->tex, te ? 1 : 0,
+                    (void*)ly, (void*)ly->tex_ents, ly->tex_cap,
+                    r[0], r[1], r[2], r[3], eff);
         if (te) {
             scene_rect src;
             src.x = v->tex_src[0];
@@ -720,6 +725,12 @@ static int paint_cb(scene_node_id id, void *out)
         rc.w = r[2];
         rc.h = r[3];
         if (!rects_intersect(&rc, &cp->paint_clip)) return 0;
+        if (id >= 9000)
+            fprintf(stderr, "PAINT: id=%u rect=[%d,%d,%u,%u] anim_r=[%d,%d,%u,%u] a=%u clip=[%d,%d,%u,%u] tex=%u\n",
+                    (unsigned)id, v.rect[0], v.rect[1], v.rect[2], v.rect[3],
+                    r[0], r[1], r[2], r[3], a,
+                    cp->paint_clip.x, cp->paint_clip.y,
+                    cp->paint_clip.w, cp->paint_clip.h, (unsigned)v.tex);
     }
     paint_node(cp, ly, &v, &cp->paint_clip);
     return 0;
