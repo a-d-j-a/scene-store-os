@@ -703,18 +703,40 @@ static void paint_node(scene_compositor *cp, const scene_layer *ly,
     }
 }
 
+/* Resolve parent-relative coordinates to absolute framebuffer coordinates
+ * by walking the parent chain.  The store returns parent-relative rects;
+ * the compositor paints in absolute framebuffer space.                 */
+static void resolve_abs_rect(const scene_store *store, scene_node_id id,
+                             int32_t abs[4])
+{
+    scene_node_vis v;
+    abs[0] = abs[1] = 0;
+    abs[2] = abs[3] = 0;
+    if (scene_store_node_vis(store, id, &v) != 0) return;
+    abs[0] = v.rect[0];
+    abs[1] = v.rect[1];
+    abs[2] = v.rect[2];
+    abs[3] = v.rect[3];
+    while (v.parent != SCENE_NO_PARENT) {
+        if (scene_store_node_vis(store, v.parent, &v) != 0) break;
+        abs[0] += v.rect[0];
+        abs[1] += v.rect[1];
+    }
+}
+
 static int paint_cb(scene_node_id id, void *out)
 {
     scene_compositor *cp = out;
     scene_layer *ly = cp->walk_ly;
     scene_node_vis v;
-    int32_t r[4];
+    int32_t base[4], r[4];
     uint32_t a;
 
     if (scene_store_node_vis(ly->store, id, &v) != 0) return 0;
     if (!(v.flags & SCENE_FLAG_VISIBLE) || v.opacity == 0) return 0;
     if (v.rect[2] <= 0 || v.rect[3] <= 0) return 0;
-    anim_live_geom(cp, ly, id, v.rect, r, &a);
+    resolve_abs_rect(ly->store, id, base);
+    anim_live_geom(cp, ly, id, base, r, &a);
     if (a == 0) return 0;
     {
         scene_rect rc;
@@ -888,10 +910,16 @@ static int diff_cb(scene_node_id id, void *out)
             && (v.flags & SCENE_FLAG_VISIBLE)
             && v.rect[2] > 0 && v.rect[3] > 0) {
             /* fade+slide in; anim_advance adds the swept rects */
+            int32_t abs[4];
             an = anim_alloc(cp, ly, id, SCENE_ANIM_ENTER);
-            if (an) memcpy(an->base, v.rect, sizeof(an->base));
+            if (an) {
+                resolve_abs_rect(ly->store, id, abs);
+                memcpy(an->base, abs, sizeof(an->base));
+            }
         } else if (v.flags & SCENE_FLAG_VISIBLE) {
-            damage_rect(cp, v.rect);
+            int32_t abs[4];
+            resolve_abs_rect(ly->store, id, abs);
+            damage_rect(cp, abs);
         }
         return 0;
     }
@@ -912,11 +940,17 @@ static int diff_cb(scene_node_id id, void *out)
                 anim_free(ly, an);
                 if (!anim_replaying(ly) && (v.flags & SCENE_FLAG_VISIBLE)
                     && v.rect[2] > 0 && v.rect[3] > 0) {
+                    int32_t abs[4];
                     an = anim_alloc(cp, ly, id, SCENE_ANIM_ENTER);
-                    if (an) memcpy(an->base, v.rect, sizeof(an->base));
+                    if (an) {
+                        resolve_abs_rect(ly->store, id, abs);
+                        memcpy(an->base, abs, sizeof(an->base));
+                    }
                 }
             } else {
-                memcpy(an->base, v.rect, sizeof(an->base));
+                int32_t abs[4];
+                resolve_abs_rect(ly->store, id, abs);
+                memcpy(an->base, abs, sizeof(an->base));
             }
         }
     }
@@ -932,19 +966,37 @@ static int diff_cb(scene_node_id id, void *out)
     /* Damage the old and/or new rect exactly as needed: a content-only
      * change (same rect) damages once; a move damages old+new.        */
     {
+        int32_t abs_new[4], abs_old[4];
         int had_old = (rn->flags & SCENE_FLAG_VISIBLE)
                       && rn->rect[2] > 0 && rn->rect[3] > 0;
         int has_new = (v.flags & SCENE_FLAG_VISIBLE)
                       && v.rect[2] > 0 && v.rect[3] > 0;
+        resolve_abs_rect(ly->store, id, abs_new);
         if (had_old) {
             if (has_new && memcmp(rn->rect, v.rect, sizeof(rn->rect)) == 0)
-                damage_rect(cp, v.rect);
+                damage_rect(cp, abs_new);
             else {
-                damage_rect(cp, rn->rect);
-                if (has_new) damage_rect(cp, v.rect);
+                /* old rect: use stored parent-relative + current parents */
+                abs_old[0] = rn->rect[0];
+                abs_old[1] = rn->rect[1];
+                abs_old[2] = rn->rect[2];
+                abs_old[3] = rn->rect[3];
+                {
+                    scene_node_vis pv;
+                    if (scene_store_node_vis(ly->store, id, &pv) == 0
+                        && pv.parent != SCENE_NO_PARENT) {
+                        scene_node_vis ppv;
+                        if (scene_store_node_vis(ly->store, pv.parent, &ppv) == 0) {
+                            abs_old[0] += ppv.rect[0];
+                            abs_old[1] += ppv.rect[1];
+                        }
+                    }
+                }
+                damage_rect(cp, abs_old);
+                if (has_new) damage_rect(cp, abs_new);
             }
         } else if (has_new) {
-            damage_rect(cp, v.rect);
+            damage_rect(cp, abs_new);
         }
     }
 
