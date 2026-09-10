@@ -819,6 +819,13 @@ static void repaint_rect(scene_compositor *cp, const scene_rect *r)
         scene_store_walk(ly->store, paint_cb, cp);
         anim_paint_exits(cp, ly, r);
     }
+    /* POST-REPAINT DIAG: sample pixel at (96,88) after the full walk */
+    if (r->x <= 96 && r->y <= 88 &&
+        r->x + r->w > 96 && r->y + r->h > 88) {
+        uint32_t px = cp->fb.px[88u * cp->fb.w + 96u];
+        fprintf(stderr, "POST_REPAINT: clip=[%d,%d,%u,%u] px(96,88)=%08x\n",
+                r->x, r->y, r->w, r->h, px);
+    }
 }
 
 static void repaint_all(scene_compositor *cp)
