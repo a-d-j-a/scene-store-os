@@ -4,6 +4,7 @@
  * and deterministic; blend math matches scene_fb.h exactly. */
 #include "scene_fb.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 
 /* Intersect `r` with `clip` (may be NULL) and the fb bounds; emits the
