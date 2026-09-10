@@ -346,11 +346,14 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
     if (!surf || !surf->buffer) return;
 
     struct wlr_texture *tex = wlr_surface_get_texture(surf);
-    if (!tex) return;
+    if (!tex) { fprintf(stderr, "DIAG: no tex\n"); return; }
 
     uint32_t w = surf->current.width;
     uint32_t h = surf->current.height;
     if (w == 0 || h == 0 || w > 8192 || h > 8192) return;
+
+    fprintf(stderr, "DIAG: enter win %u surf %p buf %p w=%u h=%u mapped=%d\n",
+            win->node_id, (void*)surf, (void*)surf->buffer, w, h, surf->mapped);
 
     /* Render the client texture into a temporary buffer we own.
      * wlr_client_buffer wraps the source buffer but its wlr_buffer base
@@ -366,11 +369,12 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
     };
     struct wlr_buffer *tmp = wlr_allocator_create_buffer(srv->allocator,
             (int)w, (int)h, &xrgb_fmt);
-    if (!tmp) return;
+    if (!tmp) { fprintf(stderr, "DIAG: alloc failed\n"); return; }
 
     struct wlr_render_pass *pass = wlr_renderer_begin_buffer_pass(
             srv->renderer, tmp, NULL);
     if (!pass) {
+        fprintf(stderr, "DIAG: begin_pass failed\n");
         wlr_buffer_drop(tmp);
         return;
     }
@@ -387,6 +391,7 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
     size_t stride = 0;
     if (!wlr_buffer_begin_data_ptr_access(tmp, WLR_BUFFER_DATA_PTR_ACCESS_READ,
                                           &data, &fmt, &stride)) {
+        fprintf(stderr, "DIAG: begin_data_ptr_access FAILED on tmp buf\n");
         wlr_buffer_drop(tmp);
         return;
     }
@@ -405,6 +410,8 @@ static void wl_import_frame(iso_server *srv, iso_window *win)
         memcpy(px + y * w * 4, (uint8_t *)data + y * stride, w * 4);
     wlr_buffer_end_data_ptr_access(tmp);
     wlr_buffer_drop(tmp);
+    fprintf(stderr, "DIAG: got %ux%u pixels, stride=%zu, px[0..3]=%02x%02x%02x%02x\n",
+            w, h, stride, px[0], px[1], px[2], px[3]);
 
     if (win->tex_ref != SCENE_NO_TEXTURE &&
         (win->buf_w != w || win->buf_h != h)) {
