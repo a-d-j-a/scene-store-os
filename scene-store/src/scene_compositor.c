@@ -842,7 +842,15 @@ static void repaint_rect(scene_compositor *cp, const scene_rect *r)
         if (ly->dead) continue;
         cp->walk_ly = ly;
         scene_store_walk(ly->store, paint_cb, cp);
+        if (r->x <= 96 && r->y <= 88 &&
+            r->x + r->w > 96 && r->y + r->h > 88)
+            fprintf(stderr, "POST_WALK: layer=%u px(96,88)=%08x\n",
+                    i, cp->fb.px[88u * cp->fb.w + 96u]);
         anim_paint_exits(cp, ly, r);
+        if (r->x <= 96 && r->y <= 88 &&
+            r->x + r->w > 96 && r->y + r->h > 88)
+            fprintf(stderr, "POST_EXIT: layer=%u px(96,88)=%08x\n",
+                    i, cp->fb.px[88u * cp->fb.w + 96u]);
     }
     /* PROBE 1: direct FB write to confirm pointer validity */
     if (r->x <= 96 && r->y <= 88 &&
