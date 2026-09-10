@@ -373,10 +373,10 @@ build/test_theme$(EXE): tests/test_theme.c build/scene_theme.o build/scene_shell
 		$(SOCKLIB) -o $@
 
 build/test_image$(EXE): tests/test_image.c build/scene_image.o | build
-	$(CC) $(CFLAGS) tests/test_image.c build/scene_image.o -o $@
+	$(CC) $(CFLAGS) tests/test_image.c build/scene_image.o $(SOCKLIB) -o $@
 
 build/test_wallpaper$(EXE): tests/test_wallpaper.c build/scene_wallpaper.o build/scene_image.o | build
-	$(CC) $(CFLAGS) tests/test_wallpaper.c build/scene_wallpaper.o build/scene_image.o -o $@
+	$(CC) $(CFLAGS) tests/test_wallpaper.c build/scene_wallpaper.o build/scene_image.o $(SOCKLIB) -o $@
 
 # Windows GDI live preview (shell + wallpaper visible on desktop)
 build/iso_preview$(EXE): src/iso_preview.c build/scene_fmt.o build/scene_store.o \
