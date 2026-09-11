@@ -616,7 +616,7 @@ static void output_frame(struct wl_listener *listener, void *data)
             fprintf(stderr, "PPM_PROBE: (96,88)=%08x (200,100)=%08x (120,108)=%08x seq=%lu anim_used=%u\n",
                     probe, probe2, probe3,
                     (unsigned long)scene_store_view_seq(scene_compositor_layer_store(srv->cp, 0)),
-                    (unsigned)cp->ly[0].anim_used);
+                    (unsigned)srv->cp->ly[0].anim_used);
         }
         FILE *pf = fopen(srv->dump_ppm, "wb");
         if (pf) {
