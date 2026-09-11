@@ -192,6 +192,9 @@ struct scene_shell {
 
 /* ---- helpers --------------------------------------------------------- */
 
+static void resize_children(scene_shell *sh, scene_node_id window_id,
+                            int32_t wx, int32_t wy, int32_t ww, int32_t wh);
+
 static int emit_create(scene_shell *sh, scene_node_id parent,
                        scene_node_id id, uint16_t role,
                        int32_t x, int32_t y, int32_t w, int32_t h,
