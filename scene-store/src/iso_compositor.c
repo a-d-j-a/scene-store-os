@@ -76,6 +76,7 @@
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
+#include <wlr/types/wlr_data_device.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -970,6 +971,7 @@ static void new_input(struct wl_listener *listener, void *data)
         xkb_context_unref(ctx);
         wlr_keyboard_set_repeat_info(kb, 25, 600);
         srv->keyboard = kb;
+        wlr_seat_set_keyboard(srv->seat, kb);
         wl_signal_add(&kb->events.key, &srv->keyboard_key);
         wl_signal_add(&kb->events.modifiers, &srv->keyboard_modifiers);
         break;
@@ -1040,6 +1042,7 @@ iso_server *iso_server_create(void)
             WLR_XDG_SHELL_VERSION);
     srv->deco_mgr = wlr_xdg_decoration_manager_v1_create(srv->wl_display);
     srv->seat = wlr_seat_create(srv->wl_display, "seat0");
+    wlr_data_device_manager_create(srv->wl_display);
     if (!srv->compositor || !srv->xdg_shell || !srv->seat) {
         fprintf(stderr, "iso-wl: failed to create protocol globals\n");
         goto fail;
