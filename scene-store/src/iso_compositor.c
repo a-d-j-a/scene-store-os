@@ -273,7 +273,7 @@ static void scene_tick(iso_server *srv)
         if (scene_transport_send(srv->server_ts, frame, flen) != 0) return;
         out_ret = scene_server_out_next_frame(sv, &frame, &flen);
     }
-    int pump_rc = scene_client_pump(srv->cli);
+    scene_client_pump(srv->cli);
     scene_client_flush(srv->cli);
 
     /* client -> server: read whatever the client put on the loopback and
@@ -459,8 +459,6 @@ static void win_commit(struct wl_listener *listener, void *data)
     if (win->dead) return;
 
     int surf_mapped = win->surface && win->surface->mapped;
-    fprintf(stderr, "WIN_COMMIT: node=%u surf_mapped=%d win_mapped=%d\n",
-            win->node_id, surf_mapped, win->mapped);
 
     /* wlroots 0.17 removed xdg map/unmap signals; the mapped state is
      * derived from wlr_surface.mapped at each commit. */
