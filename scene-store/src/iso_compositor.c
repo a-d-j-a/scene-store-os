@@ -608,15 +608,6 @@ static void output_frame(struct wl_listener *listener, void *data)
 
     /* Optional pixel proof: dump every 30th frame (3 MB write otherwise). */
     if (srv->dump_ppm && (srv->frames % 30) == 0) {
-        /* Debug: probe the fb pixel at the client window area before writing */
-        if (fb->w > 200 && fb->h > 110) {
-            uint32_t probe = fb->px[88 * fb->w + 96];
-            uint32_t probe2 = fb->px[100 * fb->w + 200];
-            uint32_t probe3 = fb->px[108 * fb->w + 120];
-            fprintf(stderr, "PPM_PROBE: (96,88)=%08x (200,100)=%08x (120,108)=%08x seq=%lu\n",
-                    probe, probe2, probe3,
-                    (unsigned long)scene_store_view_seq(scene_compositor_layer_store(srv->cp, 0)));
-        }
         FILE *pf = fopen(srv->dump_ppm, "wb");
         if (pf) {
             fprintf(pf, "P6\n%u %u\n255\n", fb->w, fb->h);
