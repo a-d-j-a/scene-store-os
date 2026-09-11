@@ -613,10 +613,9 @@ static void output_frame(struct wl_listener *listener, void *data)
             uint32_t probe = fb->px[88 * fb->w + 96];
             uint32_t probe2 = fb->px[100 * fb->w + 200];
             uint32_t probe3 = fb->px[108 * fb->w + 120];
-            fprintf(stderr, "PPM_PROBE: (96,88)=%08x (200,100)=%08x (120,108)=%08x seq=%lu anim_used=%u\n",
+            fprintf(stderr, "PPM_PROBE: (96,88)=%08x (200,100)=%08x (120,108)=%08x seq=%lu\n",
                     probe, probe2, probe3,
-                    (unsigned long)scene_store_view_seq(scene_compositor_layer_store(srv->cp, 0)),
-                    (unsigned)srv->cp->ly[0].anim_used);
+                    (unsigned long)scene_store_view_seq(scene_compositor_layer_store(srv->cp, 0)));
         }
         FILE *pf = fopen(srv->dump_ppm, "wb");
         if (pf) {
