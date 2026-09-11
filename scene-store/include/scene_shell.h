@@ -108,6 +108,10 @@ void scene_shell_set_power_cb(scene_shell *sh, scene_shell_power_fn fn,
  * returns "NA" on Windows.                                             */
 extern const char *(*scene_shell_tray_probe)(void);
 
+/* Battery probe hook: override for testing. Default reads
+ * /sys/class/power_supply/BAT*/capacity + status.                      */
+extern const char *(*scene_shell_bat_probe)(void);
+
 /* Free the shell and its internal state. Does NOT destroy nodes (the
  * client session handles that on close). */
 void scene_shell_free(scene_shell *sh);

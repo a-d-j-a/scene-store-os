@@ -25,6 +25,7 @@
 #define ID_MENU        10004u
 #define ID_TRAY        10005u   /* network tray label (right of clock)    */
 #define ID_VOL_BTN     10006u   /* volume toggle button (left of tray)    */
+#define ID_BAT_LABEL   10007u   /* battery indicator (left of vol btn)    */
 #define ID_MENU_BASE   20000u   /* menu items: ID_MENU_BASE + i */
 #define ID_RESTART_ITEM  (ID_MENU_BASE + SCENE_SHELL_MAX_APPS)
 #define ID_POWEROFF_ITEM (ID_MENU_BASE + SCENE_SHELL_MAX_APPS + 1)
@@ -159,6 +160,10 @@ struct scene_shell {
     char                 tray_text[16];   /* cached label text            */
     time_t               last_tray_probe; /* 0 = probe immediately        */
 
+    /* battery label */
+    char                 bat_text[16];    /* cached label text            */
+    time_t               last_bat_probe;  /* 0 = probe immediately        */
+
     /* cross-app search overlay (Super+S) */
     uint8_t              ovl_open;        /* overlay showing              */
     uint8_t              ovl_built;       /* overlay nodes created        */
@@ -266,6 +271,71 @@ static const char *shell_tray_probe_impl(void)
 #endif
 
 const char *(*scene_shell_tray_probe)(void) = shell_tray_probe_impl;
+
+/* ---- battery probe ---------------------------------------------------- */
+
+#if !defined(_WIN32)
+static const char *shell_bat_probe_impl(void)
+{
+    static char res[8];
+    DIR *d = opendir("/sys/class/power_supply");
+    if (!d) return "";
+    struct dirent *e;
+    int found = 0;
+    while ((e = readdir(d)) && !found) {
+        if (e->d_name[0] == '.') continue;
+        char path[300];
+        if (strlen(e->d_name) > 240) continue;
+        snprintf(path, sizeof(path), "/sys/class/power_supply/%s/type",
+                 e->d_name);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        char tp[16] = "";
+        fgets(tp, sizeof(tp), f);
+        fclose(f);
+        if (strncmp(tp, "Battery", 7) != 0) continue;
+        found = 1;
+        /* Read capacity */
+        snprintf(path, sizeof(path), "/sys/class/power_supply/%s/capacity",
+                 e->d_name);
+        f = fopen(path, "r");
+        if (f) {
+            int cap = -1;
+            fscanf(f, "%d", &cap);
+            fclose(f);
+            if (cap >= 0 && cap <= 100) {
+                /* Read status (Charging/Discharging/Full) */
+                snprintf(path, sizeof(path),
+                         "/sys/class/power_supply/%s/status",
+                         e->d_name);
+                f = fopen(path, "r");
+                char st[16] = "";
+                if (f) { fgets(st, sizeof(st), f); fclose(f); }
+                if (strncmp(st, "Charg", 5) == 0)
+                    snprintf(res, sizeof(res), "%d%%+", cap);
+                else if (strncmp(st, "Full", 4) == 0)
+                    snprintf(res, sizeof(res), "100%%");
+                else
+                    snprintf(res, sizeof(res), "%d%%", cap);
+            } else {
+                strcpy(res, "?bat");
+            }
+        } else {
+            strcpy(res, "?bat");
+        }
+    }
+    closedir(d);
+    if (!found) res[0] = '\0';
+    return res;
+}
+#else
+static const char *shell_bat_probe_impl(void)
+{
+    return "";
+}
+#endif
+
+const char *(*scene_shell_bat_probe)(void) = shell_bat_probe_impl;
 
 /* Idle clock for the autolock timeout (NULL = time(NULL)). */
 time_t (*scene_shell_clock_probe)(void) = NULL;
@@ -637,6 +707,17 @@ int scene_shell_build(scene_shell *sh, int32_t width, int32_t height)
     r = emit_text(sh, ID_VOL_BTN, 1, "vol", 3);
     if (r != 0) return -1;
 
+    /* Battery label — left of volume button (40x22, vertically centered) */
+    r = emit_create(sh, ID_PANEL, ID_BAT_LABEL,
+                    SCENE_ROLE_LABEL, width - 252,
+                    panel_y + ((int32_t)ph - 22) / 2,
+                    48, 22,
+                    SCENE_FLAG_VISIBLE);
+    if (r != 0) return -1;
+    scene_client_set_style(sh->client, ID_BAT_LABEL, SHELL_STYLE_LABEL);
+    r = emit_text(sh, ID_BAT_LABEL, 1, "", 0);
+    if (r != 0) return -1;
+
     /* Launcher menu — initially hidden, positioned above start button.
      * Height covers launcher items + the two system items (Restart,
      * Power Off). */
@@ -868,6 +949,27 @@ int scene_shell_tick(scene_shell *sh)
             memcpy(sh->tray_text, probe, plen);
             sh->tray_text[plen] = '\0';
             emit_text(sh, ID_TRAY, 1, sh->tray_text, (uint32_t)plen);
+        }
+    }
+
+    /* --- Battery label (probe at most every 10 s, emit on change) --- */
+    if (sh->last_bat_probe == 0 || now - sh->last_bat_probe >= 10) {
+        sh->last_bat_probe = now;
+        const char *bp = scene_shell_bat_probe ?
+            scene_shell_bat_probe() : "";
+        size_t blen = strlen(bp);
+        if (blen >= sizeof(sh->bat_text))
+            blen = sizeof(sh->bat_text) - 1;
+        if (blen != strlen(sh->bat_text) ||
+            memcmp(sh->bat_text, bp, blen) != 0) {
+            memcpy(sh->bat_text, bp, blen);
+            sh->bat_text[blen] = '\0';
+            if (blen > 0) {
+                emit_flags(sh, ID_BAT_LABEL, SCENE_FLAG_VISIBLE);
+                emit_text(sh, ID_BAT_LABEL, 1, sh->bat_text, (uint32_t)blen);
+            } else {
+                emit_flags(sh, ID_BAT_LABEL, 0);
+            }
         }
     }
 
@@ -1937,6 +2039,7 @@ int scene_shell_load_config(scene_shell *sh, const char *path)
             if (scene_store_node_vis(sh->store, ID_VOL_BTN, &tbv) == 0)
                 emit_destroy(sh, ID_VOL_BTN);
         }
+        emit_destroy(sh, ID_BAT_LABEL);
         emit_destroy(sh, ID_CLOCK);
         emit_destroy(sh, ID_TRAY);
         emit_destroy(sh, ID_START_BTN);
@@ -1963,6 +2066,8 @@ int scene_shell_load_config(scene_shell *sh, const char *path)
         memset(sh->app_tasks, 0, sizeof(sh->app_tasks));
         sh->tray_text[0] = '\0';
         sh->last_tray_probe = 0;
+        sh->bat_text[0] = '\0';
+        sh->last_bat_probe = 0;
         /* Rebuild with new config */
         return scene_shell_build(sh, sh->width, sh->height);
     }
@@ -2010,6 +2115,7 @@ int scene_shell_apply_config(scene_shell *sh, const scene_shell_config *cfg)
             if (scene_store_node_vis(sh->store, ID_VOL_BTN, &tbv) == 0)
                 emit_destroy(sh, ID_VOL_BTN);
         }
+        emit_destroy(sh, ID_BAT_LABEL);
         emit_destroy(sh, ID_CLOCK);
         emit_destroy(sh, ID_START_BTN);
         emit_destroy(sh, ID_PANEL);
