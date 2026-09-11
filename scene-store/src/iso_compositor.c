@@ -706,16 +706,17 @@ static void new_deco_handler(struct wl_listener *listener, void *data)
     iso_window *win;
     wl_list_for_each(win, &srv->windows, link) {
         if (win->toplevel == deco->toplevel) {
-            /* Prefer server-side; fall back to client-side */
+            /* Negotiate: prefer server-side if client is flexible (NONE),
+             * honor CLIENT_SIDE if the client insists, accept SERVER_SIDE. */
             if (deco->requested_mode ==
-                WLR_XDG_TOPLEVEL_DECORATION_MODE_SERVER_SIDE) {
-                win->ssd = 1;
-                wlr_xdg_toplevel_decoration_v1_set_mode(
-                    deco, WLR_XDG_TOPLEVEL_DECORATION_MODE_SERVER_SIDE);
-            } else {
+                WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE) {
                 win->ssd = 0;
                 wlr_xdg_toplevel_decoration_v1_set_mode(
-                    deco, WLR_XDG_TOPLEVEL_DECORATION_MODE_CLIENT_SIDE);
+                    deco, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+            } else {
+                win->ssd = 1;
+                wlr_xdg_toplevel_decoration_v1_set_mode(
+                    deco, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
             }
             return;
         }
@@ -1043,11 +1044,8 @@ iso_server *iso_server_create(void)
         fprintf(stderr, "iso-wl: failed to create protocol globals\n");
         goto fail;
     }
-    /* SSD: default to server-side decorations when the client supports it.
+    /* SSD: prefer server-side decorations for every toplevel.
      * The decoration handler (new_deco_handler) negotiates per-window. */
-    if (srv->deco_mgr)
-        wlr_xdg_decoration_manager_v1_set_default_mode(
-            srv->deco_mgr, WLR_XDG_TOPLEVEL_DECORATION_MODE_SERVER_SIDE);
 
     /* Register listeners before creating the headless output / starting
      * the backend so new_output/new_input fire into wired handlers. */
