@@ -244,6 +244,14 @@ build_kernel() {
     scripts/config --disable DEBUG_INFO
 
     make olddefconfig
+    # olddefconfig may re-enable SYSFB_SIMPLEFB/DRM_SIMPLEDRM which cause
+    # drm_firmware_drivers_only() to block PCI DRM drivers (bochs/cirrus).
+    # Re-disable them and re-enable bochs/cirrus for QEMU VGA screendump.
+    scripts/config --disable SYSFB_SIMPLEFB
+    scripts/config --disable DRM_SIMPLEDRM
+    scripts/config --enable  DRM_BOCHS
+    scripts/config --enable  DRM_CIRRUS_QEMU
+    make olddefconfig
     make -j"$JOBS" || die "kernel build failed"
     make headers_install INSTALL_HDR_PATH="$SYSROOT" || die "headers_install failed"
     make modules_install INSTALL_MOD_PATH="$SYSROOT" || die "modules_install failed"

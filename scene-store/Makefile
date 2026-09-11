@@ -552,7 +552,7 @@ build/iso_drm$(EXE): src/iso_drm.c build/scene_fmt.o build/scene_store.o \
 		build/scene_a11y.o build/scene_shell.o \
 		build/scene_wallpaper.o build/scene_image.o \
 		build/scene_launcher.o build/scene_codec.o \
-		$(FFMPEG_LIBS) $(FFMPEG_EXTRA) -lm -lpthread -o $@
+		-static $(FFMPEG_LIBS) $(FFMPEG_EXTRA) -lm -lpthread -lcrypt -ldrm -o $@
 
 iso-drm: build/iso_drm$(EXE)
 
@@ -568,7 +568,7 @@ build/iso_terminal$(EXE): src/iso_terminal.c build/scene_fmt.o build/scene_store
 		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
 		build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
 		build/scene_wallpaper.o build/scene_image.o build/scene_launcher.o \
-		build/scene_terminal.o build/scene_app.o -lm -lpthread -o $@
+		build/scene_terminal.o build/scene_app.o -static -lm -lpthread -lcrypt -o $@
 
 iso-terminal: build/iso_terminal$(EXE)
 endif

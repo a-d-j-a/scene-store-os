@@ -36,3 +36,6 @@ state.img
 shot.bmp
 scene-volume
 aud*.wav
+proof/
+*.deb
+scene-store/third_party/wayland/
