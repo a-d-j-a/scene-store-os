@@ -139,6 +139,9 @@ struct scene_shell {
     /* window move (drag title bar) */
     scene_node_id        moving_titlebar; /* titlebar being dragged      */
     int32_t              move_off_x, move_off_y; /* offset from pointer to window origin */
+    int                  snap_active;     /* 1 = previewing snap        */
+    scene_node_id        snap_window;     /* window being snapped        */
+    scene_rect           snap_restore;    /* pre-snap rect (for undo)    */
 
     /* double-click titlebar (maximize/restore toggle) */
     scene_node_id        last_tb_click_id;  /* titlebar of last click   */
@@ -1854,8 +1857,9 @@ scene_node_id scene_shell_handle_pointer(scene_shell *sh, int32_t x, int32_t y,
     /* Window move: if dragging a title bar, update the window rect. */
     if (sh->moving_titlebar != 0) {
         if (!(buttons & 0x01)) {
-            /* Button released — end move. */
+            /* Button released — end move, apply snap if active. */
             sh->moving_titlebar = 0;
+            sh->snap_active = 0;
             return 0;
         }
         /* Move the parent WINDOW. */
@@ -1866,8 +1870,49 @@ scene_node_id scene_shell_handle_pointer(scene_shell *sh, int32_t x, int32_t y,
             int32_t wy = y - sh->move_off_y;
             scene_node_vis wv;
             if (scene_store_node_vis(sh->store, v.parent, &wv) == 0) {
-                scene_rect wr = {wx, wy, wv.rect[2], wv.rect[3]};
-                scene_client_set_rect(sh->client, v.parent, &wr);
+                /* Snap detection: edges within 8px of screen boundary */
+                int32_t sw = sh->width;
+                int32_t sh_px = sh->height - (int32_t)sh->cfg.panel_height;
+                int32_t snap_x = wx, snap_y = wy;
+                int32_t snap_w = wv.rect[2], snap_h = wv.rect[3];
+                int snapped = 0;
+                const int32_t EDGE = 8;
+                if (x <= EDGE) {
+                    /* Left edge: snap to left half */
+                    snap_x = 0; snap_y = 0;
+                    snap_w = sw / 2; snap_h = sh_px;
+                    snapped = 1;
+                } else if (x >= sw - EDGE) {
+                    /* Right edge: snap to right half */
+                    snap_x = sw / 2; snap_y = 0;
+                    snap_w = sw - sw / 2; snap_h = sh_px;
+                    snapped = 1;
+                } else if (y <= EDGE) {
+                    /* Top edge: maximize */
+                    snap_x = 0; snap_y = 0;
+                    snap_w = sw; snap_h = sh_px;
+                    snapped = 1;
+                }
+                if (snapped) {
+                    /* Save restore rect on first snap */
+                    if (!sh->snap_active) {
+                        sh->snap_window = v.parent;
+                        sh->snap_restore.x = wv.rect[0];
+                        sh->snap_restore.y = wv.rect[1];
+                        sh->snap_restore.w = wv.rect[2];
+                        sh->snap_restore.h = wv.rect[3];
+                        sh->snap_active = 1;
+                    }
+                    scene_rect sr = {snap_x, snap_y, snap_w, snap_h};
+                    scene_client_set_rect(sh->client, v.parent, &sr);
+                    /* Update move offsets so titlebar tracks correctly */
+                    sh->move_off_x = x - snap_x;
+                    sh->move_off_y = y - snap_y;
+                } else {
+                    sh->snap_active = 0;
+                    scene_rect wr = {wx, wy, wv.rect[2], wv.rect[3]};
+                    scene_client_set_rect(sh->client, v.parent, &wr);
+                }
             }
         }
         return sh->moving_titlebar;
