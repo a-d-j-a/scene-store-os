@@ -75,6 +75,7 @@
 #include <wlr/types/wlr_pointer.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -96,10 +97,18 @@
 #define WL_WIN_START_X    96
 #define WL_WIN_START_Y    88
 
+/* Server-side decoration (SSD) constants. */
+#define WL_SSD_TITLE_H    28u
+#define WL_SSD_BTN_SIZE   20u
+#define WL_SSD_BTN_PAD    4u
+#define WL_SSD_BTN_GAP    2u
+
 /* Node/texture id spaces (layer-0 store). Window nodes must sit below
- * ID_BACKGROUND (10000) so the shell's task reconciliation tracks them. */
+ * ID_BACKGROUND (10000) so the shell's task reconciliation tracks them.
+ * SSD windows use 6 ids: WINDOW + TITLEBAR + CLOSE + MAX + MIN + IMAGE. */
+#define WL_WIN_IDS_PER_WINDOW  6u
 #define WL_WIN_ID_BASE   9000u
-#define WL_WIN_ID_CAP    (10000u - WL_WIN_ID_BASE)
+#define WL_WIN_ID_CAP    ((10000u - WL_WIN_ID_BASE) / WL_WIN_IDS_PER_WINDOW)
 #define WL_TEX_BASE      0x70000000u
 #define WL_TEX_CAP       4096u
 
@@ -113,6 +122,11 @@ typedef struct iso_window {
     struct wlr_surface  *surface;      /* xdg_surface->surface            */
     uint32_t              node_id;
     uint32_t              content_id;  /* IMAGE child                     */
+    uint32_t              titlebar_id; /* TITLEBAR node (SSD only, 0=none) */
+    uint32_t              close_btn_id;
+    uint32_t              max_btn_id;
+    uint32_t              min_btn_id;
+    int                   ssd;         /* 1 = server-side decorations      */
     scene_texture_ref     tex_ref;     /* SCENE_NO_TEXTURE = none yet     */
     uint32_t              buf_w, buf_h;/* dims of the currently held ref  */
     int                   mapped;
@@ -139,6 +153,7 @@ struct iso_server {
     struct wlr_allocator *allocator;
     struct wlr_compositor *compositor;
     struct wlr_xdg_shell *xdg_shell;
+    struct wlr_xdg_decoration_manager_v1 *deco_mgr;
     struct wlr_seat     *seat;
 
     /* scene engine + shell (layer 0) */
@@ -170,6 +185,7 @@ struct iso_server {
     struct wl_listener    keyboard_key;
     struct wl_listener    keyboard_modifiers;
     struct wl_listener    new_xdg_surface;
+    struct wl_listener    new_deco;
     struct wlr_keyboard  *keyboard;    /* active keyboard, for seat focus */
 
     double                ptr_x, ptr_y;
@@ -297,14 +313,17 @@ static void scene_tick(iso_server *srv)
 
 /* ---- node ops through the owner client --------------------------------- */
 
+/* SSD style refs (must match SHELL_STYLE_SSD_* in scene_shell.c) */
+#define WL_SSD_STYLE_TB     9u
+#define WL_SSD_STYLE_CL    10u
+#define WL_SSD_STYLE_BTN   11u
+
 static int wl_create_window_nodes(iso_server *srv, iso_window *win,
                                    uint32_t x, uint32_t y,
                                    uint32_t w, uint32_t h)
 {
     scene_rect r;
 
-    r.x = (int32_t)x; r.y = (int32_t)y;
-    r.w = (uint32_t)w; r.h = (uint32_t)h;
     /* Parent the window under the CANVAS (ID_BACKGROUND=10000) so the
      * pre-order DFS walk paints the CANVAS first, then the window on top.
      * Without this, the CANVAS (id=10000) paints AFTER the window (id=9000)
@@ -318,15 +337,85 @@ static int wl_create_window_nodes(iso_server *srv, iso_window *win,
                 10000u, &cv_chk) == 0)
             parent = 10000u;
     }
-    int rc = scene_client_create_node(srv->cli, parent, win->node_id,
-            SCENE_ROLE_WINDOW, &r,
-            SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
-    if (rc != 0) return -1;
 
-    r.x = (int32_t)x; r.y = (int32_t)y; r.w = (uint32_t)w; r.h = (uint32_t)h;
-    rc = scene_client_create_node(srv->cli, win->node_id, win->content_id,
-            SCENE_ROLE_IMAGE, &r, SCENE_FLAG_VISIBLE);
-    if (rc != 0) return -1;
+    if (win->ssd) {
+        /* SSD: WINDOW contains TITLEBAR + IMAGE.
+         * WINDOW rect = (x, y, w, h + WL_SSD_TITLE_H).
+         * TITLEBAR rect = (x, y, w, WL_SSD_TITLE_H).
+         * IMAGE rect = (x, y + WL_SSD_TITLE_H, w, h). */
+        uint32_t total_h = h + WL_SSD_TITLE_H;
+        r.x = (int32_t)x; r.y = (int32_t)y;
+        r.w = (uint32_t)w; r.h = total_h;
+        int rc = scene_client_create_node(srv->cli, parent, win->node_id,
+                SCENE_ROLE_WINDOW, &r,
+                SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
+        if (rc != 0) return -1;
+
+        /* Titlebar */
+        r.x = (int32_t)x; r.y = (int32_t)y;
+        r.w = (uint32_t)w; r.h = WL_SSD_TITLE_H;
+        rc = scene_client_create_node(srv->cli, win->node_id,
+                win->titlebar_id, SCENE_ROLE_TITLEBAR, &r,
+                SCENE_FLAG_VISIBLE);
+        if (rc != 0) return -1;
+
+        /* Close button: right side of titlebar */
+        uint32_t btn_y = y + (WL_SSD_TITLE_H - WL_SSD_BTN_SIZE) / 2;
+        uint32_t btn_x = x + w - WL_SSD_BTN_PAD - WL_SSD_BTN_SIZE;
+        r.x = (int32_t)btn_x; r.y = (int32_t)btn_y;
+        r.w = WL_SSD_BTN_SIZE; r.h = WL_SSD_BTN_SIZE;
+        rc = scene_client_create_node(srv->cli, win->titlebar_id,
+                win->close_btn_id, SCENE_ROLE_BUTTON, &r,
+                SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
+        if (rc != 0) return -1;
+
+        /* Max button: left of close */
+        btn_x -= WL_SSD_BTN_SIZE + WL_SSD_BTN_GAP;
+        r.x = (int32_t)btn_x; r.y = (int32_t)btn_y;
+        rc = scene_client_create_node(srv->cli, win->titlebar_id,
+                win->max_btn_id, SCENE_ROLE_BUTTON, &r,
+                SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
+        if (rc != 0) return -1;
+
+        /* Min button: left of max */
+        btn_x -= WL_SSD_BTN_SIZE + WL_SSD_BTN_GAP;
+        r.x = (int32_t)btn_x; r.y = (int32_t)btn_y;
+        rc = scene_client_create_node(srv->cli, win->titlebar_id,
+                win->min_btn_id, SCENE_ROLE_BUTTON, &r,
+                SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
+        if (rc != 0) return -1;
+
+        /* Content IMAGE below titlebar */
+        r.x = (int32_t)x; r.y = (int32_t)(y + WL_SSD_TITLE_H);
+        r.w = (uint32_t)w; r.h = (uint32_t)h;
+        rc = scene_client_create_node(srv->cli, win->node_id, win->content_id,
+                SCENE_ROLE_IMAGE, &r, SCENE_FLAG_VISIBLE);
+        if (rc != 0) return -1;
+
+        /* Apply SSD styles */
+        scene_client_set_style(srv->cli, win->titlebar_id, WL_SSD_STYLE_TB);
+        scene_client_set_style(srv->cli, win->close_btn_id, WL_SSD_STYLE_CL);
+        scene_client_set_style(srv->cli, win->max_btn_id, WL_SSD_STYLE_BTN);
+        scene_client_set_style(srv->cli, win->min_btn_id, WL_SSD_STYLE_BTN);
+
+        /* Button text labels */
+        scene_client_set_text(srv->cli, win->close_btn_id, 0, "\xc3\x97", 2); /* × */
+        scene_client_set_text(srv->cli, win->max_btn_id, 0, "\xe2\x96\xa1", 3); /* □ */
+        scene_client_set_text(srv->cli, win->min_btn_id, 0, "\xe2\x80\x94", 3); /* — */
+    } else {
+        /* CSD: WINDOW contains IMAGE, client draws its own chrome. */
+        r.x = (int32_t)x; r.y = (int32_t)y;
+        r.w = (uint32_t)w; r.h = (uint32_t)h;
+        int rc = scene_client_create_node(srv->cli, parent, win->node_id,
+                SCENE_ROLE_WINDOW, &r,
+                SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE);
+        if (rc != 0) return -1;
+
+        r.x = (int32_t)x; r.y = (int32_t)y; r.w = (uint32_t)w; r.h = (uint32_t)h;
+        rc = scene_client_create_node(srv->cli, win->node_id, win->content_id,
+                SCENE_ROLE_IMAGE, &r, SCENE_FLAG_VISIBLE);
+        if (rc != 0) return -1;
+    }
     return 0;
 }
 
@@ -342,7 +431,17 @@ static void wl_set_title(iso_server *srv, iso_window *win)
 static int wl_place_texture(iso_server *srv, iso_window *win,
                             uint32_t w, uint32_t h)
 {
-    scene_rect r = { 0, 0, w, h };
+    scene_rect r;
+    if (win->ssd) {
+        /* SSD: client draws content only (no chrome). The full buffer
+         * maps to the content area below the titlebar. Source rect
+         * covers the full buffer; the IMAGE node rect is already
+         * positioned at (x, y + TITLEBAR_H, w, h). */
+        r.x = 0; r.y = 0;
+        r.w = (int32_t)w; r.h = (int32_t)h;
+    } else {
+        r.x = 0; r.y = 0; r.w = (int32_t)w; r.h = (int32_t)h;
+    }
     int rc = scene_client_set_texture(srv->cli, win->content_id, win->tex_ref,
                                     &r, 0, 255);
     return rc;
@@ -529,6 +628,12 @@ static void win_destroy(struct wl_listener *listener, void *data)
     win->dead = 1;
 
     if (srv->cli && srv->welcomed) {
+        if (win->ssd) {
+            scene_client_destroy_node(srv->cli, win->close_btn_id);
+            scene_client_destroy_node(srv->cli, win->max_btn_id);
+            scene_client_destroy_node(srv->cli, win->min_btn_id);
+            scene_client_destroy_node(srv->cli, win->titlebar_id);
+        }
         scene_client_destroy_node(srv->cli, win->content_id);
         scene_client_destroy_node(srv->cli, win->node_id);
     }
@@ -570,9 +675,14 @@ static void xdg_toplevel_new(struct wl_listener *listener, void *data)
     win->srv      = srv;
     win->toplevel = xdg_surface->toplevel;
     win->surface  = xdg_surface->surface;
-    win->node_id  = WL_WIN_ID_BASE + (slot * 3);
-    win->content_id = win->node_id + 1;
+    win->node_id  = WL_WIN_ID_BASE + (slot * WL_WIN_IDS_PER_WINDOW);
+    win->titlebar_id = win->node_id + 1;
+    win->close_btn_id = win->node_id + 2;
+    win->max_btn_id = win->node_id + 3;
+    win->min_btn_id = win->node_id + 4;
+    win->content_id = win->node_id + 5;
     win->tex_ref  = SCENE_NO_TEXTURE;
+    win->ssd      = 0;   /* default to CSD until decoration negotiation */
     win->slot     = (uint32_t)slot;
     srv->win_slots[slot] = 1;
     srv->win_next = (slot + 1) % WL_WIN_ID_CAP;
@@ -583,6 +693,33 @@ static void xdg_toplevel_new(struct wl_listener *listener, void *data)
     win->commit.notify = win_commit;
 
     wlr_xdg_surface_schedule_configure(xdg_surface);
+}
+
+/* ---- xdg-decoration negotiation --------------------------------------- */
+
+static void new_deco_handler(struct wl_listener *listener, void *data)
+{
+    iso_server *srv = wl_container_of(listener, srv, new_deco);
+    struct wlr_xdg_toplevel_decoration_v1 *deco = data;
+
+    /* Find the iso_window for this toplevel */
+    iso_window *win;
+    wl_list_for_each(win, &srv->windows, link) {
+        if (win->toplevel == deco->toplevel) {
+            /* Prefer server-side; fall back to client-side */
+            if (deco->requested_mode ==
+                WLR_XDG_TOPLEVEL_DECORATION_MODE_SERVER_SIDE) {
+                win->ssd = 1;
+                wlr_xdg_toplevel_decoration_v1_set_mode(
+                    deco, WLR_XDG_TOPLEVEL_DECORATION_MODE_SERVER_SIDE);
+            } else {
+                win->ssd = 0;
+                wlr_xdg_toplevel_decoration_v1_set_mode(
+                    deco, WLR_XDG_TOPLEVEL_DECORATION_MODE_CLIENT_SIDE);
+            }
+            return;
+        }
+    }
 }
 
 /* ======================================================================
@@ -900,17 +1037,24 @@ iso_server *iso_server_create(void)
             WLR_COMPOSITOR_VERSION, srv->renderer);
     srv->xdg_shell = wlr_xdg_shell_create(srv->wl_display,
             WLR_XDG_SHELL_VERSION);
+    srv->deco_mgr = wlr_xdg_decoration_manager_v1_create(srv->wl_display);
     srv->seat = wlr_seat_create(srv->wl_display, "seat0");
     if (!srv->compositor || !srv->xdg_shell || !srv->seat) {
         fprintf(stderr, "iso-wl: failed to create protocol globals\n");
         goto fail;
     }
+    /* SSD: default to server-side decorations when the client supports it.
+     * The decoration handler (new_deco_handler) negotiates per-window. */
+    if (srv->deco_mgr)
+        wlr_xdg_decoration_manager_v1_set_default_mode(
+            srv->deco_mgr, WLR_XDG_TOPLEVEL_DECORATION_MODE_SERVER_SIDE);
 
     /* Register listeners before creating the headless output / starting
      * the backend so new_output/new_input fire into wired handlers. */
     srv->new_output.notify = output_new;
     srv->new_input.notify = new_input;
     srv->new_xdg_surface.notify = xdg_toplevel_new;
+    srv->new_deco.notify = new_deco_handler;
     srv->output_frame.notify = output_frame;
     srv->output_destroy.notify = output_destroy;
     srv->pointer_motion.notify = pointer_motion;
@@ -920,6 +1064,9 @@ iso_server *iso_server_create(void)
     wl_signal_add(&srv->backend->events.new_output, &srv->new_output);
     wl_signal_add(&srv->backend->events.new_input, &srv->new_input);
     wl_signal_add(&srv->xdg_shell->events.new_surface, &srv->new_xdg_surface);
+    if (srv->deco_mgr)
+        wl_signal_add(&srv->deco_mgr->events.new_toplevel_decoration,
+                       &srv->new_deco);
 
     if (getenv("ISO_HEADLESS"))
         wlr_headless_add_output(srv->backend, 1280, 800);

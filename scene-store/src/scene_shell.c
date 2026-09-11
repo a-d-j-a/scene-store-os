@@ -57,7 +57,8 @@
 
 /* Compositor style slots owned by the shell theme. Slots 1 (hover) and
  * 2 (active) belong to iso_drm (scene_compositor_setup_hover_style /
- * setup_active_style); the shell uses 3..7 and grows the table to 8.
+ * setup_active_style); the shell uses 3..8 and grows the table to 9.
+ * SSD window decorations use 9..11 (titlebar, close btn, btn).
  * Style 0 = role default, so themed nodes must never be reset to 0. */
 #define SHELL_STYLE_BG      3u
 #define SHELL_STYLE_PANEL   4u
@@ -65,7 +66,10 @@
 #define SHELL_STYLE_LABEL   6u
 #define SHELL_STYLE_MENU    7u
 #define SHELL_STYLE_LOCK    8u   /* lock screen backdrop                    */
-#define SHELL_STYLE_SLOTS   9u
+#define SHELL_STYLE_SSD_TB  9u   /* SSD titlebar                            */
+#define SHELL_STYLE_SSD_CL  10u  /* SSD close button                        */
+#define SHELL_STYLE_SSD_BTN 11u  /* SSD max/min buttons                     */
+#define SHELL_STYLE_SLOTS   12u
 
 /* Window resize gesture: edge band width in px, edge flags (corner =
  * both bits), and the minimum window size. */
@@ -134,6 +138,11 @@ struct scene_shell {
     /* window move (drag title bar) */
     scene_node_id        moving_titlebar; /* titlebar being dragged      */
     int32_t              move_off_x, move_off_y; /* offset from pointer to window origin */
+
+    /* double-click titlebar (maximize/restore toggle) */
+    scene_node_id        last_tb_click_id;  /* titlebar of last click   */
+    uint32_t             last_tb_click_tick; /* frame of last click      */
+    uint32_t             ptr_tick;           /* frame counter for input  */
 
     /* window resize (drag window edge/corner) */
     scene_node_id        resizing_window;  /* WINDOW node being resized  */
@@ -530,6 +539,25 @@ static void apply_theme(scene_shell *sh)
     st.border_w = 1;
     st.text     = 0xFFE0E0E0;
     scene_compositor_set_style(sh->cp, SHELL_STYLE_LOCK, &st);
+
+    /* SSD window decoration styles */
+    memset(&st, 0, sizeof st);
+    st.fill     = 0xFF333333;
+    st.text     = 0xFFFFFFFF;
+    st.radius   = 4;
+    scene_compositor_set_style(sh->cp, SHELL_STYLE_SSD_TB, &st);
+
+    memset(&st, 0, sizeof st);
+    st.fill     = 0xFFCC4444;
+    st.text     = 0xFFFFFFFF;
+    st.radius   = 4;
+    scene_compositor_set_style(sh->cp, SHELL_STYLE_SSD_CL, &st);
+
+    memset(&st, 0, sizeof st);
+    st.fill     = 0xFF555555;
+    st.text     = 0xFFFFFFFF;
+    st.radius   = 4;
+    scene_compositor_set_style(sh->cp, SHELL_STYLE_SSD_BTN, &st);
 
     if (!sh->client) return;
     scene_client_set_style(sh->client, ID_BACKGROUND, SHELL_STYLE_BG);
@@ -1448,7 +1476,8 @@ int scene_shell_handle_activate(scene_shell *sh, scene_node_id activated_id)
     }
 
     /* Close button: walk up titlebar → window, then destroy the window.
-     * We detect close buttons by role=BUTTON with parent role=TITLEBAR. */
+     * Minimize/maximize: same walk, identified by button position in the
+     * titlebar (close = rightmost third, max = middle, min = left). */
     {
         scene_node_vis v;
         if (scene_store_node_vis(sh->store, activated_id, &v) == 0 &&
@@ -1457,8 +1486,41 @@ int scene_shell_handle_activate(scene_shell *sh, scene_node_id activated_id)
             if (scene_store_node_vis(sh->store, v.parent, &pv) == 0 &&
                 pv.role == SCENE_ROLE_TITLEBAR &&
                 pv.parent != SCENE_NO_PARENT) {
-                /* Found: pv.parent is the WINDOW node. Destroy it. */
-                scene_client_destroy_node(sh->client, pv.parent);
+                scene_node_id window_id = pv.parent;
+                /* Determine button type by x position in titlebar.
+                 * Layout: min | max | close (from left to right) */
+                int32_t tb_x = pv.rect[0];
+                int32_t tb_w = pv.rect[2];
+                int32_t btn_x = v.rect[0];
+                int32_t rel_x = btn_x - tb_x;
+                if (rel_x >= tb_w * 2 / 3) {
+                    /* Close: rightmost third */
+                    scene_client_destroy_node(sh->client, window_id);
+                } else if (rel_x >= tb_w / 3) {
+                    /* Maximize: middle third — toggle maximize/restore.
+                     * If already maximized (width >= output width), restore
+                     * to 640x480; otherwise maximize to fill output. */
+                    scene_node_vis wv;
+                    if (scene_store_node_vis(sh->store, window_id, &wv) == 0) {
+                        int32_t nw, nh;
+                        if (wv.rect[2] >= sh->width - 20) {
+                            /* Currently maximized: restore */
+                            nw = 640; nh = 480;
+                        } else {
+                            /* Maximize: fill output minus panel */
+                            nw = sh->width;
+                            nh = sh->height - (int32_t)sh->cfg.panel_height;
+                        }
+                        scene_rect wr = {wv.rect[0], wv.rect[1], nw, nh};
+                        scene_client_set_rect(sh->client, window_id, &wr);
+                        resize_children(sh, window_id,
+                                        wv.rect[0], wv.rect[1], nw, nh);
+                    }
+                } else {
+                    /* Minimize: left third — hide the window.
+                     * The task button persists so it can be restored. */
+                    scene_store_host_set_visible(sh->store, window_id, 0);
+                }
                 return 1;
             }
         }
@@ -1609,11 +1671,14 @@ static int resize_child_cb(scene_node_id id, void *ud)
     if (v.parent == rc->window_id) {
         if (v.role == SCENE_ROLE_TITLEBAR) {
             rc->titlebar_id = id;
-            r.x = rc->wx; r.y = rc->wy; r.w = rc->nw; r.h = 32;
+            r.x = rc->wx; r.y = rc->wy; r.w = rc->nw; r.h = v.rect[3];
             scene_client_set_rect(rc->cl, id, &r);
         } else if (!rc->content_set) {
             rc->content_set = 1;
-            r.x = rc->wx; r.y = rc->wy + 32; r.w = rc->nw; r.h = rc->nh - 32;
+            /* Content starts below the titlebar (or at top if no titlebar) */
+            int32_t title_h = (rc->titlebar_id != 0) ? v.rect[3] : 0;
+            r.x = rc->wx; r.y = rc->wy + title_h;
+            r.w = rc->nw; r.h = rc->nh - title_h;
             scene_client_set_rect(rc->cl, id, &r);
         }
     } else if (rc->titlebar_id != 0 && v.parent == rc->titlebar_id) {
@@ -1648,6 +1713,7 @@ scene_node_id scene_shell_handle_pointer(scene_shell *sh, int32_t x, int32_t y,
 {
     if (!sh || !sh->built) return 0;
     sh->last_activity = now_sec();
+    sh->ptr_tick++;
 
     /* Window resize: if resizing, update the WINDOW rect and re-derive
      * its children (titlebar/content/label/close follow the new size).
@@ -1754,7 +1820,9 @@ scene_node_id scene_shell_handle_pointer(scene_shell *sh, int32_t x, int32_t y,
 
     /* Start window move or resize: a press on a titlebar drags its
      * parent WINDOW; presses within RESIZE_BAND of the window's right
-     * edge, bottom edge, or bottom-right corner resize instead. */
+     * edge, bottom edge, or bottom-right corner resize instead.
+     * Double-click on the titlebar (same titlebar within 18 frames)
+     * toggles maximize/restore. */
     if (buttons & 0x01) {
         scene_node_id tb = titlebar_at(sh->store, x, y);
         if (tb != 0) {
@@ -1772,10 +1840,36 @@ scene_node_id scene_shell_handle_pointer(scene_shell *sh, int32_t x, int32_t y,
                         sh->resize_orig_px   = x;
                         sh->resize_orig_py   = y;
                     } else {
-                        sh->moving_titlebar = tb;
-                        /* Offset from pointer to window origin. */
-                        sh->move_off_x = x - wr[0];
-                        sh->move_off_y = y - wr[1];
+                        /* Check for double-click (same titlebar, within
+                         * 18 frames ~= 300ms at 60Hz) */
+                        if (tb == sh->last_tb_click_id &&
+                            sh->ptr_tick - sh->last_tb_click_tick < 18) {
+                            /* Double-click: toggle maximize/restore */
+                            scene_node_id wid = v.parent;
+                            scene_node_vis wv;
+                            if (scene_store_node_vis(sh->store, wid, &wv) == 0) {
+                                int32_t nw, nh;
+                                if (wv.rect[2] >= sh->width - 20) {
+                                    nw = 640; nh = 480;
+                                } else {
+                                    nw = sh->width;
+                                    nh = sh->height - (int32_t)sh->cfg.panel_height;
+                                }
+                                scene_rect wr2 = {wv.rect[0], wv.rect[1], nw, nh};
+                                scene_client_set_rect(sh->client, wid, &wr2);
+                                resize_children(sh, wid,
+                                                wv.rect[0], wv.rect[1], nw, nh);
+                            }
+                            sh->last_tb_click_id = 0;
+                            sh->last_tb_click_tick = 0;
+                        } else {
+                            /* Single click: start move */
+                            sh->moving_titlebar = tb;
+                            sh->move_off_x = x - wr[0];
+                            sh->move_off_y = y - wr[1];
+                            sh->last_tb_click_id = tb;
+                            sh->last_tb_click_tick = sh->ptr_tick;
+                        }
                     }
                     return tb;
                 }
@@ -1860,6 +1954,9 @@ int scene_shell_load_config(scene_shell *sh, const char *path)
         sh->active_task_id = 0;
         sh->moving_titlebar = 0;
         sh->resizing_window = 0;
+        sh->last_tb_click_id = 0;
+        sh->last_tb_click_tick = 0;
+        sh->ptr_tick = 0;
         memset(sh->app_tasks, 0, sizeof(sh->app_tasks));
         sh->tray_text[0] = '\0';
         sh->last_tray_probe = 0;
@@ -1929,6 +2026,9 @@ int scene_shell_apply_config(scene_shell *sh, const scene_shell_config *cfg)
         sh->active_task_id = 0;
         sh->moving_titlebar = 0;
         sh->resizing_window = 0;
+        sh->last_tb_click_id = 0;
+        sh->last_tb_click_tick = 0;
+        sh->ptr_tick = 0;
         return scene_shell_build(sh, sh->width, sh->height);
     }
     return 0;
