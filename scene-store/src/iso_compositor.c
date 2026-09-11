@@ -458,9 +458,13 @@ static void win_commit(struct wl_listener *listener, void *data)
     (void)data;
     if (win->dead) return;
 
+    int surf_mapped = win->surface && win->surface->mapped;
+    fprintf(stderr, "WIN_COMMIT: node=%u surf_mapped=%d win_mapped=%d\n",
+            win->node_id, surf_mapped, win->mapped);
+
     /* wlroots 0.17 removed xdg map/unmap signals; the mapped state is
      * derived from wlr_surface.mapped at each commit. */
-    if (win->surface && win->surface->mapped && !win->mapped)
+    if (surf_mapped && !win->mapped)
         win_map_derive(win);
     else if ((!win->surface || !win->surface->mapped) && win->mapped)
         win_unmap_derive(win);
