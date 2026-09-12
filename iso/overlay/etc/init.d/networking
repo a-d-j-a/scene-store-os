@@ -1,17 +1,38 @@
 #!/bin/sh
-# networking - bring up the first wired NIC with DHCP, then optionally
-# run the pkgtest=PKG cmdline gate (package-manager proof on serial).
+# networking - bring up wired NICs with DHCP, then try WiFi via wpa_supplicant.
 # Runs from rcS before the desktop starts; logs to the serial console.
 
 export PATH=/usr/bin:/bin:/sbin:/usr/sbin
 
-for iface in $(ls /sys/class/net 2>/dev/null | grep -v '^lo$'); do
+# ---- wired first ----
+for iface in $(ls /sys/class/net 2>/dev/null | grep -v '^lo$' | grep -v '^wlan'); do
     ifconfig "$iface" up 2>/dev/null || true
-    # -b: background if no lease (never blocks boot), -q: quit after lease
     udhcpc -i "$iface" -b -q >/dev/null 2>&1 || true
     IP=$(ip addr show "$iface" 2>/dev/null | grep 'inet ' | awk '{print $2}')
     echo "network: $iface up ${IP:-no lease}"
 done
+
+# ---- WiFi via wpa_supplicant (if available and wlan interfaces exist) ----
+if command -v wpa_supplicant >/dev/null 2>&1; then
+    for wlan in $(ls /sys/class/net 2>/dev/null | grep '^wlan'); do
+        echo "network: WiFi scan on $wlan"
+        # Try any saved config first, fall back to open scan
+        if [ -f /etc/wpa_supplicant.conf ]; then
+            wpa_supplicant -i "$wlan" -c /etc/wpa_supplicant.conf -B \
+                -P /run/wpa_${wlan}.pid 2>/dev/null || true
+        else
+            # No config: try open network discovery
+            wpa_supplicant -i "$wlan" -D nl80211,wext -c <(echo 'ctrl_interface=/var/run/wpa_supplicant
+update_config=1
+ap_scan=1') -B -P /run/wpa_${wlan}.pid 2>/dev/null || true
+        fi
+        # Give wpa_supplicant a moment to associate
+        sleep 2
+        udhcpc -i "$wlan" -b -q >/dev/null 2>&1 || true
+        IP=$(ip addr show "$wlan" 2>/dev/null | grep 'inet ' | awk '{print $2}')
+        echo "network: $wlan ${IP:-no lease}"
+    done
+fi
 
 for tok in $(cat /proc/cmdline 2>/dev/null); do
     case "$tok" in

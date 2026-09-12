@@ -197,6 +197,8 @@ enum scene_errno {
 #define SCENE_KEY_V         47u    /* evdev; clipboard paste grab         */
 #define SCENE_KEY_L         38u    /* evdev; desktop lock grab (Super+L)  */
 #define SCENE_KEY_SYSRQ     99u    /* evdev; PrtSc screenshot grab        */
+#define SCENE_KEY_F5        61u    /* evdev; brightness down              */
+#define SCENE_KEY_F6        62u    /* evdev; brightness up                */
 
 /* ---- Limits (section 8), defaulted in WELCOME ------------------------ */
 typedef struct scene_limits {

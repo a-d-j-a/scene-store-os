@@ -27,6 +27,17 @@ OUTPUT="$(pwd)/output"
 KVER="6.6.52"
 MUSLVER="1.2.5"
 BUSYBOXVER="1.38.0"
+LIBDRMVER="2.4.124"
+WAYLANDVER="1.23.1"
+WAYLAND_PROT_VER="1.38"
+PIXMANVER="0.44.2"
+XKBCOMMONVER="1.7.0"
+LIBINPUTVER="1.26.2"
+LIBSEATVER="0.7.1"
+MTDEVVER="1.1.6"
+LIBEVDEVVER="1.13.3"
+LIBUDEVSTUBVER="1"
+WLROOTSVER="0.18.2"
 
 INITRD="$TOPDIR/initramfs-${KVER}.cpio.gz"
 
@@ -102,6 +113,9 @@ fetch_sources() {
           "$SRC/openssl-3.0.13.tar.gz"
     fetch "https://gitlab.alpinelinux.org/alpine/apk-tools/-/archive/v2.14.4/apk-tools-v2.14.4.tar.gz" \
           "$SRC/apk-tools-v2.14.4.tar.gz"
+    # wpa_supplicant for WiFi (wpa_supplicant + wpa_cli)
+    fetch "https://w1.fi/releases/wpa_supplicant-2.11.tar.xz" \
+          "$SRC/wpa_supplicant-2.11.tar.xz"
 
     msg "All sources fetched."
 }
@@ -414,6 +428,312 @@ build_apk() {
     rm -rf /tmp/apkidx /tmp/alpine-keys /tmp/apkindex.tar.gz /tmp/alpine-keys.apk
     cd -
     msg "apk done."
+}
+
+# ---- phase 4.8: wpa_supplicant (WiFi management) ----------------------------
+build_wpa_supplicant() {
+    msg "=== Phase 4.8: Building wpa_supplicant ==="
+    setup_musl_gcc
+    local WVER="2.11"
+    extract "$SRC/wpa_supplicant-${WVER}.tar.xz" "$BUILDDIR/wpa_supplicant-${WVER}"
+    cd "$BUILDDIR/wpa_supplicant-${WVER}/wpa_supplicant"
+    cat > .config <<'WCONFIG'
+CONFIG_DRIVER_NONE=y
+CONFIG_DRIVER_WEXT=y
+CONFIG_DRIVER_NL80211=y
+CONFIG_WPA_SUPPLICANT_INTERNAL=y
+CONFIG_EAP_PSK=y
+CONFIG_EAP_TLS=y
+CONFIG_EAP_TTLS=y
+CONFIG_EAP_PEAP=y
+CONFIG_EAP_FAST=y
+CONFIG_IEEE8021X_EAPOL=y
+CONFIG_PKCS12=y
+CONFIG_BGSCAN_SIMPLE=y
+CONFIG_IEEE80211W=y
+CONFIG_SAE=y
+CONFIG_OWE=y
+CONFIG_SUITEB=y
+CONFIG_SUITEB192=y
+CONFIG_NO_RANDOM_POOL=n
+WCONFIG
+    make -j"$JOBS" CC="$MUSL_GCC_SHARED" \
+        CFLAGS="-O2 -I$SYSROOT/usr/include" \
+        LDFLAGS="-L$SYSROOT/usr/lib" \
+        LIBS_p2p= LIBS_c= \
+        || die "wpa_supplicant build failed"
+    mkdir -p "$SYSROOT/usr/bin" "$SYSROOT/usr/sbin"
+    cp wpa_supplicant "$SYSROOT/usr/sbin/wpa_supplicant" || die "wpa_supplicant missing"
+    cp wpa_cli "$SYSROOT/usr/bin/wpa_cli" || die "wpa_cli missing"
+    cd -
+    msg "wpa_supplicant done."
+}
+
+# ---- phase 5.0: meson cross file for musl ----------------------------------
+create_meson_cross() {
+    local CROSS="$BUILDDIR/musl-cross.txt"
+    [ -f "$CROSS" ] && return 0
+    cat > "$CROSS" <<CROSS_EOF
+[binaries]
+c = '$MUSL_GCC'
+cpp = '$MUSL_GCC'
+ar = 'ar'
+strip = 'strip'
+pkgconfig = 'pkg-config'
+
+[host_machine]
+system = 'linux'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+
+[properties]
+needs_exe_wrapper = false
+sys_root = '$SYSROOT'
+CFLAGS = ['-I$SYSROOT/usr/include', '-O2']
+LDFLAGS = ['-L$SYSROOT/usr/lib', '-L$SYSROOT/lib']
+CROSS_EOF
+    msg "Meson cross file: $CROSS"
+}
+
+# ---- phase 5.1: libdrm ----------------------------------------------------
+build_libdrm() {
+    msg "=== Phase 5.1: Building libdrm ==="
+    setup_musl_gcc
+    create_meson_cross
+    fetch "https://dri.freedesktop.org/libdrm/libdrm-${LIBDRMVER}.tar.xz" \
+          "$SRC/libdrm-${LIBDRMVER}.tar.xz"
+    extract "$SRC/libdrm-${LIBDRMVER}.tar.xz" "$BUILDDIR/libdrm-${LIBDRMVER}"
+    cd "$BUILDDIR/libdrm-${LIBDRMVER}"
+    rm -rf _build
+    meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
+        --prefix=/usr --libdir=lib \
+        -Dtests=false -Dman-pages=disabled \
+        -Dlibkms=false -Dintel=false -Damdgpu=false \
+        -Dradeon=false -Dnouveau=false -Dvmwgfx=false \
+        -Dxf86drm=false -Dxorg=false \
+        || die "libdrm meson setup failed"
+    ninja -C _build -j"$JOBS" || die "libdrm build failed"
+    DESTDIR="$SYSROOT" ninja -C _build install || die "libdrm install failed"
+    cd -
+    msg "libdrm done."
+}
+
+# ---- phase 5.2: wayland-protocols -----------------------------------------
+build_wayland_protocols() {
+    msg "=== Phase 5.2: Building wayland-protocols ==="
+    setup_musl_gcc
+    create_meson_cross
+    fetch "https://wayland.freedesktop.org/releases/wayland-protocols-${WAYLAND_PROT_VER}.tar.xz" \
+          "$SRC/wayland-protocols-${WAYLAND_PROT_VER}.tar.xz"
+    extract "$SRC/wayland-protocols-${WAYLAND_PROT_VER}.tar.xz" \
+            "$BUILDDIR/wayland-protocols-${WAYLAND_PROT_VER}"
+    cd "$BUILDDIR/wayland-protocols-${WAYLAND_PROT_VER}"
+    rm -rf _build
+    meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
+        --prefix=/usr \
+        || die "wayland-protocols meson setup failed"
+    DESTDIR="$SYSROOT" ninja -C _build install || die "wayland-protocols install failed"
+    cd -
+    msg "wayland-protocols done."
+}
+
+# ---- phase 5.3: wayland ---------------------------------------------------
+build_wayland() {
+    msg "=== Phase 5.3: Building wayland ==="
+    setup_musl_gcc
+    create_meson_cross
+    fetch "https://wayland.freedesktop.org/releases/wayland-${WAYLANDVER}.tar.xz" \
+          "$SRC/wayland-${WAYLANDVER}.tar.xz"
+    extract "$SRC/wayland-${WAYLANDVER}.tar.xz" "$BUILDDIR/wayland-${WAYLANDVER}"
+    cd "$BUILDDIR/wayland-${WAYLANDVER}"
+    rm -rf _build
+    meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
+        --prefix=/usr --libdir=lib \
+        -Ddocumentation=false -Dtests=false \
+        -Dlibraries=true -Dprotocols \
+        || die "wayland meson setup failed"
+    ninja -C _build -j"$JOBS" || die "wayland build failed"
+    DESTDIR="$SYSROOT" ninja -C _build install || die "wayland install failed"
+    cd -
+    msg "wayland done."
+}
+
+# ---- phase 5.4: pixman ----------------------------------------------------
+build_pixman() {
+    msg "=== Phase 5.4: Building pixman ==="
+    setup_musl_gcc
+    create_meson_cross
+    fetch "https://www.cairographics.org/releases/pixman-${PIXMANVER}.tar.gz" \
+          "$SRC/pixman-${PIXMANVER}.tar.gz"
+    extract "$SRC/pixman-${PIXMANVER}.tar.gz" "$BUILDDIR/pixman-${PIXMANVER}"
+    cd "$BUILDDIR/pixman-${PIXMANVER}"
+    rm -rf _build
+    meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
+        --prefix=/usr --libdir=lib \
+        -Dtests=disabled -Ddemos=disabled \
+        -Dgtk=disabled -Dintrospection=disabled \
+        || die "pixman meson setup failed"
+    ninja -C _build -j"$JOBS" || die "pixman build failed"
+    DESTDIR="$SYSROOT" ninja -C _build install || die "pixman install failed"
+    cd -
+    msg "pixman done."
+}
+
+# ---- phase 5.5: libxkbcommon ----------------------------------------------
+build_libxkbcommon() {
+    msg "=== Phase 5.5: Building libxkbcommon ==="
+    setup_musl_gcc
+    create_meson_cross
+    fetch "https://xkbcommon.org/download/libxkbcommon-${XKBCOMMONVER}.tar.xz" \
+          "$SRC/libxkbcommon-${XKBCOMMONVER}.tar.xz"
+    extract "$SRC/libxkbcommon-${XKBCOMMONVER}.tar.xz" \
+            "$BUILDDIR/libxkbcommon-${XKBCOMMONVER}"
+    cd "$BUILDDIR/libxkbcommon-${XKBCOMMONVER}"
+    rm -rf _build
+    meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
+        --prefix=/usr --libdir=lib \
+        -Denable-docs=false -Denable-wayland=false \
+        -Denable-x11=false -Denable-tools=false \
+        -Denable-bash-completion=false \
+        || die "libxkbcommon meson setup failed"
+    ninja -C _build -j"$JOBS" || die "libxkbcommon build failed"
+    DESTDIR="$SYSROOT" ninja -C _build install || die "libxkbcommon install failed"
+    cd -
+    msg "libxkbcommon done."
+}
+
+# ---- phase 5.6: libevdev --------------------------------------------------
+build_libevdev() {
+    msg "=== Phase 5.6: Building libevdev ==="
+    setup_musl_gcc
+    create_meson_cross
+    fetch "https://www.freedesktop.org/software/libevdev/libevdev-${LIBEVDEVVER}.tar.xz" \
+          "$SRC/libevdev-${LIBEVDEVVER}.tar.xz"
+    extract "$SRC/libevdev-${LIBEVDEVVER}.tar.xz" "$BUILDDIR/libevdev-${LIBEVDEVVER}"
+    cd "$BUILDDIR/libevdev-${LIBEVDEVVER}"
+    rm -rf _build
+    meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
+        --prefix=/usr --libdir=lib \
+        -Dtests=disabled -Ddocumentation=disabled \
+        || die "libevdev meson setup failed"
+    ninja -C _build -j"$JOBS" || die "libevdev build failed"
+    DESTDIR="$SYSROOT" ninja -C _build install || die "libevdev install failed"
+    cd -
+    msg "libevdev done."
+}
+
+# ---- phase 5.7: mtdev -----------------------------------------------------
+build_mtdev() {
+    msg "=== Phase 5.7: Building mtdev ==="
+    setup_musl_gcc
+    create_meson_cross
+    fetch "https://bitmath.org/code/mtdev/mtdev-${MTDEVVER}.tar.bz2" \
+          "$SRC/mtdev-${MTDEVVER}.tar.bz2"
+    extract "$SRC/mtdev-${MTDEVVER}.tar.bz2" "$BUILDDIR/mtdev-${MTDEVVER}"
+    cd "$BUILDDIR/mtdev-${MTDEVVER}"
+    # mtdev uses autotools, not meson
+    ./configure --prefix=/usr --host=x86_64-linux-musl \
+        CC="$MUSL_GCC" CFLAGS="-O2 -I$SYSROOT/usr/include" \
+        LDFLAGS="-L$SYSROOT/usr/lib" \
+        --disable-static --enable-shared \
+        || die "mtdev configure failed"
+    make -j"$JOBS" || die "mtdev build failed"
+    make install DESTDIR="$SYSROOT" || die "mtdev install failed"
+    cd -
+    msg "mtdev done."
+}
+
+# ---- phase 5.8: libseat ---------------------------------------------------
+build_libseat() {
+    msg "=== Phase 5.8: Building libseat ==="
+    setup_musl_gcc
+    create_meson_cross
+    fetch "https://git.sr.ht/~kennylevinsen/seat/refs/download/v${LIBSEATVER}/libseat-${LIBSEATVER}.tar.gz" \
+          "$SRC/libseat-${LIBSEATVER}.tar.gz"
+    extract "$SRC/libseat-${LIBSEATVER}.tar.gz" "$BUILDDIR/libseat-${LIBSEATVER}"
+    cd "$BUILDDIR/libseat-${LIBSEATVER}"
+    rm -rf _build
+    meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
+        --prefix=/usr --libdir=lib \
+        -Dlogind=disabled -Dlibseat_logind=disabled \
+        -Dserver=disabled -Dexamples=false \
+        || die "libseat meson setup failed"
+    ninja -C _build -j"$JOBS" || die "libseat build failed"
+    DESTDIR="$SYSROOT" ninja -C _build install || die "libseat install failed"
+    cd -
+    msg "libseat done."
+}
+
+# ---- phase 5.9: libinput --------------------------------------------------
+build_libinput() {
+    msg "=== Phase 5.9: Building libinput ==="
+    setup_musl_gcc
+    create_meson_cross
+    fetch "https://www.freedesktop.org/software/libinput/libinput-${LIBINPUTVER}.tar.xz" \
+          "$SRC/libinput-${LIBINPUTVER}.tar.xz"
+    extract "$SRC/libinput-${LIBINPUTVER}.tar.xz" "$BUILDDIR/libinput-${LIBINPUTVER}"
+    cd "$BUILDDIR/libinput-${LIBINPUTVER}"
+    rm -rf _build
+    meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
+        --prefix=/usr --libdir=lib \
+        -Dlibinput_tests=false -Ddocumentation=false \
+        -Drequire_alludev_rules=false \
+        || die "libinput meson setup failed"
+    ninja -C _build -j"$JOBS" || die "libinput build failed"
+    DESTDIR="$SYSROOT" ninja -C _build install || die "libinput install failed"
+    cd -
+    msg "libinput done."
+}
+
+# ---- phase 5.10: wlroots --------------------------------------------------
+build_wlroots() {
+    msg "=== Phase 5.10: Building wlroots ==="
+    setup_musl_gcc
+    create_meson_cross
+    fetch "https://gitlab.freedesktop.org/wlroots/wlroots/-/archive/${WLROOTSVER}/wlroots-${WLROOTSVER}.tar.gz" \
+          "$SRC/wlroots-${WLROOTSVER}.tar.gz"
+    extract "$SRC/wlroots-${WLROOTSVER}.tar.gz" "$BUILDDIR/wlroots-${WLROOTSVER}"
+    cd "$BUILDDIR/wlroots-${WLROOTSVER}"
+    rm -rf _build
+    meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
+        --prefix=/usr --libdir=lib \
+        -Dexamples=false -Dtests=false \
+        -Dxwayland=disabled -Dx11-backend=disabled -Dx11-renderer=disabled \
+        -Dxcb-errors=disabled -Dlibseat-disabled=disabled \
+        -Dpopups=disabled -Dnew-input-backend=disabled \
+        || die "wlroots meson setup failed"
+    ninja -C _build -j"$JOBS" || die "wlroots build failed"
+    DESTDIR="$SYSROOT" ninja -C _build install || die "wlroots install failed"
+    # Also install headers for iso_compositor.c compilation
+    mkdir -p "$SYSROOT/include/wlr"
+    cp -r "$BUILDDIR/wlroots-${WLROOTSVER}/include/wlr/"* "$SYSROOT/include/wlr/" 2>/dev/null || true
+    cd -
+    msg "wlroots done."
+}
+
+# ---- phase 5.11: build iso-wl (wlroots compositor) -----------------------
+build_iso_wl() {
+    msg "=== Phase 5.11: Building iso-wl compositor ==="
+    setup_musl_gcc
+    local SSRC="$(cd "$SCRIPT_DIR/.." && pwd)/scene-store"
+    cd "$SSRC"
+    # Build iso-wl with the musl cross toolchain and pkg-config pointing at our sysroot
+    export PKG_CONFIG_PATH="$SYSROOT/usr/lib/pkgconfig:$SYSROOT/lib/pkgconfig"
+    export PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
+    export PKG_CONFIG_LIBDIR="$SYSROOT/usr/lib/pkgconfig:$SYSROOT/lib/pkgconfig"
+    make build/iso-wl CC="$MUSL_GCC" \
+        CFLAGS="-O2 -I$SYSROOT/usr/include -DWLR_USE_UNSTABLE -Ithird_party/wayland" \
+        2>&1 | tail -20 || warn "iso-wl build failed (non-fatal for ISO)"
+    if [ -f build/iso-wl ]; then
+        mkdir -p "$SYSROOT/usr/bin"
+        cp build/iso-wl "$SYSROOT/usr/bin/iso-wl"
+        msg "iso-wl shipped to sysroot."
+    else
+        warn "iso-wl binary not produced"
+    fi
+    cd -
+    msg "iso-wl done."
 }
 
 # ---- phase 5a: build ffmpeg (static musl, minimal + parser) ----------------
@@ -886,6 +1206,10 @@ case "${1:-}" in
     kernel)    install_prereqs; fetch_sources; build_musl; build_kernel ;;
     busybox)   install_prereqs; fetch_sources; build_musl; build_kernel; build_busybox; build_zlib; build_openssl; build_apk ;;
     scene)     build_scene_store ;;
+    wlroots)   install_prereqs; fetch_sources; build_musl; build_zlib; build_openssl;
+               build_libdrm; build_wayland_protocols; build_wayland; build_pixman;
+               build_libxkbcommon; build_libevdev; build_mtdev; build_libseat;
+               build_libinput; build_wlroots ;;
     rootfs)    assemble_rootfs ;;
     initramfs) build_initramfs ;;
     iso)       shift 2>/dev/null || true; build_iso "$1" "$2" ;;
@@ -896,7 +1220,22 @@ case "${1:-}" in
         build_musl
         build_kernel
         build_busybox
+        build_zlib
+        build_openssl
+        build_wpa_supplicant
+        # wlroots dependency chain for third-party Wayland apps
+        build_libdrm
+        build_wayland_protocols
+        build_wayland
+        build_pixman
+        build_libxkbcommon
+        build_libevdev
+        build_mtdev
+        build_libseat
+        build_libinput
+        build_wlroots
         build_scene_store
+        build_iso_wl
         assemble_rootfs
         build_initramfs
         build_iso
@@ -904,7 +1243,7 @@ case "${1:-}" in
         msg "ISO: $OUTPUT/iso-custom-${KVER}.iso"
         ;;
     *)
-        echo "Usage: $0 [all|clean|prereqs|fetch|musl|kernel|busybox|scene|ffmpeg|rootfs|initramfs|iso]"
+        echo "Usage: $0 [all|clean|prereqs|fetch|musl|kernel|busybox|scene|wlroots|ffmpeg|rootfs|initramfs|iso]"
         exit 1
         ;;
 esac

@@ -489,7 +489,7 @@ int scene_shell_config_load(scene_shell_config *cfg, const char *path)
         else if (strcmp(key, "wallpaper_speed") == 0)
             cfg->wallpaper_speed = (float)atof(val);
     }
-    fclose(f);
+
     return 0;
 }
 
@@ -2546,6 +2546,42 @@ static int lock_key(scene_shell *sh, uint32_t key_code, uint8_t state,
 
 /* ---- keyboard handling ----------------------------------------------- */
 
+/* sysfs backlight brightness (Linux-only, no-op on non-backlight machines). */
+static void brightness_adj(int delta) {
+#if defined(_WIN32)
+    (void)delta;
+#else
+    char path[128];
+    FILE *ls = popen("ls /sys/class/backlight 2>/dev/null", "r");
+    if (!ls) return;
+    char dev[64];
+    if (fscanf(ls, "%63s", dev) != 1) { pclose(ls); return; }
+    pclose(ls);
+
+    snprintf(path, sizeof path, "/sys/class/backlight/%s/max_brightness", dev);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    int maxb = 100;
+    fscanf(f, "%d", &maxb);
+    fclose(f);
+
+    snprintf(path, sizeof path, "/sys/class/backlight/%s/brightness", dev);
+    f = fopen(path, "r");
+    if (!f) return;
+    int cur = 0;
+    fscanf(f, "%d", &cur);
+    fclose(f);
+
+    int newb = cur + delta;
+    if (newb < 1) newb = 1;
+    if (newb > maxb) newb = maxb;
+    if (newb == cur) return;
+
+    f = fopen(path, "w");
+    if (f) { fprintf(f, "%d\n", newb); fclose(f); }
+#endif
+}
+
 int scene_shell_handle_key(scene_shell *sh, uint32_t key_code,
                            uint8_t state, uint8_t modifiers)
 {
@@ -2642,6 +2678,10 @@ int scene_shell_handle_key(scene_shell *sh, uint32_t key_code,
             return scene_shell_handle_activate(sh, focused);
         }
     }
+
+    /* F5/F6: screen brightness down/up (sysfs backlight). */
+    if (key_code == SCENE_KEY_F5) { brightness_adj(-15); return 1; }
+    if (key_code == SCENE_KEY_F6) { brightness_adj(+15); return 1; }
 
     return 0;
 }

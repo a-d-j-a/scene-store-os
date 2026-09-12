@@ -45,6 +45,29 @@ for mod in /lib/modules/*/kernel/drivers/video/*.ko \
     insmod "$mod" 2>/dev/null || true
 done
 
+# ---- swap -------------------------------------------------------------------
+# If the persist disk is mounted, use a swap file on it; otherwise create
+# a small tmpfs swap so low-RAM machines (512 MB) don't OOM immediately.
+if [ -d /mnt/root ] && mountpoint -q /mnt/root 2>/dev/null; then
+    if [ ! -f /mnt/root/.swap ] && [ -f /sbin/mkswap ]; then
+        dd if=/dev/zero of=/mnt/root/.swap bs=1M count=256 2>/dev/null && \
+        chmod 600 /mnt/root/.swap && \
+        mkswap /mnt/root/.swap >/dev/null 2>&1 && \
+        echo "swap: created 256M swap on persist disk"
+    fi
+    [ -f /mnt/root/.swap ] && swapon /mnt/root/.swap 2>/dev/null && \
+        echo "swap: persist disk swap active"
+else
+    # tmpfs swap as fallback (uses RAM, better than nothing)
+    if [ -f /sbin/mkswap ]; then
+        dd if=/dev/zero of=/run/.swap bs=1M count=128 2>/dev/null && \
+        chmod 600 /run/.swap && \
+        mkswap /run/.swap >/dev/null 2>&1 && \
+        swapon /run/.swap 2>/dev/null && \
+        echo "swap: tmpfs swap active (128M)"
+    fi
+fi
+
 # ---- setup runtime dirs ----------------------------------------------------
 mkdir -p /run/user/0
 mkdir -p /run/user/1000
