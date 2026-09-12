@@ -33,4 +33,27 @@ void scene_font_draw_a(scene_fb *fb, int32_t x, int32_t y,
                        const char *s, uint32_t len, uint32_t color,
                        uint32_t alpha, const scene_rect *clip);
 
+/* --- Unicode / TrueType rendering (callback-based, no link dependency) --- */
+
+/* Glyph lookup callback: given a codepoint, returns {pixels, w, h, x0, y0,
+ * advance}. Returns NULL for missing glyphs. The caller owns the lookup;
+ * no hard link dependency on any fontcache module.                       */
+typedef struct scene_utf8_glyph {
+    const uint8_t *pixels;  /* alpha bitmap, or NULL for space/invisible  */
+    int w, h;               /* bitmap dimensions                          */
+    int x0, y0;             /* bearing offsets from cursor origin         */
+    int advance;            /* horizontal advance in pixels               */
+} scene_utf8_glyph;
+
+typedef scene_utf8_glyph (*scene_utf8_lookup_fn)(void *ud, uint32_t cp);
+
+/* Draw UTF-8 text `s` at (x, y) using `color` (premultiplied), clipped.
+ * `lookup` is a glyph callback; if NULL, non-ASCII renders as box glyph.
+ * `ud` is passed through to the callback.
+ * Returns the horizontal advance in pixels.                            */
+int scene_font_draw_utf8(scene_fb *fb, int32_t x, int32_t y,
+                         const char *s, uint32_t len, uint32_t color,
+                         uint32_t alpha, scene_utf8_lookup_fn lookup,
+                         void *ud, const scene_rect *clip);
+
 #endif /* SCENE_FONT_H */

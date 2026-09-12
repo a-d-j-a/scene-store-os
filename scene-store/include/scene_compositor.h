@@ -238,7 +238,28 @@ scene_style_ref scene_compositor_setup_hover_style(scene_compositor *cp,
  * colors. Shell nodes set style_ref=2 when their window is focused.
  * Returns the style_ref (always 2) or 0 on failure.                    */
 scene_style_ref scene_compositor_setup_active_style(scene_compositor *cp,
-                                                    uint32_t fill,
-                                                    uint32_t text);
+                                                     uint32_t fill,
+                                                     uint32_t text);
+
+/* TrueType font cache: set a pre-loaded cache for Unicode text rendering.
+ * NULL (default) = bitmap-only mode (ASCII 8x8 grid).                    */
+typedef struct scene_fontcache scene_fontcache;
+void scene_compositor_set_fontcache(scene_compositor *cp,
+                                    scene_fontcache *fc);
+scene_fontcache *scene_compositor_get_fontcache(const scene_compositor *cp);
+
+/* Set the fontcache and its pre-computed line height (pixels).
+ * The caller must compute line_h via scene_fontcache_line_height() before
+ * calling this, to avoid a hard link dependency from scene_compositor.o
+ * onto scene_fontcache.o.  Pass line_h=0 to let the bitmap path handle
+ * line spacing (SCENE_FONT_GLYPH_H).                                   */
+void scene_compositor_set_fontcache_with_metrics(scene_compositor *cp,
+                                                 scene_fontcache *fc,
+                                                 int line_h);
+
+/* Set a callback-based glyph lookup for TrueType rendering.
+ * This avoids linking scene_fontcache.o into every compositor consumer. */
+void scene_compositor_set_font_lookup(scene_compositor *cp,
+                                      scene_utf8_lookup_fn fn, void *ud);
 
 #endif /* SCENE_COMPOSITOR_H */

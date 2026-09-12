@@ -27,6 +27,7 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <time.h>
+#include "scene_fontcache.h"
 /* The kernel asm-generic/ioctl.h (pulled by drm.h) redefines _IOC/_IO/...
  * that musl's bits/ioctl.h already defined — drop musl's copies first so
  * the DRM_IOCTL_* numbers come from the kernel definitions (identical on
@@ -56,6 +57,23 @@
  * Not exposed as a UAPI constant — this is the uapi-visible value the
  * GETCONNECTOR ioctl fills into connection. */
 #define ISO_DRM_CONNECTED 1u
+
+/* ---- TrueType glyph callback bridge (avoids link dep in compositor) ---- */
+static scene_utf8_glyph fc_bridge(void *ud, uint32_t cp)
+{
+    scene_utf8_glyph out = {0};
+    scene_fontcache *fc = (scene_fontcache *)ud;
+    if (!fc) return out;
+    const scene_cached_glyph *g = scene_fontcache_glyph(fc, cp);
+    if (!g) return out;
+    out.pixels = g->pixels;
+    out.w = g->w;
+    out.h = g->h;
+    out.x0 = g->x0;
+    out.y0 = g->y0;
+    out.advance = g->advance;
+    return out;
+}
 
 /* ======================================================================
  * DRM plumbing (kernel UAPI, own wrappers)
@@ -800,6 +818,32 @@ int main(int argc, char **argv)
     scene_compositor_set_effects(c.cp, 1);
     scene_compositor_set_clear(c.cp, 0xFF1A1A2E);
 
+    /* Load the TrueType font for Unicode text rendering. The 8x8 bitmap
+     * font stays as the fast path for ASCII; this cache handles
+     * non-ASCII codepoints (accented chars, CJK, symbols). */
+    {
+        const char *font_paths[] = {
+            "/usr/share/fonts/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+            "fonts/DejaVuSansMono.ttf",
+            NULL
+        };
+        int fi;
+        for (fi = 0; font_paths[fi]; fi++) {
+            scene_fontcache *fc = scene_fontcache_new(font_paths[fi], 13.0f);
+            if (fc && scene_fontcache_valid(fc)) {
+                int lh = scene_fontcache_line_height(fc);
+                scene_compositor_set_fontcache_with_metrics(c.cp, fc, lh);
+                scene_compositor_set_font_lookup(c.cp, fc_bridge, fc);
+                fprintf(stderr, "iso-drm: loaded font %s (line_h=%d)\n",
+                        font_paths[fi], lh);
+                break;
+            }
+            scene_fontcache_free(fc);
+        }
+    }
+
     c.lb  = scene_loopback_new();
     c.client_ts = scene_loopback_client_end(c.lb);
     c.server_ts = scene_loopback_server_end(c.lb);
@@ -895,13 +939,28 @@ int main(int argc, char **argv)
                     } else if (ie.type == EV_REL) {
                         if (ie.code == REL_X) cx += ie.value;
                         else if (ie.code == REL_Y) cy += ie.value;
+                        else if (ie.code == REL_WHEEL && ie.value != 0) {
+                            int ticks = ie.value;
+                            if (ticks < -5) ticks = -5;
+                            if (ticks >  5) ticks =  5;
+                            while (ticks != 0) {
+                                uint8_t wbtn = (ticks > 0)
+                                    ? SCENE_BTN_WHEEL_UP
+                                    : SCENE_BTN_WHEEL_DOWN;
+                                btns |= wbtn;
+                                pointer_event(&c, &cx, &cy, &btns);
+                                btns &= ~wbtn;
+                                ticks += (ticks > 0) ? -1 : 1;
+                            }
+                        }
                         if (cx < 0) cx = 0;
                         if (cy < 0) cy = 0;
                         if (cx >= (int32_t)mode.hdisplay)
                             cx = (int32_t)mode.hdisplay - 1;
                         if (cy >= (int32_t)mode.vdisplay)
                             cy = (int32_t)mode.vdisplay - 1;
-                        pointer_event(&c, &cx, &cy, &btns);
+                        if (ie.code != REL_WHEEL)
+                            pointer_event(&c, &cx, &cy, &btns);
                     } else if (ie.type == EV_ABS) {
                         int32_t mx = mode.hdisplay - 1, my = mode.vdisplay - 1;
                         if (ie.code == ABS_X)

@@ -126,6 +126,7 @@ struct scene_shell {
 
     /* launcher state */
     uint8_t              menu_open;
+    uint32_t             menu_sel;        /* highlighted launcher item (scroll) */
     uint32_t             last_clock_min;  /* for clock update debounce */
     scene_shell_launch_fn launch_fn;     /* host app factory hook      */
     void                 *launch_ud;
@@ -1466,11 +1467,55 @@ static void menu_set_visible(scene_shell *sh, int open)
     uint32_t i;
     uint8_t flags = open ? (SCENE_FLAG_VISIBLE | SCENE_FLAG_FOCUSABLE) : 0;
     sh->menu_open = open ? 1 : 0;
+    if (open) sh->menu_sel = 0;
     emit_flags(sh, ID_MENU, flags);
     for (i = 0; i < sh->cfg.launcher_app_count; i++)
         emit_flags(sh, ID_MENU_BASE + i, flags);
     emit_flags(sh, ID_RESTART_ITEM, flags);
     emit_flags(sh, ID_POWEROFF_ITEM, flags);
+    if (open && sh->hover_style != 0) {
+        scene_node_id first = (sh->cfg.launcher_app_count > 0)
+            ? ID_MENU_BASE : ID_RESTART_ITEM;
+        scene_client_set_style(sh->client, first, sh->hover_style);
+    }
+}
+
+/* Total number of selectable menu items (launcher + restart + poweroff). */
+static uint32_t menu_item_count(scene_shell *sh)
+{
+    uint32_t n = sh->cfg.launcher_app_count;
+    n += 2;  /* restart + poweroff */
+    return n;
+}
+
+/* Return the node id for a menu item index. */
+static scene_node_id menu_item_id(scene_shell *sh, uint32_t idx)
+{
+    if (idx < sh->cfg.launcher_app_count)
+        return ID_MENU_BASE + idx;
+    if (idx == sh->cfg.launcher_app_count)
+        return ID_RESTART_ITEM;
+    return ID_POWEROFF_ITEM;
+}
+
+/* Move the menu scroll selection by dir (-1/+1), highlight the new item. */
+static void menu_sel_move(scene_shell *sh, int dir)
+{
+    uint32_t count = menu_item_count(sh);
+    int32_t s;
+    if (count == 0) return;
+    /* Un-highlight old */
+    if (sh->hover_style != 0)
+        scene_client_set_style(sh->client, menu_item_id(sh, sh->menu_sel),
+                               base_style_for(menu_item_id(sh, sh->menu_sel)));
+    s = (int32_t)sh->menu_sel + dir;
+    if (s < 0) s = 0;
+    if (s >= (int32_t)count) s = (int32_t)count - 1;
+    sh->menu_sel = (uint32_t)s;
+    /* Highlight new */
+    if (sh->hover_style != 0)
+        scene_client_set_style(sh->client, menu_item_id(sh, sh->menu_sel),
+                               sh->hover_style);
 }
 
 int scene_shell_handle_activate(scene_shell *sh, scene_node_id activated_id)
@@ -2027,6 +2072,40 @@ scene_node_id scene_shell_handle_pointer(scene_shell *sh, int32_t x, int32_t y,
         }
     }
 
+    /* Scroll wheel: route to the active overlay, menu, or taskbar.
+     * Wheel bits are transient — they appear for one frame only. */
+    if (buttons & (SCENE_BTN_WHEEL_UP | SCENE_BTN_WHEEL_DOWN)) {
+        int dir = (buttons & SCENE_BTN_WHEEL_UP) ? -1 : 1;
+        if (sh->ovl_open) {
+            ovl_sel_move(sh, dir);
+            return hit;
+        }
+        if (sh->menu_open) {
+            menu_sel_move(sh, dir);
+            return hit;
+        }
+        /* Taskbar: cycle focus through task buttons */
+        if (sh->task_count > 0) {
+            scene_node_id focused = scene_store_focus(sh->store);
+            int idx = -1;
+            uint32_t i;
+            for (i = 0; i < sh->task_count; i++) {
+                if (sh->tasks[i].window_id == focused) {
+                    idx = (int)i;
+                    break;
+                }
+            }
+            if (dir < 0) {
+                idx = (idx <= 0) ? (int)sh->task_count - 1 : idx - 1;
+            } else {
+                idx = (idx < 0 || idx + 1 >= (int)sh->task_count)
+                    ? 0 : idx + 1;
+            }
+            scene_client_focus(sh->client, sh->tasks[idx].window_id);
+        }
+        return hit;
+    }
+
     return hit;
 }
 
@@ -2101,6 +2180,7 @@ int scene_shell_load_config(scene_shell *sh, const char *path)
         }
         sh->built = 0;
         sh->menu_open = 0;
+        sh->menu_sel = 0;
         sh->hovered_id = 0;
         sh->active_task_id = 0;
         sh->moving_titlebar = 0;
@@ -2176,6 +2256,7 @@ int scene_shell_apply_config(scene_shell *sh, const scene_shell_config *cfg)
         }
         sh->built = 0;
         sh->menu_open = 0;
+        sh->menu_sel = 0;
         sh->hovered_id = 0;
         sh->active_task_id = 0;
         sh->moving_titlebar = 0;

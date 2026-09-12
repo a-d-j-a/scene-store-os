@@ -312,7 +312,8 @@ static void redraw(void)
 /* ---- input --------------------------------------------------------------- */
 
 /* Printable scancodes: letters (evdev KEY_* values, SHIFT -> uppercase),
- * digits (spread 2..11), space, period. Anything else maps to '\0'.    */
+ * digits (spread 2..11 with shift symbols), punctuation, space, tab.
+ * Anything else maps to '\0'.                                        */
 static const struct { uint32_t code; char lo; } letter_map[] = {
     {30,'a'},{48,'b'},{46,'c'},{32,'d'},{18,'e'},{33,'f'},{34,'g'},{35,'h'},
     {23,'i'},{36,'j'},{37,'k'},{38,'l'},{50,'m'},{49,'n'},{24,'o'},{25,'p'},
@@ -320,20 +321,42 @@ static const struct { uint32_t code; char lo; } letter_map[] = {
     {21,'y'},{44,'z'}
 };
 
+static const struct { uint32_t code; char lo; char hi; } punct_map[] = {
+    {12, '-', '_'}, {13, '=', '+'},
+    {26, '[', '{'}, {27, ']', '}'},
+    {39, ';', ':'}, {40, '\'', '"'},
+    {41, '`', '~'}, {43, '\\', '|'},
+    {51, ',', '<'}, {52, '.', '?'}, {53, '/', '>'},
+};
+
+static const struct { uint32_t code; char ch; } shift_digit[] = {
+    {2, '!'}, {3, '@'}, {4, '#'}, {5, '$'}, {6, '%'},
+    {7, '^'}, {8, '&'}, {9, '*'}, {10, '('}, {11, ')'},
+};
+
 static char printable_from(uint32_t code, uint8_t mods)
 {
     size_t li;
+    int shift = (mods & SCENE_MOD_SHIFT) != 0;
 
     for (li = 0; li < sizeof(letter_map) / sizeof(letter_map[0]); li++) {
         if (code == letter_map[li].code) {
             char c = letter_map[li].lo;
-            if (mods & SCENE_MOD_SHIFT) c = (char)(c - 'a' + 'A');
+            if (shift) c = (char)(c - 'a' + 'A');
             return c;
         }
     }
-    if (code >= 2 && code <= 11) return (char)('1' + (int)(code - 2));
+    if (shift) {
+        for (li = 0; li < sizeof(shift_digit) / sizeof(shift_digit[0]); li++) {
+            if (code == shift_digit[li].code) return shift_digit[li].ch;
+        }
+    } else {
+        if (code >= 2 && code <= 11) return (char)('1' + (int)(code - 2));
+    }
+    for (li = 0; li < sizeof(punct_map) / sizeof(punct_map[0]); li++) {
+        if (code == punct_map[li].code) return shift ? punct_map[li].hi : punct_map[li].lo;
+    }
     if (code == 57) return ' ';
-    if (code == 52) return '.';
     return '\0';
 }
 
@@ -360,8 +383,25 @@ static void on_key(void *ud, uint64_t seq, uint32_t key_code,
             if (cursor_up()) redraw();
         } else if (key_code == SCENE_KEY_DOWN) {
             if (cursor_down()) redraw();
+        } else if (key_code == 15) {         /* Tab -> 4 spaces */
+            int t;
+            for (t = 0; t < 4; t++) edit_insert(' ');
+            set_status("changed"); redraw();
+        } else if (key_code == 102) {        /* Home: start of line */
+            if (g_cursor_col != 0) { g_cursor_col = 0; redraw(); }
+        } else if (key_code == 107) {        /* End: end of line */
+            int len = line_len(g_cursor_row);
+            if (g_cursor_col != len) { g_cursor_col = len; redraw(); }
+        } else if (key_code == 104) {        /* PageUp: up 12 lines */
+            int n;
+            for (n = 0; n < EDIT_VIEW_ROWS; n++) cursor_up();
+            redraw();
+        } else if (key_code == 109) {        /* PageDown: down 12 lines */
+            int n;
+            for (n = 0; n < EDIT_VIEW_ROWS; n++) cursor_down();
+            redraw();
         } else if (!(modifiers & (SCENE_MOD_CTRL | SCENE_MOD_ALT |
-                                  SCENE_MOD_SUPER))) {
+                                   SCENE_MOD_SUPER))) {
             c = printable_from(key_code, modifiers);
             if (c) { edit_insert(c); set_status("changed"); redraw(); }
         }

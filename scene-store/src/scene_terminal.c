@@ -353,7 +353,7 @@ void scene_terminal_input_key(scene_terminal *term, uint32_t key_code,
     else if (key_code == 108) { seq[0]=27; seq[1]='['; seq[2]='B'; len=3; }
     else if (key_code == 106) { seq[0]=27; seq[1]='['; seq[2]='C'; len=3; }
     else if (key_code == 105) { seq[0]=27; seq[1]='['; seq[2]='D'; len=3; }
-    else if (key_code == 107) { seq[0]=27; seq[1]='['; seq[2]='3'; seq[3]='~'; len=4; }
+    else if (key_code == 107) { seq[0]=27; seq[1]='['; seq[2]='F'; len=3; }
     else if (key_code == 199) { seq[0]=27; seq[1]='['; seq[2]='H'; len=3; }
     else if (key_code == 207) { seq[0]=27; seq[1]='['; seq[2]='F'; len=3; }
     else {
@@ -539,6 +539,35 @@ int32_t scene_terminal_view_top(const scene_terminal *term)
     if (top + term->cfg.rows > term->line_count)
         top = term->line_count - term->cfg.rows;
     return top < 0 ? 0 : top;
+}
+
+void scene_terminal_scroll_up(scene_terminal *t, int32_t rows)
+{
+    if (!t) return;
+    t->view_top -= rows;
+    if (t->view_top < 0) t->view_top = 0;
+}
+
+void scene_terminal_scroll_down(scene_terminal *t, int32_t rows)
+{
+    if (!t) return;
+    t->view_top += rows;
+    int32_t max_top = t->line_count - t->cfg.rows;
+    if (max_top < 0) max_top = 0;
+    if (t->view_top > max_top) t->view_top = max_top;
+}
+
+void scene_terminal_scroll_to_top(scene_terminal *t)
+{
+    if (!t) return;
+    t->view_top = 0;
+}
+
+void scene_terminal_scroll_to_bottom(scene_terminal *t)
+{
+    if (!t) return;
+    int32_t max_top = t->line_count - t->cfg.rows;
+    t->view_top = max_top < 0 ? 0 : max_top;
 }
 
 char *scene_terminal_line(const scene_terminal *term, int32_t row)

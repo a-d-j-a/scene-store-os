@@ -12,8 +12,8 @@
  *
  * Flow control: every input event is acked (the gate reopens).
  * The render loop runs on the app's own tick; text slot count is
- * capped at 16 by the compositor (SCENE_COMPOSITOR_TEXT_CAP), so the
- * terminal shows 16 rows of 80 columns.
+ * capped at 48 by the compositor (SCENE_COMPOSITOR_TEXT_CAP), so the
+ * terminal shows 40 rows of 80 columns.
  */
 #define _POSIX_C_SOURCE 200809L
 #include "scene_app.h"
@@ -71,6 +71,42 @@ static void on_key(void *ud, uint64_t seq, uint32_t key_code,
                    uint8_t state, uint8_t modifiers)
 {
     (void)ud;
+    if (state == 0) { scene_app_ack(g_app, seq); return; }
+
+    /* PageUp/PageDown scroll the local scrollback. */
+    if (key_code == 104) {
+        scene_terminal_scroll_up(g_term, ROWS);
+        render_screen();
+        scene_app_ack(g_app, seq);
+        return;
+    }
+    if (key_code == 109) {
+        scene_terminal_scroll_down(g_term, ROWS);
+        render_screen();
+        scene_app_ack(g_app, seq);
+        return;
+    }
+
+    /* Home/End: Ctrl modifier scrolls to top/bottom, else sends to PTY. */
+    if (key_code == 102) {
+        if (modifiers & 0x02)
+            scene_terminal_scroll_to_top(g_term);
+        else
+            scene_terminal_input_key(g_term, key_code, state, modifiers);
+        render_screen();
+        scene_app_ack(g_app, seq);
+        return;
+    }
+    if (key_code == 107) {
+        if (modifiers & 0x02)
+            scene_terminal_scroll_to_bottom(g_term);
+        else
+            scene_terminal_input_key(g_term, key_code, state, modifiers);
+        render_screen();
+        scene_app_ack(g_app, seq);
+        return;
+    }
+
     scene_terminal_input_key(g_term, key_code, state, modifiers);
     scene_app_ack(g_app, seq);
 }

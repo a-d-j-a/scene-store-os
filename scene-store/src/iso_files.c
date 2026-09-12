@@ -31,6 +31,12 @@
  * callback; that re-enters scene_client_pump and recurses forever,
  * seen 0xC00000FD).
  *
+ * Keyboard navigation: Up/Down move selection by 1; PageUp/PageDown
+ * by FL_ROWS; Home/End jump to first/last entry; Enter opens the
+ * selected entry (directory → navigate, file → open-with); Delete
+ * removes the selected entry; F2 renames; F7 creates a new directory;
+ * Escape cancels any in-progress rename/mkdir.
+ *
  * Deterministic: no timers, no wall clock; purely event-driven. The
  * input callbacks only ack and record a pending action; the re-list
  * (SetText on rows/status/title + present + flush) runs in the main
@@ -83,7 +89,13 @@ static void msleep(unsigned m)
 #define N_ROW0   40u
 
 /* Pending actions (input callbacks only set these; main loop acts). */
-enum { ACT_NONE = 0, ACT_UP, ACT_ROW, ACT_DEL, ACT_CLOSE };
+enum { ACT_NONE = 0, ACT_UP, ACT_ROW, ACT_DEL, ACT_CLOSE,
+       ACT_KB_UP, ACT_KB_DOWN, ACT_KB_PGUP, ACT_KB_PGDN,
+       ACT_KB_HOME, ACT_KB_END, ACT_KB_ENTER, ACT_KB_F2,
+       ACT_KB_F7, ACT_KB_ESC };
+
+/* Input modes (rename / mkdir text entry). */
+enum { MODE_NORMAL = 0, MODE_RENAME, MODE_MKDIR };
 
 static scene_app     *g_app;
 static FILE          *g_log;
@@ -101,6 +113,11 @@ static int  g_act = ACT_NONE;
 static int  g_act_row;
 static int  g_sel_row = -1;   /* selected entry (-1 = none) */
 static char g_status[160];
+
+static int32_t g_scroll = 0;  /* topmost visible row index */
+static int     g_mode = MODE_NORMAL;
+static char    g_input_buf[256];
+static int     g_input_len = 0;
 
 static void dlog(const char *fmt, ...)
 {
@@ -145,6 +162,49 @@ static int fs_remove_dir(const char *path)
 #else
     return rmdir(path);
 #endif
+}
+
+/* Create a directory (mkdir with 0755; _mkdir on Windows). */
+static int fs_make_dir(const char *path)
+{
+#if defined(_WIN32)
+    return _mkdir(path);
+#else
+    return mkdir(path, 0755);
+#endif
+}
+
+/* ---- scancode to printable char (evdev keycodes, Linux input-event-codes) */
+
+static int key_to_char(uint32_t sc, uint8_t mods)
+{
+    int shift = (mods & 0x03) ? 1 : 0;
+    /* a-z: KEY_A=30 .. KEY_Z=44 */
+    if (sc >= 30 && sc <= 44) {
+        char c = (char)('a' + (sc - 30));
+        return shift ? (c - 32) : c;
+    }
+    /* 1-9: KEY_1=2 .. KEY_9=10 */
+    if (sc >= 2 && sc <= 10) {
+        static const char nu[] = "123456789";
+        static const char sh[] = "!@#$%^&*(";
+        return shift ? sh[sc - 2] : nu[sc - 2];
+    }
+    /* 0: KEY_0=11 */
+    if (sc == 11) return shift ? ')' : '0';
+    if (sc == 12) return shift ? '_' : '-';  /* KEY_MINUS */
+    if (sc == 13) return shift ? '+' : '=';  /* KEY_EQUAL */
+    if (sc == 26) return shift ? '{' : '[';  /* KEY_LEFTBRACE */
+    if (sc == 27) return shift ? '}' : ']';  /* KEY_RIGHTBRACE */
+    if (sc == 39) return shift ? ':' : ';';  /* KEY_SEMICOLON */
+    if (sc == 40) return shift ? '"' : '\''; /* KEY_APOSTROPHE */
+    if (sc == 41) return shift ? '~' : '`';  /* KEY_GRAVE */
+    if (sc == 43) return shift ? '|' : '\\'; /* KEY_BACKSLASH */
+    if (sc == 51) return shift ? '<' : ',';  /* KEY_COMMA */
+    if (sc == 52) return shift ? '>' : '.';  /* KEY_DOT */
+    if (sc == 53) return shift ? '?' : '/';  /* KEY_SLASH */
+    if (sc == 57) return ' ';                 /* KEY_SPACE */
+    return -1;
 }
 
 /* ---- open-with (spawn the associated guest app for a file) -------------- *
@@ -343,18 +403,44 @@ static int list_dir(const char *path)
     return 0;
 }
 
+/* ---- scrolling ---------------------------------------------------------- */
+
+static void clamp_scroll(void)
+{
+    if (g_scroll < 0) g_scroll = 0;
+    if (g_count <= (int)FL_ROWS) g_scroll = 0;
+    else if (g_scroll > g_count - (int)FL_ROWS)
+        g_scroll = g_count - (int)FL_ROWS;
+}
+
+static void scroll_to_sel(void)
+{
+    if (g_sel_row < 0) { clamp_scroll(); return; }
+    if (g_sel_row < g_scroll)
+        g_scroll = g_sel_row;
+    else if (g_sel_row >= g_scroll + (int)FL_ROWS)
+        g_scroll = g_sel_row - (int)FL_ROWS + 1;
+    clamp_scroll();
+}
+
 /* ---- rendering (main-loop only, never inside input callbacks) ---------- */
 
 static void render_rows(void)
 {
     uint32_t i;
     for (i = 0; i < FL_ROWS; i++) {
+        int idx = g_scroll + (int)i;
         char buf[300];
-        if ((int)i < g_count) {
-            if (g_entries[i].is_dir)
-                snprintf(buf, sizeof(buf), "D %.44s", g_entries[i].name);
+        if (idx >= 0 && idx < g_count) {
+            int is_sel = (idx == g_sel_row);
+            if (g_entries[idx].is_dir)
+                snprintf(buf, sizeof(buf), "%s%.44s",
+                         is_sel ? "> " : "D ",
+                         g_entries[idx].name);
             else
-                snprintf(buf, sizeof(buf), "F %.44s", g_entries[i].name);
+                snprintf(buf, sizeof(buf), "%s%.44s",
+                         is_sel ? "> " : "F ",
+                         g_entries[idx].name);
         } else {
             buf[0] = '\0';
         }
@@ -377,8 +463,26 @@ static void push_status(void)
     scene_app_set_text(g_app, g_base + N_STATUS, 0, g_status);
 }
 
+/* Refresh display: scroll, render, status, present, flush. */
+static void sel_display(void)
+{
+    scroll_to_sel();
+    render_rows();
+    if (g_sel_row >= 0 && g_sel_row < g_count) {
+        char msg[300];
+        snprintf(msg, sizeof(msg), "sel: %.48s",
+                 g_entries[g_sel_row].name);
+        set_status(msg);
+    }
+    push_status();
+    scene_app_present(g_app);
+    scene_app_flush(g_app);
+}
+
 static void finish_relist(void)
 {
+    g_scroll = 0;
+    g_sel_row = -1;
     set_status(base_name(g_stack[g_sp - 1]));
     push_status();
     render_rows();
@@ -391,6 +495,8 @@ static void finish_relist(void)
 /* opendir failed: restore the current dir's listing and report it. */
 static void fail_relist(void)
 {
+    g_scroll = 0;
+    g_sel_row = -1;
     if (list_dir(g_stack[g_sp - 1]) != 0) g_count = 0;
     set_status("bad dir");
     push_status();
@@ -464,6 +570,51 @@ static void on_key(void *ud, uint64_t seq, uint32_t key_code,
 {
     (void)ud;
     dlog("iso-files: key %u state=%u mods=%u\n", key_code, state, modifiers);
+    if (!state) { scene_app_ack(g_app, seq); return; }  /* release only */
+
+    /* Rename / mkdir text-input mode. */
+    if (g_mode == MODE_RENAME || g_mode == MODE_MKDIR) {
+        if (key_code == 28) {                          /* Enter: confirm */
+            g_act = ACT_KB_ENTER;
+        } else if (key_code == 1) {                    /* Escape: cancel */
+            g_act = ACT_KB_ESC;
+        } else if (key_code == 14) {                   /* Backspace */
+            if (g_input_len > 0) {
+                g_input_buf[--g_input_len] = '\0';
+            }
+            snprintf(g_status, sizeof(g_status), "%s: %.128s",
+                     g_mode == MODE_RENAME ? "rename" : "mkdir",
+                     g_input_buf);
+            push_status();
+            scene_app_present(g_app);
+        } else {
+            int ch = key_to_char(key_code, modifiers);
+            if (ch > 0 && g_input_len < (int)sizeof(g_input_buf) - 1) {
+                g_input_buf[g_input_len++] = (char)ch;
+                g_input_buf[g_input_len] = '\0';
+                snprintf(g_status, sizeof(g_status), "%s: %.128s",
+                         g_mode == MODE_RENAME ? "rename" : "mkdir",
+                         g_input_buf);
+                push_status();
+                scene_app_present(g_app);
+            }
+        }
+        scene_app_ack(g_app, seq);
+        return;
+    }
+
+    /* Normal mode: navigation keys. */
+    if (key_code == 103) g_act = ACT_KB_UP;            /* Up arrow */
+    else if (key_code == 108) g_act = ACT_KB_DOWN;     /* Down arrow */
+    else if (key_code == 104) g_act = ACT_KB_PGUP;     /* PageUp */
+    else if (key_code == 109) g_act = ACT_KB_PGDN;     /* PageDown */
+    else if (key_code == 102) g_act = ACT_KB_HOME;     /* Home */
+    else if (key_code == 107) g_act = ACT_KB_END;      /* End */
+    else if (key_code == 28) g_act = ACT_KB_ENTER;     /* Enter */
+    else if (key_code == 111) g_act = ACT_DEL;          /* Delete → reuse ACT_DEL */
+    else if (key_code == 60) g_act = ACT_KB_F2;         /* F2 → rename */
+    else if (key_code == 65) g_act = ACT_KB_F7;         /* F7 → mkdir */
+
     scene_app_ack(g_app, seq);
 }
 
@@ -564,7 +715,7 @@ int main(int argc, char **argv)
             g_act = ACT_NONE;
             act_up();
         } else if (g_act == ACT_ROW) {
-            int idx = g_act_row;
+            int idx = g_scroll + g_act_row;
             g_act = ACT_NONE;
             if (idx >= 0 && idx < g_count) {
                 if (idx != g_sel_row) {
@@ -638,7 +789,166 @@ int main(int argc, char **argv)
                 set_status(msg);
                 push_status();
                 if (list_dir(g_stack[g_sp - 1]) != 0) g_count = 0;
+                g_scroll = 0;
                 render_rows();
+                scene_app_present(g_app);
+                scene_app_flush(g_app);
+            }
+        } else if (g_act == ACT_KB_UP) {
+            g_act = ACT_NONE;
+            if (g_sel_row < 0) g_sel_row = 0;
+            else if (g_sel_row > 0) g_sel_row--;
+            sel_display();
+        } else if (g_act == ACT_KB_DOWN) {
+            g_act = ACT_NONE;
+            if (g_sel_row < 0) g_sel_row = 0;
+            else if (g_count > 0 && g_sel_row < g_count - 1) g_sel_row++;
+            sel_display();
+        } else if (g_act == ACT_KB_PGUP) {
+            g_act = ACT_NONE;
+            g_sel_row -= (int)FL_ROWS;
+            if (g_sel_row < 0) g_sel_row = 0;
+            sel_display();
+        } else if (g_act == ACT_KB_PGDN) {
+            g_act = ACT_NONE;
+            g_sel_row += (int)FL_ROWS;
+            if (g_count > 0 && g_sel_row >= g_count)
+                g_sel_row = g_count - 1;
+            if (g_sel_row < 0) g_sel_row = 0;
+            sel_display();
+        } else if (g_act == ACT_KB_HOME) {
+            g_act = ACT_NONE;
+            g_sel_row = g_count > 0 ? 0 : -1;
+            sel_display();
+        } else if (g_act == ACT_KB_END) {
+            g_act = ACT_NONE;
+            g_sel_row = g_count > 0 ? g_count - 1 : -1;
+            sel_display();
+        } else if (g_act == ACT_KB_ENTER) {
+            g_act = ACT_NONE;
+            if (g_mode == MODE_RENAME) {
+                if (g_input_len > 0 && g_sel_row >= 0
+                    && g_sel_row < g_count) {
+                    char oldpath[600], newpath[600];
+                    char msg[300];
+                    path_join(g_stack[g_sp - 1], g_entries[g_sel_row].name,
+                              oldpath, sizeof(oldpath));
+                    path_join(g_stack[g_sp - 1], g_input_buf,
+                              newpath, sizeof(newpath));
+                    int rc = rename(oldpath, newpath);
+                    dlog("iso-files: rename %s -> %s rc=%d\n",
+                         oldpath, newpath, rc);
+                    snprintf(msg, sizeof(msg), rc == 0
+                             ? "renamed: %.44s" : "rename failed: %.44s",
+                             g_input_buf);
+                    set_status(msg);
+                    g_mode = MODE_NORMAL;
+                    g_input_buf[0] = '\0';
+                    g_input_len = 0;
+                    if (list_dir(g_stack[g_sp - 1]) != 0) g_count = 0;
+                    g_scroll = 0;
+                    render_rows();
+                    push_status();
+                    scene_app_present(g_app);
+                    scene_app_flush(g_app);
+                }
+            } else if (g_mode == MODE_MKDIR) {
+                if (g_input_len > 0) {
+                    char full[600];
+                    char msg[300];
+                    path_join(g_stack[g_sp - 1], g_input_buf,
+                              full, sizeof(full));
+                    int rc = fs_make_dir(full);
+                    dlog("iso-files: mkdir %s rc=%d\n", full, rc);
+                    snprintf(msg, sizeof(msg), rc == 0
+                             ? "created: %.44s" : "mkdir failed: %.44s",
+                             g_input_buf);
+                    set_status(msg);
+                    g_mode = MODE_NORMAL;
+                    g_input_buf[0] = '\0';
+                    g_input_len = 0;
+                    if (list_dir(g_stack[g_sp - 1]) != 0) g_count = 0;
+                    g_scroll = 0;
+                    render_rows();
+                    push_status();
+                    scene_app_present(g_app);
+                    scene_app_flush(g_app);
+                }
+            } else {
+                /* Normal mode: open/navigate the selected entry. */
+                int idx = g_sel_row;
+                if (idx >= 0 && idx < g_count) {
+                    if (g_entries[idx].is_dir) {
+                        char full[600];
+                        path_join(g_stack[g_sp - 1], g_entries[idx].name,
+                                  full, sizeof(full));
+                        dlog("iso-files: kb cd %s\n", full);
+                        g_sel_row = -1;
+                        nav_to(full);
+                    } else {
+                        char full[600];
+                        const char *opener;
+                        char msg[300];
+                        path_join(g_stack[g_sp - 1], g_entries[idx].name,
+                                  full, sizeof(full));
+                        g_sel_row = -1;
+                        opener = open_app_for(g_entries[idx].name);
+                        if (opener) {
+                            if (spawn_opener(opener, full) == 0) {
+                                dlog("iso-files: open %s via %s\n",
+                                     full, opener);
+                                snprintf(msg, sizeof(msg),
+                                         "open: %.44s",
+                                         g_entries[idx].name);
+                            } else {
+                                dlog("iso-files: spawn '%s' failed\n",
+                                     opener);
+                                snprintf(msg, sizeof(msg),
+                                         "no opener: %.44s",
+                                         g_entries[idx].name);
+                            }
+                        } else {
+                            snprintf(msg, sizeof(msg), "file: %.44s",
+                                     g_entries[idx].name);
+                        }
+                        dlog("iso-files: status=%s\n", msg);
+                        set_status(msg);
+                        push_status();
+                        scene_app_present(g_app);
+                        scene_app_flush(g_app);
+                    }
+                }
+            }
+        } else if (g_act == ACT_KB_F2) {
+            g_act = ACT_NONE;
+            if (g_sel_row >= 0 && g_sel_row < g_count) {
+                g_mode = MODE_RENAME;
+                snprintf(g_input_buf, sizeof(g_input_buf), "%.255s",
+                         g_entries[g_sel_row].name);
+                g_input_len = (int)strlen(g_input_buf);
+                snprintf(g_status, sizeof(g_status), "rename: %.128s",
+                         g_input_buf);
+                push_status();
+                scene_app_present(g_app);
+                scene_app_flush(g_app);
+            }
+        } else if (g_act == ACT_KB_F7) {
+            g_act = ACT_NONE;
+            g_mode = MODE_MKDIR;
+            g_input_buf[0] = '\0';
+            g_input_len = 0;
+            snprintf(g_status, sizeof(g_status), "mkdir: ");
+            push_status();
+            scene_app_present(g_app);
+            scene_app_flush(g_app);
+        } else if (g_act == ACT_KB_ESC) {
+            g_act = ACT_NONE;
+            if (g_mode != MODE_NORMAL) {
+                g_mode = MODE_NORMAL;
+                g_input_buf[0] = '\0';
+                g_input_len = 0;
+                set_status(base_name(g_stack[g_sp - 1]));
+                push_status();
                 scene_app_present(g_app);
                 scene_app_flush(g_app);
             }

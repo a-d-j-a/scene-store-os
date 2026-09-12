@@ -240,6 +240,45 @@ build_kernel() {
     scripts/config --enable USB_NET_AX8817X  # USB ethernet (ASIX)
     scripts/config --enable USB_NET_RTL8152  # USB ethernet (Realtek)
 
+    # Wireless: cfg80211 + mac80211 stack + common laptop WiFi chipsets.
+    # Built-in (=y) for the core stack; drivers as modules (=m) since
+    # not every laptop has the same chipset — module loading picks the
+    # right one at boot.
+    scripts/config --enable WIRELESS
+    scripts/config --enable NET
+    scripts/config --enable CFG80211
+    scripts/config --module CFG80211
+    scripts/config --enable CFG80211_WEXT
+    scripts/config --enable WIRELESS_EXT
+    scripts/config --enable WEXT_PROC
+    scripts/config --enable MAC80211
+    scripts/config --module MAC80211
+    scripts/config --enable MAC80211_MESH
+    scripts/config --enable RFKILL
+    scripts/config --enable RFKILL_INPUT
+    scripts/config --enable NL80211_TESTMODE
+    # Intel WiFi (most common in modern laptops)
+    scripts/config --module IWLWIFI
+    scripts/config --module IWLDVM
+    scripts/config --module IWLMVM
+    # Atheros (very common in older laptops)
+    scripts/config --module ATH9K
+    scripts/config --module ATH9K_COMMON
+    scripts/config --module ATH9K_HTC
+    scripts/config --module ATH10K
+    scripts/config --module ATH10K_PCI
+    # Realtek
+    scripts/config --module RTL8180
+    scripts/config --module RTL8192CE
+    scripts/config --module RTL8192SE
+    scripts/config --module RTL8XXXU
+    # Broadcom
+    scripts/config --module BRCMFMAC
+    scripts/config --module BRCMSMAC
+    # Ralink/MediaTek
+    scripts/config --module RT2X00
+    scripts/config --module RT2800USB
+
     scripts/config --disable SECURITY
     scripts/config --disable DEBUG_INFO
 
@@ -429,7 +468,7 @@ build_scene_store() {
         build/iso_photo build/iso_files build/iso_edit build/iso_play \
         build/iso_install \
         CC="$MUSL_GCC" \
-        CFLAGS="-std=c11 -Wall -Wextra -O2 -Iinclude" \
+        CFLAGS="-std=c11 -Wall -Wextra -O2 -Iinclude -Ithird_party/stb" \
         FFMPEG_DIR="$BUILDDIR/ffmpeg/out" || die "iso_drm build failed"
     mkdir -p "$SYSROOT/usr/bin"
     cp build/iso_drm "$SYSROOT/usr/bin/iso-drm"
@@ -441,6 +480,11 @@ build_scene_store() {
     cp build/iso_edit "$SYSROOT/usr/bin/iso-edit"
     cp build/iso_play "$SYSROOT/usr/bin/iso-play"
     cp build/iso_install "$SYSROOT/usr/bin/iso-install"
+    # TrueType font for Unicode text rendering
+    mkdir -p "$SYSROOT/usr/share/fonts"
+    cp fonts/DejaVuSansMono.ttf "$SYSROOT/usr/share/fonts/" 2>/dev/null || \
+        cp "$SSRC/fonts/DejaVuSansMono.ttf" "$SYSROOT/usr/share/fonts/" 2>/dev/null || \
+        warn "No TTF font found — Unicode will use box glyphs"
     cd -
     msg "scene-store done."
 }

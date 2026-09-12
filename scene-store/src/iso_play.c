@@ -87,6 +87,8 @@ static uint32_t  g_rate;         /* 8000..48000 */
 static uint32_t  g_pos;          /* consumed frames */
 static int        g_state;       /* ST_* */
 static int        g_status_dirty;
+static int        g_paused;
+static char       g_status_buf[32];
 
 static void dlog(const char *fmt, ...)
 {
@@ -477,6 +479,12 @@ static void volume_poll(void)
     }
 }
 
+static void volume_write(int v)
+{
+    FILE *f = fopen(volume_path(), "w");
+    if (f) { fprintf(f, "%d", v); fclose(f); }
+}
+
 /* ---- ALSA raw PCM (POSIX only) — see alsa_uapi.h for the UAPI notes ---- */
 
 #if !defined(_WIN32)
@@ -759,11 +767,25 @@ static void set_state(int st)
     dlog("iso-play: status=%s\n", state_text(st));
 }
 
+static void format_status(void)
+{
+    uint32_t sec, min;
+    if (g_state == ST_DONE) { strcpy(g_status_buf, "done"); return; }
+    if (g_state == ST_NO_DEVICE) { strcpy(g_status_buf, "no audio device"); return; }
+    if (g_state == ST_BAD_FILE) { strcpy(g_status_buf, "bad file"); return; }
+    sec = g_pos / g_rate;
+    min = sec / 60;
+    sec %= 60;
+    snprintf(g_status_buf, sizeof(g_status_buf), "%s %u:%02u",
+             g_paused ? "||" : ">", (unsigned)min, (unsigned)sec);
+}
+
 static void push_status(void)
 {
     if (!g_status_dirty) return;
     g_status_dirty = 0;
-    scene_app_set_text(g_app, STATUS_NODE, 0, state_text(g_state));
+    format_status();
+    scene_app_set_text(g_app, STATUS_NODE, 0, g_status_buf);
     scene_app_present(g_app);
     scene_app_flush(g_app);
 }
@@ -803,7 +825,62 @@ static void on_key(void *ud, uint64_t seq, uint32_t key_code,
                    uint8_t state, uint8_t modifiers)
 {
     (void)ud;
+    (void)modifiers;
     dlog("iso-play: key %u state=%u mods=%u\n", key_code, state, modifiers);
+    if (state == 0) { scene_app_ack(g_app, seq); return; }
+
+    switch (key_code) {
+    case 57:    /* Space: pause / resume */
+        if (g_state == ST_PLAY || g_paused) {
+            g_paused = !g_paused;
+            g_status_dirty = 1;
+            dlog("iso-play: %s\n", g_paused ? "paused" : "resumed");
+#if !defined(_WIN32)
+            if (g_paused && g_afd >= 0) {
+                ioctl(g_afd, SNDRV_PCM_IOCTL_DROP);
+                ioctl(g_afd, SNDRV_PCM_IOCTL_PREPARE);
+            }
+#else
+            if (!g_paused && g_state == ST_PLAY) {
+                g_t0 = GetTickCount64()
+                       - (uint64_t)g_pos * 1000u / g_rate;
+            }
+#endif
+        }
+        break;
+    case 105:   /* Left arrow: seek back 5 s */
+    case 106: { /* Right arrow: seek forward 5 s */
+        int32_t delta = (key_code == 106 ? 1 : -1)
+                        * (int32_t)(5u * g_rate);
+        int32_t np = (int32_t)g_pos + delta;
+        if (np < 0) np = 0;
+        if ((uint32_t)np > g_frames) np = (int32_t)g_frames;
+        g_pos = (uint32_t)np;
+        g_status_dirty = 1;
+        dlog("iso-play: seek to frame %u\n", (unsigned)g_pos);
+#if !defined(_WIN32)
+        if (g_afd >= 0) {
+            ioctl(g_afd, SNDRV_PCM_IOCTL_DROP);
+            ioctl(g_afd, SNDRV_PCM_IOCTL_PREPARE);
+        }
+#else
+        if (g_state == ST_PLAY) {
+            g_t0 = GetTickCount64()
+                   - (uint64_t)g_pos * 1000u / g_rate;
+        }
+#endif
+        break;
+    }
+    case 103:   /* Up arrow: volume +10 */
+    case 108: { /* Down arrow: volume -10 */
+        int v = (int)g_volume + (key_code == 103 ? 10 : -10);
+        if (v < 0) v = 0;
+        if (v > 100) v = 100;
+        volume_write(v);
+        dlog("iso-play: volume write %d\n", v);
+        break;
+    }
+    }
     scene_app_ack(g_app, seq);
 }
 
@@ -1114,10 +1191,13 @@ int main(int argc, char **argv)
     push_status();
 
     for (;;) {
+        uint32_t cur_sec;
+        static uint32_t last_sec = UINT32_MAX;
+
         volume_poll();
         scene_app_pump(g_app);
         scene_app_flush(g_app);
-        if (g_state == ST_PLAY) {
+        if (g_state == ST_PLAY && !g_paused) {
             int r;
 #if defined(_WIN32)
             win_drain_step();
@@ -1125,18 +1205,22 @@ int main(int argc, char **argv)
 #else
             r = alsa_write_pass();
 #endif
-            if (r > 0) {                     /* track fully queued/drained */
+            if (r > 0) {
+                g_paused = 0;
                 set_state(ST_DONE);
                 dlog("iso-play: done at frame %u\n", (unsigned)g_pos);
-                push_status();
             } else if (r < 0) {
-                set_state(ST_DONE);          /* stop on errors, stay alive */
+                g_paused = 0;
+                set_state(ST_DONE);
                 dlog("iso-play: playback ended with error\n");
-                push_status();
             }
-        } else if (g_status_dirty) {
-            push_status();
         }
+        cur_sec = g_pos / g_rate;
+        if (cur_sec != last_sec || g_status_dirty) {
+            g_status_dirty = 1;
+            last_sec = cur_sec;
+        }
+        push_status();
         msleep(5);
     }
 }

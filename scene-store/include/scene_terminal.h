@@ -47,6 +47,18 @@ int32_t scene_terminal_line_count(const scene_terminal *term);
 /* Get the absolute index of the first visible line (scroll origin). */
 int32_t scene_terminal_view_top(const scene_terminal *term);
 
+/* Scroll the view up by the given number of rows (clamped to 0). */
+void scene_terminal_scroll_up(scene_terminal *t, int32_t rows);
+
+/* Scroll the view down by the given number of rows (clamped to max). */
+void scene_terminal_scroll_down(scene_terminal *t, int32_t rows);
+
+/* Jump the view to the top of the buffer. */
+void scene_terminal_scroll_to_top(scene_terminal *t);
+
+/* Jump the view to the bottom (latest output). */
+void scene_terminal_scroll_to_bottom(scene_terminal *t);
+
 /* Get a line of text (caller must free). Returns NULL on error. */
 char *scene_terminal_line(const scene_terminal *term, int32_t row);
 

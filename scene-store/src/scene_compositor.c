@@ -159,6 +159,15 @@ struct scene_compositor {
     uint32_t      damage_count;
 
     scene_rect    paint_clip;    /* scratch for the paint walk             */
+
+    /* TrueType font cache (NULL = bitmap-only mode). Loaded lazily on
+     * first use or by scene_compositor_set_fontcache().
+     * fc_glyph_ud / fc_glyph are the callback + userdata for the
+     * scene_font_draw_utf8 bridge — set by iso_drm after creating the
+     * fontcache, so scene_compositor.o has zero link deps on fontcache. */
+    int              fc_line_h;
+    void            *fc_glyph_ud;
+    scene_utf8_lookup_fn fc_glyph;
 };
 
 /* ---- Role default styles (the OS's dark look seed; server-owned) ----- */
@@ -693,11 +702,25 @@ static void paint_node(scene_compositor *cp, const scene_layer *ly,
                                SCENE_COMPOSITOR_TEXT_CAP);
     if (n < 0) n = 0;
     if ((uint32_t)n > SCENE_COMPOSITOR_TEXT_CAP) n = (int)SCENE_COMPOSITOR_TEXT_CAP;
-    for (i = 0; i < n; i++) {
-        if (t[i].len == 0) continue;
-        scene_font_draw_a(&cp->fb, r[0] + st->pad_x,
-                          r[1] + st->pad_y + (int32_t)i * SCENE_FONT_GLYPH_H,
-                          t[i].data, t[i].len, st->text, eff, &c);
+    if (cp->fc_glyph) {
+        /* TrueType path: variable-width glyphs, proper line height */
+        int line_h = cp->fc_line_h;
+        int32_t tx = r[0] + st->pad_x;
+        int32_t ty = r[1] + st->pad_y;
+        for (i = 0; i < n; i++) {
+            if (t[i].len == 0) continue;
+            scene_font_draw_utf8(&cp->fb, tx, ty + (int32_t)i * line_h,
+                                 t[i].data, t[i].len, st->text, eff,
+                                 cp->fc_glyph, cp->fc_glyph_ud, &c);
+        }
+    } else {
+        /* Bitmap path: fixed 8px grid */
+        for (i = 0; i < n; i++) {
+            if (t[i].len == 0) continue;
+            scene_font_draw_a(&cp->fb, r[0] + st->pad_x,
+                              r[1] + st->pad_y + (int32_t)i * SCENE_FONT_GLYPH_H,
+                              t[i].data, t[i].len, st->text, eff, &c);
+        }
     }
 }
 
@@ -1885,4 +1908,34 @@ scene_style_ref scene_compositor_setup_active_style(scene_compositor *cp,
     as.radius = 0;
     if (scene_compositor_set_style(cp, 2, &as) != 0) return 0;
     return 2;
+}
+
+/* ---- TrueType font cache integration ---------------------------------- */
+
+void scene_compositor_set_fontcache(scene_compositor *cp,
+                                    scene_fontcache *fc)
+{
+    (void)cp; (void)fc;
+}
+
+void scene_compositor_set_fontcache_with_metrics(scene_compositor *cp,
+                                                 scene_fontcache *fc,
+                                                 int line_h)
+{
+    (void)fc;
+    if (cp) cp->fc_line_h = line_h;
+}
+
+void scene_compositor_set_font_lookup(scene_compositor *cp,
+                                      scene_utf8_lookup_fn fn, void *ud)
+{
+    if (!cp) return;
+    cp->fc_glyph = fn;
+    cp->fc_glyph_ud = ud;
+}
+
+scene_fontcache *scene_compositor_get_fontcache(const scene_compositor *cp)
+{
+    (void)cp;
+    return NULL;
 }

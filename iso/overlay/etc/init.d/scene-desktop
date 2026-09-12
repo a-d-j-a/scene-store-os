@@ -38,10 +38,10 @@ if [ -x /usr/bin/iso-drm ]; then
 fi
 
 # wlroots compositor (alternative backend, if built)
-if [ -x /usr/bin/iso-compositor ]; then
+if [ -x /usr/bin/iso-wl ]; then
     echo "Starting wlroots compositor..."
-    exec su -c '/usr/bin/iso-compositor' user 2>/dev/null || \
-        exec /usr/bin/iso-compositor
+    exec su -c '/usr/bin/iso-wl' user 2>/dev/null || \
+        exec /usr/bin/iso-wl
 fi
 
 echo "No compositor found. Dropping to shell."

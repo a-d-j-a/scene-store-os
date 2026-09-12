@@ -16,7 +16,7 @@ else
   WINLIB =
 endif
 
-all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE) build/iso_demo$(EXE) build/test_video_app$(EXE) build/iso_video$(EXE) build/test_app_wm$(EXE) build/test_hostwm$(EXE) build/test_shellwm$(EXE) build/iso_play$(EXE) build/iso_install$(EXE) build/test_play_app$(EXE) build/iso_files$(EXE) build/test_files_app$(EXE) build/iso_photo$(EXE) build/test_photo_app$(EXE) build/test_searchoverlay$(EXE) build/iso_edit$(EXE) build/test_edit_app$(EXE) build/test_codec$(EXE) build/test_wlshim$(EXE)
+all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE) build/iso_demo$(EXE) build/test_video_app$(EXE) build/iso_video$(EXE) build/test_app_wm$(EXE) build/test_hostwm$(EXE) build/test_shellwm$(EXE) build/iso_play$(EXE) build/iso_install$(EXE) build/test_play_app$(EXE) build/iso_files$(EXE) build/test_files_app$(EXE) build/iso_photo$(EXE) build/test_photo_app$(EXE) build/test_searchoverlay$(EXE) build/iso_edit$(EXE) build/test_edit_app$(EXE) build/test_codec$(EXE) build/test_wlshim$(EXE) build/test_fontcache$(EXE)
 
 # Vendored ffmpeg static build (see third_party/ffmpeg/LICENSE.md for
 # the locked configure and the written adoption justification). The ISO
@@ -60,6 +60,9 @@ build/scene_font.o: src/scene_font.c include/scene_font.h include/scene_fb.h | b
 
 build/scene_font_data.o: src/scene_font_data.c include/scene_font.h | build
 	$(CC) $(CFLAGS) -c src/scene_font_data.c -o $@
+
+build/scene_fontcache.o: src/scene_fontcache.c include/scene_fontcache.h third_party/stb/stb_truetype.h | build
+	$(CC) $(CFLAGS) -Ithird_party/stb -c src/scene_fontcache.c -o $@
 
 build/scene_compositor.o: src/scene_compositor.c include/scene_compositor.h include/scene_fb.h include/scene_font.h include/scene_server.h include/scene_store.h include/scene_fmt.h | build
 	$(CC) $(CFLAGS) -c src/scene_compositor.c -o $@
@@ -113,20 +116,22 @@ build/test_client$(EXE): tests/test_client.c build/scene_fmt.o build/scene_store
 build/test_compositor$(EXE): tests/test_compositor.c build/scene_fmt.o \
 	build/scene_store.o build/scene_transport.o build/scene_client.o \
 	build/scene_server.o build/scene_fb.o build/scene_font.o \
-	build/scene_font_data.o build/scene_compositor.o | build
-	$(CC) $(CFLAGS) tests/test_compositor.c build/scene_fmt.o build/scene_store.o \
+	build/scene_font_data.o build/scene_compositor.o \
+	build/scene_fontcache.o | build
+	$(CC) $(CFLAGS) -Ithird_party/stb tests/test_compositor.c build/scene_fmt.o build/scene_store.o \
 		build/scene_transport.o build/scene_client.o build/scene_server.o \
 		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
-		build/scene_compositor.o $(SOCKLIB) -o $@
+		build/scene_compositor.o build/scene_fontcache.o $(SOCKLIB) -o $@
 
 build/test_automation$(EXE): tests/test_automation.c build/scene_fmt.o \
 	build/scene_store.o build/scene_transport.o build/scene_client.o \
 	build/scene_server.o build/scene_fb.o build/scene_font.o \
-	build/scene_font_data.o build/scene_compositor.o | build
-	$(CC) $(CFLAGS) tests/test_automation.c build/scene_fmt.o build/scene_store.o \
+	build/scene_font_data.o build/scene_compositor.o \
+	build/scene_fontcache.o | build
+	$(CC) $(CFLAGS) -Ithird_party/stb tests/test_automation.c build/scene_fmt.o build/scene_store.o \
 		build/scene_transport.o build/scene_client.o build/scene_server.o \
 		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
-		build/scene_compositor.o $(SOCKLIB) -o $@
+		build/scene_compositor.o build/scene_fontcache.o $(SOCKLIB) -o $@
 
 build/test_a11y$(EXE): tests/test_a11y.c build/scene_fmt.o build/scene_store.o \
 	build/scene_a11y.o | build
@@ -489,6 +494,12 @@ build/test_wlshim$(EXE): tests/test_wlshim.c src/iso_wlshim.c include/iso_wlshim
 test-wlshim: build/test_wlshim$(EXE)
 	./build/test_wlshim$(EXE)
 
+build/test_fontcache$(EXE): tests/test_fontcache.c build/scene_fontcache.o | build
+	$(CC) $(CFLAGS) -Ithird_party/stb tests/test_fontcache.c build/scene_fontcache.o -o $@
+
+test-fontcache: build/test_fontcache$(EXE)
+	./build/test_fontcache$(EXE)
+
 bench: build/bench$(EXE)
 	./build/bench$(EXE)
 
@@ -544,14 +555,15 @@ build/iso_drm$(EXE): src/iso_drm.c build/scene_fmt.o build/scene_store.o \
 	build/scene_fb.o build/scene_font.o build/scene_font_data.o \
 	build/scene_compositor.o build/scene_a11y.o build/scene_shell.o \
 	build/scene_wallpaper.o build/scene_image.o build/scene_launcher.o \
-	build/scene_codec.o | build
-	$(CC) $(CFLAGS) $(FFMPEG_INC) src/iso_drm.c build/scene_fmt.o \
+	build/scene_codec.o build/scene_fontcache.o | build
+	$(CC) $(CFLAGS) $(FFMPEG_INC) -Ithird_party/stb src/iso_drm.c build/scene_fmt.o \
 		build/scene_store.o build/scene_transport.o build/scene_client.o \
 		build/scene_server.o build/scene_fb.o build/scene_font.o \
 		build/scene_font_data.o build/scene_compositor.o \
 		build/scene_a11y.o build/scene_shell.o \
 		build/scene_wallpaper.o build/scene_image.o \
 		build/scene_launcher.o build/scene_codec.o \
+		build/scene_fontcache.o \
 		-static $(FFMPEG_LIBS) $(FFMPEG_EXTRA) -lm -lpthread -lcrypt -ldrm -o $@
 
 iso-drm: build/iso_drm$(EXE)
@@ -576,4 +588,4 @@ endif
 clean:
 	rm -rf build
 
-.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-sessions test-launcher test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm iso-terminal test-video test-appwm test-hostwm test-shellwm test-play clean test-codec wl-proof
+.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-sessions test-launcher test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm iso-terminal test-video test-appwm test-hostwm test-shellwm test-play clean test-codec wl-proof test-fontcache
