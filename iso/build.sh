@@ -38,6 +38,7 @@ MTDEVVER="1.1.6"
 LIBEVDEVVER="1.13.3"
 LIBUDEVSTUBVER="1"
 WLROOTSVER="0.18.2"
+WPASUPVER="2.11"
 
 INITRD="$TOPDIR/initramfs-${KVER}.cpio.gz"
 
@@ -114,8 +115,8 @@ fetch_sources() {
     fetch "https://gitlab.alpinelinux.org/alpine/apk-tools/-/archive/v2.14.4/apk-tools-v2.14.4.tar.gz" \
           "$SRC/apk-tools-v2.14.4.tar.gz"
     # wpa_supplicant for WiFi (wpa_supplicant + wpa_cli)
-    fetch "https://w1.fi/releases/wpa_supplicant-2.11.tar.xz" \
-          "$SRC/wpa_supplicant-2.11.tar.xz"
+    fetch "https://w1.fi/releases/wpa_supplicant-${WPASUPVER}.tar.gz" \
+          "$SRC/wpa_supplicant-${WPASUPVER}.tar.gz"
 
     msg "All sources fetched."
 }
@@ -434,28 +435,18 @@ build_apk() {
 build_wpa_supplicant() {
     msg "=== Phase 4.8: Building wpa_supplicant ==="
     setup_musl_gcc
-    local WVER="2.11"
-    extract "$SRC/wpa_supplicant-${WVER}.tar.xz" "$BUILDDIR/wpa_supplicant-${WVER}"
-    cd "$BUILDDIR/wpa_supplicant-${WVER}/wpa_supplicant"
+    extract "$SRC/wpa_supplicant-${WPASUPVER}.tar.gz" "$BUILDDIR/wpa_supplicant-${WPASUPVER}"
+    cd "$BUILDDIR/wpa_supplicant-${WPASUPVER}/wpa_supplicant"
     cat > .config <<'WCONFIG'
-CONFIG_DRIVER_NONE=y
 CONFIG_DRIVER_WEXT=y
-CONFIG_DRIVER_NL80211=y
-CONFIG_WPA_SUPPLICANT_INTERNAL=y
-CONFIG_EAP_PSK=y
-CONFIG_EAP_TLS=y
-CONFIG_EAP_TTLS=y
-CONFIG_EAP_PEAP=y
-CONFIG_EAP_FAST=y
 CONFIG_IEEE8021X_EAPOL=y
 CONFIG_PKCS12=y
-CONFIG_BGSCAN_SIMPLE=y
 CONFIG_IEEE80211W=y
 CONFIG_SAE=y
-CONFIG_OWE=y
 CONFIG_SUITEB=y
-CONFIG_SUITEB192=y
-CONFIG_NO_RANDOM_POOL=n
+CFLAGS += -I$SYSROOT/usr/include
+LDFLAGS += -L$SYSROOT/usr/lib
+LIBS += -L$SYSROOT/usr/lib -lssl -lcrypto
 WCONFIG
     make -j"$JOBS" CC="$MUSL_GCC_SHARED" \
         CFLAGS="-O2 -I$SYSROOT/usr/include" \
