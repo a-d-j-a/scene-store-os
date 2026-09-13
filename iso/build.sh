@@ -448,14 +448,16 @@ CONFIG_SAE=y
 CONFIG_SUITEB=y
 CONFIG_NO_ACL_MANAGER=y
 CONFIG_NO_WPA_ERROR=y
-CFLAGS += -I$SYSROOT/usr/include
-LDFLAGS += -L$SYSROOT/usr/lib
-LIBS += -L$SYSROOT/usr/lib -lssl -lcrypto
-LIBS_wpa_cli += -L$SYSROOT/usr/lib -lssl -lcrypto
 WCONFIG
+    # musl-gcc-shared already embeds --sysroot + include/lib paths;
+    # do NOT override CFLAGS/LDFLAGS on the make line — the Makefile's
+    # build.rules has `ifndef CFLAGS` which sets the internal includes,
+    # and overriding on the cmdline would suppress those.
     make -j"$JOBS" CC="$MUSL_GCC_SHARED" \
-        CFLAGS="-O2 -I$SYSROOT/usr/include" \
-        LDFLAGS="-L$SYSROOT/usr/lib" \
+        LIBS="-L$SYSROOT/usr/lib -lssl -lcrypto" \
+        LIBS_c="-L$SYSROOT/usr/lib -lssl -lcrypto" \
+        LIBS_wpa_cli="-L$SYSROOT/usr/lib -lssl -lcrypto" \
+        LIBS_p2p="" \
         || die "wpa_supplicant build failed"
     mkdir -p "$SYSROOT/usr/bin" "$SYSROOT/usr/sbin"
     cp wpa_supplicant "$SYSROOT/usr/sbin/wpa_supplicant" || die "wpa_supplicant missing"
