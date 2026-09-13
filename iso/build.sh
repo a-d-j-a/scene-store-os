@@ -437,21 +437,25 @@ build_wpa_supplicant() {
     setup_musl_gcc
     extract "$SRC/wpa_supplicant-${WPASUPVER}.tar.gz" "$BUILDDIR/wpa_supplicant-${WPASUPVER}"
     cd "$BUILDDIR/wpa_supplicant-${WPASUPVER}/wpa_supplicant"
-    cat > .config <<'WCONFIG'
+    # Start from defconfig, add WEXT + crypto options
+    cp defconfig .config 2>/dev/null || true
+    cat >> .config <<'WCONFIG'
 CONFIG_DRIVER_WEXT=y
 CONFIG_IEEE8021X_EAPOL=y
 CONFIG_PKCS12=y
 CONFIG_IEEE80211W=y
 CONFIG_SAE=y
 CONFIG_SUITEB=y
+CONFIG_NO_ACL_MANAGER=y
+CONFIG_NO_WPA_ERROR=y
 CFLAGS += -I$SYSROOT/usr/include
 LDFLAGS += -L$SYSROOT/usr/lib
 LIBS += -L$SYSROOT/usr/lib -lssl -lcrypto
+LIBS_wpa_cli += -L$SYSROOT/usr/lib -lssl -lcrypto
 WCONFIG
     make -j"$JOBS" CC="$MUSL_GCC_SHARED" \
         CFLAGS="-O2 -I$SYSROOT/usr/include" \
         LDFLAGS="-L$SYSROOT/usr/lib" \
-        LIBS_p2p= LIBS_c= \
         || die "wpa_supplicant build failed"
     mkdir -p "$SYSROOT/usr/bin" "$SYSROOT/usr/sbin"
     cp wpa_supplicant "$SYSROOT/usr/sbin/wpa_supplicant" || die "wpa_supplicant missing"
