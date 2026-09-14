@@ -474,11 +474,11 @@ WCONFIG
 # ---- phase 5.0: meson cross file for musl ----------------------------------
 create_meson_cross() {
     local CROSS="$BUILDDIR/musl-cross.txt"
-    [ -f "$CROSS" ] && return 0
+    # Always regenerate (musl-gcc-shared must be the compiler for shared libs)
     cat > "$CROSS" <<CROSS_EOF
 [binaries]
-c = '$MUSL_GCC'
-cpp = '$MUSL_GCC'
+c = '$MUSL_GCC_SHARED'
+cpp = '$MUSL_GCC_SHARED'
 ar = 'ar'
 strip = 'strip'
 pkgconfig = 'pkg-config'
