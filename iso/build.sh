@@ -439,6 +439,9 @@ build_wpa_supplicant() {
     cd "$BUILDDIR/wpa_supplicant-${WPASUPVER}/wpa_supplicant"
     # Start from defconfig, add WEXT + crypto options
     cp defconfig .config 2>/dev/null || true
+    # Disable D-Bus (no dbus in our sysroot)
+    sed -i 's/^CONFIG_CTRL_IFACE_DBUS_NEW=y/#CONFIG_CTRL_IFACE_DBUS_NEW/' .config
+    sed -i 's/^CONFIG_CTRL_IFACE_DBUS=y/#CONFIG_CTRL_IFACE_DBUS/' .config
     cat >> .config <<'WCONFIG'
 CONFIG_DRIVER_WEXT=y
 CONFIG_IEEE8021X_EAPOL=y
