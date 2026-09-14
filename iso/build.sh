@@ -445,6 +445,13 @@ build_wpa_supplicant() {
     # Disable NL80211 and MACSEC (no libnl in our sysroot, WEXT only)
     sed -i 's/^CONFIG_DRIVER_NL80211=y/#CONFIG_DRIVER_NL80211/' .config
     sed -i 's/^CONFIG_DRIVER_MACSEC_LINUX=y/#CONFIG_DRIVER_MACSEC_LINUX/' .config
+    # Disable AP/P2P/IBSS/HS20/MESH modes (station-only, no nl80211 headers)
+    sed -i 's/^CONFIG_AP=y/#CONFIG_AP/' .config
+    sed -i 's/^CONFIG_P2P=y/#CONFIG_P2P/' .config
+    sed -i 's/^CONFIG_IBSS_RSN=y/#CONFIG_IBSS_RSN/' .config
+    sed -i 's/^CONFIG_HS20=y/#CONFIG_HS20/' .config
+    sed -i 's/^CONFIG_MESH=y/#CONFIG_MESH/' .config
+    sed -i 's/^CONFIG_WPS=y/#CONFIG_WPS/' .config
     cat >> .config <<'WCONFIG'
 CONFIG_DRIVER_WEXT=y
 CONFIG_IEEE8021X_EAPOL=y
