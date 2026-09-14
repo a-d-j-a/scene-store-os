@@ -511,9 +511,8 @@ build_libdrm() {
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr --libdir=lib \
         -Dtests=false -Dman-pages=disabled \
-        -Dlibkms=disabled -Dintel=disabled -Damdgpu=disabled \
+        -Dintel=disabled -Damdgpu=disabled \
         -Dradeon=disabled -Dnouveau=disabled -Dvmwgfx=disabled \
-        -Dxf86drm=disabled -Dxorg=disabled \
         -Dinstall-test-programs=false -Dvalgrind=disabled \
         -Dcairo-tests=disabled -Dudev=false \
         || die "libdrm meson setup failed"
