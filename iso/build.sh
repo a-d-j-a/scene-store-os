@@ -897,7 +897,8 @@ if [ -x /usr/bin/iso-drm ]; then
         case "$tok" in
             autolaunch=*) AUTOLAUNCH="$AUTOLAUNCH --autolaunch=${tok#autolaunch=}" ;;
             videoclip=*)  AUTOLAUNCH="$AUTOLAUNCH --videoclip=${tok#videoclip=}" ;;
-        esac
+esac
+fi # _BUILD_SOURCED guard
     done
     exec /usr/bin/iso-drm $AUTOLAUNCH
 fi
@@ -1193,6 +1194,8 @@ build_iso() {
 }
 
 # ---- main -------------------------------------------------------------------
+# Only run when executed directly (not sourced by build35b.sh etc.)
+if [ -z "$_BUILD_SOURCED" ]; then
 case "${1:-}" in
     clean)
         msg "Cleaning build tree..."
