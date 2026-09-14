@@ -510,10 +510,10 @@ build_libdrm() {
     rm -rf _build
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr --libdir=lib \
-        -Dtests=false -Dman-pages=disabled \
-        -Dlibkms=false -Dintel=false -Damdgpu=false \
-        -Dradeon=false -Dnouveau=false -Dvmwgfx=false \
-        -Dxf86drm=false -Dxorg=false \
+        -Dtests=disabled -Dman-pages=disabled \
+        -Dlibkms=disabled -Dintel=disabled -Damdgpu=disabled \
+        -Dradeon=disabled -Dnouveau=disabled -Dvmwgfx=disabled \
+        -Dxf86drm=disabled -Dxorg=disabled \
         || die "libdrm meson setup failed"
     ninja -C _build -j"$JOBS" || die "libdrm build failed"
     DESTDIR="$SYSROOT" ninja -C _build install || die "libdrm install failed"
