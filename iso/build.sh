@@ -442,6 +442,9 @@ build_wpa_supplicant() {
     # Disable D-Bus (no dbus in our sysroot)
     sed -i 's/^CONFIG_CTRL_IFACE_DBUS_NEW=y/#CONFIG_CTRL_IFACE_DBUS_NEW/' .config
     sed -i 's/^CONFIG_CTRL_IFACE_DBUS=y/#CONFIG_CTRL_IFACE_DBUS/' .config
+    # Disable NL80211 and MACSEC (no libnl in our sysroot, WEXT only)
+    sed -i 's/^CONFIG_DRIVER_NL80211=y/#CONFIG_DRIVER_NL80211/' .config
+    sed -i 's/^CONFIG_DRIVER_MACSEC_LINUX=y/#CONFIG_DRIVER_MACSEC_LINUX/' .config
     cat >> .config <<'WCONFIG'
 CONFIG_DRIVER_WEXT=y
 CONFIG_IEEE8021X_EAPOL=y
