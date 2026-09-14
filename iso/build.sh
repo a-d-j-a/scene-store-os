@@ -438,29 +438,21 @@ build_wpa_supplicant() {
     extract "$SRC/wpa_supplicant-${WPASUPVER}.tar.gz" "$BUILDDIR/wpa_supplicant-${WPASUPVER}"
     cd "$BUILDDIR/wpa_supplicant-${WPASUPVER}/wpa_supplicant"
     # Start from defconfig, add WEXT + crypto options
-    cp defconfig .config 2>/dev/null || true
-    # Disable D-Bus (no dbus in our sysroot)
-    sed -i 's/^CONFIG_CTRL_IFACE_DBUS_NEW=y/#CONFIG_CTRL_IFACE_DBUS_NEW/' .config
-    sed -i 's/^CONFIG_CTRL_IFACE_DBUS=y/#CONFIG_CTRL_IFACE_DBUS/' .config
-    # Disable NL80211 and MACSEC (no libnl in our sysroot, WEXT only)
-    sed -i 's/^CONFIG_DRIVER_NL80211=y/#CONFIG_DRIVER_NL80211/' .config
-    sed -i 's/^CONFIG_DRIVER_MACSEC_LINUX=y/#CONFIG_DRIVER_MACSEC_LINUX/' .config
-    # Disable AP/P2P/IBSS/HS20/MESH modes (station-only, no nl80211 headers)
-    sed -i 's/^CONFIG_AP=y/#CONFIG_AP/' .config
-    sed -i 's/^CONFIG_P2P=y/#CONFIG_P2P/' .config
-    sed -i 's/^CONFIG_IBSS_RSN=y/#CONFIG_IBSS_RSN/' .config
-    sed -i 's/^CONFIG_HS20=y/#CONFIG_HS20/' .config
-    sed -i 's/^CONFIG_MESH=y/#CONFIG_MESH/' .config
-    sed -i 's/^CONFIG_WPS=y/#CONFIG_WPS/' .config
-    cat >> .config <<'WCONFIG'
+    # Minimal station-only config — no AP, P2P, HS20, mesh, WPS, interworking
+    # No nl80211/MACSEC (no libnl), no D-Bus (no dbus headers)
+    cat > .config <<'WCONFIG'
+# Minimal station-only config for WEXT driver
 CONFIG_DRIVER_WEXT=y
 CONFIG_IEEE8021X_EAPOL=y
 CONFIG_PKCS12=y
 CONFIG_IEEE80211W=y
 CONFIG_SAE=y
 CONFIG_SUITEB=y
-CONFIG_NO_ACL_MANAGER=y
-CONFIG_NO_WPA_ERROR=y
+CONFIG_EAP_TLS=y
+CONFIG_EAP_TTLS=y
+CONFIG_EAP_PEAP=y
+CONFIG_EAP_GTC=y
+CONFIG_EAP_MSCHAPV2=y
 WCONFIG
     # musl-gcc-shared already embeds --sysroot + include/lib paths;
     # do NOT override CFLAGS/LDFLAGS on the make line — the Makefile's
