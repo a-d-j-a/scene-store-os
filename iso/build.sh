@@ -640,6 +640,7 @@ build_libxkbcommon() {
         -Denable-x11=false -Denable-tools=false \
         -Denable-bash-completion=false \
         -Denable-xkbregistry=false \
+        -Denable-tests=false \
         || die "libxkbcommon meson setup failed"
     ninja -C _build -j"$JOBS" || die "libxkbcommon build failed"
     DESTDIR="$SYSROOT" ninja -C _build install || die "libxkbcommon install failed"
@@ -652,7 +653,7 @@ build_libevdev() {
     msg "=== Phase 5.6: Building libevdev ==="
     setup_musl_gcc
     create_meson_cross
-    fetch "https://gitlab.freedesktop.org/libevdev/libevdev/-/archive/${LIBEVDEVVER}/libevdev-${LIBEVDEVVER}.tar.gz" \
+    fetch "https://gitlab.freedesktop.org/libevdev/libevdev/-/archive/libevdev-${LIBEVDEVVER}/libevdev-libevdev-${LIBEVDEVVER}.tar.gz" \
           "$SRC/libevdev-${LIBEVDEVVER}.tar.gz"
     extract "$SRC/libevdev-${LIBEVDEVVER}.tar.gz" "$BUILDDIR/libevdev-${LIBEVDEVVER}"
     cd "$BUILDDIR/libevdev-${LIBEVDEVVER}"
@@ -672,7 +673,7 @@ build_mtdev() {
     msg "=== Phase 5.7: Building mtdev ==="
     setup_musl_gcc
     create_meson_cross
-    fetch "https://bitmath.org/code/mtdev/mtdev-${MTDEVVER}.tar.bz2" \
+    fetch "https://bitmath.se/org/code/mtdev/mtdev-${MTDEVVER}.tar.bz2" \
           "$SRC/mtdev-${MTDEVVER}.tar.bz2"
     extract "$SRC/mtdev-${MTDEVVER}.tar.bz2" "$BUILDDIR/mtdev-${MTDEVVER}"
     cd "$BUILDDIR/mtdev-${MTDEVVER}"
