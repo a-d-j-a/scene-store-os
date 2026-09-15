@@ -527,9 +527,9 @@ build_wayland_protocols() {
     msg "=== Phase 5.2: Building wayland-protocols ==="
     setup_musl_gcc
     create_meson_cross
-    fetch "https://wayland.freedesktop.org/releases/wayland-protocols-${WAYLAND_PROT_VER}.tar.xz" \
-          "$SRC/wayland-protocols-${WAYLAND_PROT_VER}.tar.xz"
-    extract "$SRC/wayland-protocols-${WAYLAND_PROT_VER}.tar.xz" \
+    fetch "https://gitlab.freedesktop.org/wayland/wayland-protocols/-/archive/${WAYLAND_PROT_VER}/wayland-protocols-${WAYLAND_PROT_VER}.tar.gz" \
+          "$SRC/wayland-protocols-${WAYLAND_PROT_VER}.tar.gz"
+    extract "$SRC/wayland-protocols-${WAYLAND_PROT_VER}.tar.gz" \
             "$BUILDDIR/wayland-protocols-${WAYLAND_PROT_VER}"
     cd "$BUILDDIR/wayland-protocols-${WAYLAND_PROT_VER}"
     rm -rf _build
@@ -546,9 +546,9 @@ build_wayland() {
     msg "=== Phase 5.3: Building wayland ==="
     setup_musl_gcc
     create_meson_cross
-    fetch "https://wayland.freedesktop.org/releases/wayland-${WAYLANDVER}.tar.xz" \
-          "$SRC/wayland-${WAYLANDVER}.tar.xz"
-    extract "$SRC/wayland-${WAYLANDVER}.tar.xz" "$BUILDDIR/wayland-${WAYLANDVER}"
+    fetch "https://gitlab.freedesktop.org/wayland/wayland/-/archive/${WAYLANDVER}/wayland-${WAYLANDVER}.tar.gz" \
+          "$SRC/wayland-${WAYLANDVER}.tar.gz"
+    extract "$SRC/wayland-${WAYLANDVER}.tar.gz" "$BUILDDIR/wayland-${WAYLANDVER}"
     cd "$BUILDDIR/wayland-${WAYLANDVER}"
     rm -rf _build
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
@@ -611,9 +611,9 @@ build_libevdev() {
     msg "=== Phase 5.6: Building libevdev ==="
     setup_musl_gcc
     create_meson_cross
-    fetch "https://www.freedesktop.org/software/libevdev/libevdev-${LIBEVDEVVER}.tar.xz" \
-          "$SRC/libevdev-${LIBEVDEVVER}.tar.xz"
-    extract "$SRC/libevdev-${LIBEVDEVVER}.tar.xz" "$BUILDDIR/libevdev-${LIBEVDEVVER}"
+    fetch "https://gitlab.freedesktop.org/libevdev/libevdev/-/archive/${LIBEVDEVVER}/libevdev-${LIBEVDEVVER}.tar.gz" \
+          "$SRC/libevdev-${LIBEVDEVVER}.tar.gz"
+    extract "$SRC/libevdev-${LIBEVDEVVER}.tar.gz" "$BUILDDIR/libevdev-${LIBEVDEVVER}"
     cd "$BUILDDIR/libevdev-${LIBEVDEVVER}"
     rm -rf _build
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
@@ -652,7 +652,7 @@ build_libseat() {
     msg "=== Phase 5.8: Building libseat ==="
     setup_musl_gcc
     create_meson_cross
-    fetch "https://git.sr.ht/~kennylevinsen/seat/refs/download/v${LIBSEATVER}/libseat-${LIBSEATVER}.tar.gz" \
+    fetch "https://gitlab.freedesktop.org/kennylevinsen/seat/-/archive/v${LIBSEATVER}/libseat-${LIBSEATVER}.tar.gz" \
           "$SRC/libseat-${LIBSEATVER}.tar.gz"
     extract "$SRC/libseat-${LIBSEATVER}.tar.gz" "$BUILDDIR/libseat-${LIBSEATVER}"
     cd "$BUILDDIR/libseat-${LIBSEATVER}"
@@ -673,9 +673,9 @@ build_libinput() {
     msg "=== Phase 5.9: Building libinput ==="
     setup_musl_gcc
     create_meson_cross
-    fetch "https://www.freedesktop.org/software/libinput/libinput-${LIBINPUTVER}.tar.xz" \
-          "$SRC/libinput-${LIBINPUTVER}.tar.xz"
-    extract "$SRC/libinput-${LIBINPUTVER}.tar.xz" "$BUILDDIR/libinput-${LIBINPUTVER}"
+    fetch "https://gitlab.freedesktop.org/libinput/libinput/-/archive/${LIBINPUTVER}/libinput-${LIBINPUTVER}.tar.gz" \
+          "$SRC/libinput-${LIBINPUTVER}.tar.gz"
+    extract "$SRC/libinput-${LIBINPUTVER}.tar.gz" "$BUILDDIR/libinput-${LIBINPUTVER}"
     cd "$BUILDDIR/libinput-${LIBINPUTVER}"
     rm -rf _build
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
