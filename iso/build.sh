@@ -639,7 +639,7 @@ build_libxkbcommon() {
         -Denable-docs=false -Denable-wayland=false \
         -Denable-x11=false -Denable-tools=false \
         -Denable-bash-completion=false \
-        -Denable-registry=false \
+        -Denable-xkbregistry=false \
         || die "libxkbcommon meson setup failed"
     ninja -C _build -j"$JOBS" || die "libxkbcommon build failed"
     DESTDIR="$SYSROOT" ninja -C _build install || die "libxkbcommon install failed"
