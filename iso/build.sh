@@ -550,12 +550,25 @@ build_wayland() {
     fetch "https://gitlab.freedesktop.org/wayland/wayland/-/archive/${WAYLANDVER}/wayland-${WAYLANDVER}.tar.gz" \
           "$SRC/wayland-${WAYLANDVER}.tar.gz"
     extract "$SRC/wayland-${WAYLANDVER}.tar.gz" "$BUILDDIR/wayland-${WAYLANDVER}"
+
+    # Step 1: build wayland natively (host) to get wayland-scanner 1.23.1
+    cd "$BUILDDIR/wayland-${WAYLANDVER}"
+    rm -rf _build-native
+    meson setup _build-native --prefix=/usr \
+        -Ddocumentation=false -Dtests=false -Dlibraries=false -Dscanner=true \
+        || die "wayland native setup failed"
+    ninja -C _build-native -j"$JOBS" || die "wayland native build failed"
+    DESTDIR="$BUILDDIR/wayland-host" ninja -C _build-native install || die "wayland native install failed"
+    cd -
+
+    # Step 2: cross-compile for the target, using native scanner
     cd "$BUILDDIR/wayland-${WAYLANDVER}"
     rm -rf _build
+    PATH="$BUILDDIR/wayland-host/usr/bin:$PATH" \
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr --libdir=lib \
-        -Ddocumentation=false -Dtests=false \
-        || die "wayland meson setup failed"
+        -Ddocumentation=false -Dtests=false -Dscanner=false \
+        || die "wayland cross setup failed"
     ninja -C _build -j"$JOBS" || die "wayland build failed"
     DESTDIR="$SYSROOT" ninja -C _build install || die "wayland install failed"
     cd -
