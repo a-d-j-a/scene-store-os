@@ -565,6 +565,7 @@ build_wayland() {
     cd "$BUILDDIR/wayland-${WAYLANDVER}"
     rm -rf _build
     PATH="$BUILDDIR/wayland-host/usr/bin:$PATH" \
+    PKG_CONFIG_PATH="$BUILDDIR/wayland-host/usr/lib/x86_64-linux-gnu/pkgconfig:$SYSROOT/usr/lib/pkgconfig:$SYSROOT/usr/lib/x86_64-linux-gnu/pkgconfig" \
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr --libdir=lib \
         -Ddocumentation=false -Dtests=false -Dscanner=false \
