@@ -535,7 +535,7 @@ build_wayland_protocols() {
     rm -rf _build
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr \
-        -Dtests=disabled \
+        -Dtests=false \
         || die "wayland-protocols meson setup failed"
     DESTDIR="$SYSROOT" ninja -C _build install || die "wayland-protocols install failed"
     cd -
