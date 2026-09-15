@@ -39,6 +39,7 @@ LIBEVDEVVER="1.13.3"
 LIBUDEVSTUBVER="1"
 WLROOTSVER="0.18.2"
 WPASUPVER="2.11"
+LIBFFIVER="3.4.6"
 
 INITRD="$TOPDIR/initramfs-${KVER}.cpio.gz"
 
@@ -117,6 +118,8 @@ fetch_sources() {
     # wpa_supplicant for WiFi (wpa_supplicant + wpa_cli)
     fetch "https://w1.fi/releases/wpa_supplicant-${WPASUPVER}.tar.gz" \
           "$SRC/wpa_supplicant-${WPASUPVER}.tar.gz"
+    fetch "https://github.com/libffi/libffi/releases/download/v${LIBFFIVER}/libffi-${LIBFFIVER}.tar.gz" \
+          "$SRC/libffi-${LIBFFIVER}.tar.gz"
 
     msg "All sources fetched."
 }
@@ -540,6 +543,22 @@ build_wayland_protocols() {
     DESTDIR="$SYSROOT" ninja -C _build install || die "wayland-protocols install failed"
     cd -
     msg "wayland-protocols done."
+}
+
+# ---- phase 5.2b: libffi ---------------------------------------------------
+build_libffi() {
+    msg "=== Phase 5.2b: Building libffi ==="
+    setup_musl_gcc
+    extract "$SRC/libffi-${LIBFFIVER}.tar.gz" "$BUILDDIR/libffi-${LIBFFIVER}"
+    cd "$BUILDDIR/libffi-${LIBFFIVER}"
+    ./configure --prefix=/usr --host=x86_64-linux-musl \
+        CC="$MUSL_GCC_SHARED" \
+        --disable-docs \
+        || die "libffi configure failed"
+    make -j"$JOBS" || die "libffi build failed"
+    make install DESTDIR="$SYSROOT" || die "libffi install failed"
+    cd -
+    msg "libffi done."
 }
 
 # ---- phase 5.3: wayland ---------------------------------------------------

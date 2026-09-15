@@ -9,6 +9,7 @@ _BUILD_SOURCED=1
 build_wpa_supplicant
 build_libdrm
 build_wayland_protocols
+build_libffi
 build_wayland
 build_pixman
 build_libxkbcommon
