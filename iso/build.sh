@@ -586,12 +586,16 @@ build_wayland() {
     # Step 2: cross-compile for the target, using native scanner
     cd "$BUILDDIR/wayland-${WAYLANDVER}"
     rm -rf _build
+    # Hide the host wayland-scanner so ninja uses our native one
     PATH="$BUILDDIR/wayland-host/usr/bin:$PATH" \
+    WAYLAND_SCANNER="$BUILDDIR/wayland-host/usr/bin/wayland-scanner" \
     PKG_CONFIG_LIBDIR="$SYSROOT/usr/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" \
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr --libdir=lib \
         -Ddocumentation=false -Dtests=false -Dscanner=false \
         || die "wayland cross setup failed"
+    # Ensure ninja uses the correct scanner at build time
+    sed -i "s|/usr/bin/wayland-scanner|$BUILDDIR/wayland-host/usr/bin/wayland-scanner|g" _build/build.ninja
     ninja -C _build -j"$JOBS" || die "wayland build failed"
     DESTDIR="$SYSROOT" ninja -C _build install || die "wayland install failed"
     cd -
