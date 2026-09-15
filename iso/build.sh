@@ -615,7 +615,7 @@ build_pixman() {
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr --libdir=lib \
         -Dtests=disabled -Ddemos=disabled \
-        -Dgtk=disabled -Dintrospection=disabled \
+        -Dgtk=disabled \
         || die "pixman meson setup failed"
     ninja -C _build -j"$JOBS" || die "pixman build failed"
     DESTDIR="$SYSROOT" ninja -C _build install || die "pixman install failed"
