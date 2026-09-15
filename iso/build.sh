@@ -559,13 +559,15 @@ build_wayland() {
         || die "wayland native setup failed"
     ninja -C _build-native -j"$JOBS" || die "wayland native build failed"
     DESTDIR="$BUILDDIR/wayland-host" ninja -C _build-native install || die "wayland native install failed"
+    # Install native scanner .pc into sysroot so cross build finds it
+    mkdir -p "$SYSROOT/usr/lib/pkgconfig"
+    cp "$BUILDDIR/wayland-host/usr/lib/x86_64-linux-gnu/pkgconfig/wayland-scanner.pc" "$SYSROOT/usr/lib/pkgconfig/"
     cd -
 
     # Step 2: cross-compile for the target, using native scanner
     cd "$BUILDDIR/wayland-${WAYLANDVER}"
     rm -rf _build
     PATH="$BUILDDIR/wayland-host/usr/bin:$PATH" \
-    PKG_CONFIG_PATH="$BUILDDIR/wayland-host/usr/lib/x86_64-linux-gnu/pkgconfig:$SYSROOT/usr/lib/pkgconfig:$SYSROOT/usr/lib/x86_64-linux-gnu/pkgconfig" \
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr --libdir=lib \
         -Ddocumentation=false -Dtests=false -Dscanner=false \
