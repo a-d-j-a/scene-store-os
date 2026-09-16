@@ -738,7 +738,7 @@ build_libinput() {
     rm -rf _build
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr --libdir=lib \
-        -Dtests=disabled -Ddocumentation=false \
+        -Dtests=false -Ddocumentation=false \
         -Dlibwacom=disabled -Ddebug-gui=disabled -Dinstall-tests=false \
         || die "libinput meson setup failed"
     ninja -C _build -j"$JOBS" || die "libinput build failed"
