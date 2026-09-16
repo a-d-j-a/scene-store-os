@@ -753,8 +753,9 @@ build_eudev() {
         NOCONFIGURE=1 ./autogen.sh || die "eudev autogen failed"
     fi
     ./configure --prefix=/usr --host=x86_64-linux-gnu \
-        CC="$MUSL_GCC_SHARED" CFLAGS="-O2 -I$SYSROOT/usr/include" \
+        CC="$MUSL_GCC" CFLAGS="-O2 -I$SYSROOT/usr/include" \
         LDFLAGS="-L$SYSROOT/usr/lib" \
+        --disable-shared --enable-static \
         --disable-programs --disable-blkid --disable-selinux \
         --disable-kmod --disable-manpages --disable-hwdb \
         || die "eudev configure failed"
