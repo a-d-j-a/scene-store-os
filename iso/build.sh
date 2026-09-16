@@ -94,6 +94,7 @@ install_prereqs() {
         cpio gzip xz-utils \
         xorriso grub-pc-bin grub-common mtools \
         autoconf automake libtool ca-certificates \
+        gperf \
         scdoc \
         2>/dev/null || true
     msg "Host prerequisites installed."
