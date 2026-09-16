@@ -500,11 +500,6 @@ sys_root = '$SYSROOT'
 CFLAGS = ['-I$SYSROOT/usr/include', '-O2']
 LDFLAGS = ['-L$SYSROOT/usr/lib', '-L$SYSROOT/lib']
 CROSS_EOF
-    # Force pkg-config to only search our sysroot — host system packages
-    # (e.g. Ubuntu's libudev-dev) would otherwise leak glibc .so files into
-    # the cross link via their .pc files.
-    export PKG_CONFIG_LIBDIR="$SYSROOT/usr/lib/pkgconfig"
-    export PKG_CONFIG_PATH="$SYSROOT/usr/lib/pkgconfig"
     msg "Meson cross file: $CROSS"
 }
 
