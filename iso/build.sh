@@ -633,9 +633,10 @@ build_libxkbcommon() {
     extract "$SRC/libxkbcommon-${XKBCOMMONVER}.tar.xz" \
             "$BUILDDIR/libxkbcommon-${XKBCOMMONVER}"
     cd "$BUILDDIR/libxkbcommon-${XKBCOMMONVER}"
-    # Patch meson.build to skip all test targets (tests need unicode/uchar.h from ICU)
+    # Patch meson.build to skip all test/bench targets (tests need unicode/uchar.h from ICU).
+    # Wrap from the test_dep block up to (but not including) the config.h generation.
     sed -i 's/^test_dep = declare_dependency(/\nif false\ntest_dep = declare_dependency(/' meson.build
-    printf '\nendif\n' >> meson.build
+    sed -i '/^configure_file(output: '"'"'config.h'"'"', configuration: configh_data)/i endif' meson.build
     rm -rf _build
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr --libdir=lib \
