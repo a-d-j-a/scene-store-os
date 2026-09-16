@@ -680,8 +680,9 @@ build_mtdev() {
           "$SRC/mtdev-${MTDEVVER}.tar.bz2"
     extract "$SRC/mtdev-${MTDEVVER}.tar.bz2" "$BUILDDIR/mtdev-${MTDEVVER}"
     cd "$BUILDDIR/mtdev-${MTDEVVER}"
-    # mtdev uses autotools, not meson
-    ./configure --prefix=/usr --host=x86_64-linux-musl \
+    # mtdev uses autotools, not meson. config.sub doesn't know linux-musl,
+    # so use linux-gnu as the host label; actual toolchain comes from CC.
+    ./configure --prefix=/usr --host=x86_64-linux-gnu \
         CC="$MUSL_GCC" CFLAGS="-O2 -I$SYSROOT/usr/include" \
         LDFLAGS="-L$SYSROOT/usr/lib" \
         --disable-static --enable-shared \
@@ -692,13 +693,25 @@ build_mtdev() {
     msg "mtdev done."
 }
 
-# ---- phase 5.8: libseat ---------------------------------------------------
+# ---- phase 5.8: libseat (fetch-or-skip) ------------------------------------
+# libseat is only needed by wlroots' session backend.  The GitLab seat archive
+# URL sometimes serves a Cloudflare anti-bot HTML page (HTTP 200, not gzip) or
+# 404s.  Nothing first-party consumes libseat or wlroots session symbols; the
+# ISO's real compositor is iso_drm.  wlroots 0.18 builds fine with
+# -Dsession=disabled (session backend subdir_done()).  Therefore: validate the
+# downloaded tarball is real gzip; if not, warn and skip.
 build_libseat() {
     msg "=== Phase 5.8: Building libseat ==="
     setup_musl_gcc
     create_meson_cross
     fetch "https://gitlab.freedesktop.org/kennylevinsen/seat/-/archive/v${LIBSEATVER}/libseat-${LIBSEATVER}.tar.gz" \
           "$SRC/libseat-${LIBSEATVER}.tar.gz"
+    # Validate: GitLab may serve a Cloudflare HTML page with HTTP 200.
+    if ! gzip -t "$SRC/libseat-${LIBSEATVER}.tar.gz" 2>/dev/null; then
+        warn "libseat source not valid gzip (Cloudflare anti-bot or 404) — skipping libseat"
+        rm -f "$SRC/libseat-${LIBSEATVER}.tar.gz"
+        return 0
+    fi
     extract "$SRC/libseat-${LIBSEATVER}.tar.gz" "$BUILDDIR/libseat-${LIBSEATVER}"
     cd "$BUILDDIR/libseat-${LIBSEATVER}"
     rm -rf _build
@@ -748,8 +761,8 @@ build_wlroots() {
         --prefix=/usr --libdir=lib \
         -Dexamples=false -Dtests=false \
         -Dxwayland=disabled -Dx11-backend=disabled -Dx11-renderer=disabled \
-        -Dxcb-errors=disabled -Dlibseat-disabled=disabled \
-        -Dpopups=disabled -Dnew-input-backend=disabled \
+        -Dxcb-errors=disabled -Dsession=disabled \
+        -Dpopups=disabled \
         || die "wlroots meson setup failed"
     ninja -C _build -j"$JOBS" || die "wlroots build failed"
     DESTDIR="$SYSROOT" ninja -C _build install || die "wlroots install failed"
