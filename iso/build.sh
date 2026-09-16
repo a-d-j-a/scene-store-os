@@ -685,7 +685,7 @@ build_mtdev() {
     # mtdev uses autotools, not meson. config.sub doesn't know linux-musl,
     # so use linux-gnu as the host label; actual toolchain comes from CC.
     ./configure --prefix=/usr --host=x86_64-linux-gnu \
-        CC="$MUSL_GCC" CFLAGS="-O2 -I$SYSROOT/usr/include" \
+        CC="$MUSL_GCC" CFLAGS="-O2 -fPIC -I$SYSROOT/usr/include" \
         LDFLAGS="-L$SYSROOT/usr/lib" \
         --disable-shared --enable-static \
         || die "mtdev configure failed"
@@ -753,7 +753,7 @@ build_eudev() {
         NOCONFIGURE=1 ./autogen.sh || die "eudev autogen failed"
     fi
     ./configure --prefix=/usr --host=x86_64-linux-gnu \
-        CC="$MUSL_GCC" CFLAGS="-O2 -I$SYSROOT/usr/include" \
+        CC="$MUSL_GCC" CFLAGS="-O2 -fPIC -I$SYSROOT/usr/include" \
         LDFLAGS="-L$SYSROOT/usr/lib" \
         --disable-shared --enable-static \
         --disable-programs --disable-blkid --disable-selinux \
