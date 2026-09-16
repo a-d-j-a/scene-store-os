@@ -758,9 +758,9 @@ build_eudev() {
         --disable-programs --disable-blkid --disable-selinux \
         --disable-kmod --disable-manpages --disable-hwdb \
         || die "eudev configure failed"
-    make -C src/libudev -j"$JOBS" || die "libudev build failed"
-    make -C src/libudev install DESTDIR="$SYSROOT" \
-        || die "libudev install failed"
+    make -j"$JOBS" || die "eudev build failed"
+    make install DESTDIR="$SYSROOT" \
+        || die "eudev install failed"
     # Also install the header + pc file (make install of the subdir handles
     # src/libudev/libudev.h and libudev.pc per Makefile.am install hooks).
     cd -
