@@ -739,7 +739,7 @@ build_libinput() {
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr --libdir=lib \
         -Dtests=false -Ddocumentation=false \
-        -Dlibwacom=disabled -Ddebug-gui=disabled -Dinstall-tests=false \
+        -Dlibwacom=false -Ddebug-gui=false -Dinstall-tests=false \
         || die "libinput meson setup failed"
     ninja -C _build -j"$JOBS" || die "libinput build failed"
     DESTDIR="$SYSROOT" ninja -C _build install || die "libinput install failed"
