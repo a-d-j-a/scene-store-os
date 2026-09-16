@@ -776,6 +776,11 @@ build_libinput() {
           "$SRC/libinput-${LIBINPUTVER}.tar.gz"
     extract "$SRC/libinput-${LIBINPUTVER}.tar.gz" "$BUILDDIR/libinput-${LIBINPUTVER}"
     cd "$BUILDDIR/libinput-${LIBINPUTVER}"
+    # C++ include-compat test requires a C++ compiler; musl-gcc only provides
+    # C, and the fallback pulls glibc's libstdc++ headers (os_defines.h needs
+    # __GLIBC_PREREQ). libinput itself is C-only, so skip the C++ test.
+    sed -i "s/if add_languages('cpp', native: false, required: false)/if false # musl: no C++; skip cxx test/" meson.build \
+        || die "libinput cxx-test patch failed"
     rm -rf _build
     # Prepend sysroot pkgconfig so meson finds our static libudev.pc (and
     # other target libs) instead of looking only at host system defaults.
