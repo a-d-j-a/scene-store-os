@@ -685,7 +685,7 @@ build_mtdev() {
     ./configure --prefix=/usr --host=x86_64-linux-gnu \
         CC="$MUSL_GCC" CFLAGS="-O2 -I$SYSROOT/usr/include" \
         LDFLAGS="-L$SYSROOT/usr/lib" \
-        --disable-static --enable-shared \
+        --disable-shared --enable-static \
         || die "mtdev configure failed"
     make -j"$JOBS" || die "mtdev build failed"
     make install DESTDIR="$SYSROOT" || die "mtdev install failed"
