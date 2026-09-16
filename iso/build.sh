@@ -633,6 +633,9 @@ build_libxkbcommon() {
     extract "$SRC/libxkbcommon-${XKBCOMMONVER}.tar.xz" \
             "$BUILDDIR/libxkbcommon-${XKBCOMMONVER}"
     cd "$BUILDDIR/libxkbcommon-${XKBCOMMONVER}"
+    # Patch meson.build to skip all test targets (tests need unicode/uchar.h from ICU)
+    sed -i 's/^test_dep = declare_dependency(/\nif false\ntest_dep = declare_dependency(/' meson.build
+    printf '\nendif\n' >> meson.build
     rm -rf _build
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr --libdir=lib \
@@ -641,8 +644,7 @@ build_libxkbcommon() {
         -Denable-bash-completion=false \
         -Denable-xkbregistry=false \
         || die "libxkbcommon meson setup failed"
-    # Build with -k0 to continue past test compilation failures (tests need unicode/uchar.h)
-    ninja -C _build -j"$JOBS" -k0 || true
+    ninja -C _build -j"$JOBS" || die "libxkbcommon build failed"
     DESTDIR="$SYSROOT" ninja -C _build install || die "libxkbcommon install failed"
     cd -
     msg "libxkbcommon done."
