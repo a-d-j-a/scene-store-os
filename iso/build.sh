@@ -777,6 +777,11 @@ build_libinput() {
     extract "$SRC/libinput-${LIBINPUTVER}.tar.gz" "$BUILDDIR/libinput-${LIBINPUTVER}"
     cd "$BUILDDIR/libinput-${LIBINPUTVER}"
     rm -rf _build
+    # Prepend sysroot pkgconfig so meson finds our static libudev.pc (and
+    # other target libs) instead of looking only at host system defaults.
+    # This is scoped here: wayland-protocols (which builds BEFORE us) must
+    # keep finding the host wayland-scanner 1.22 via system pkgconfig.
+    export PKG_CONFIG_PATH="$SYSROOT/usr/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr --libdir=lib \
         -Dtests=false -Ddocumentation=false \
