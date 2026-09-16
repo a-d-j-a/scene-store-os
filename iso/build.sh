@@ -746,8 +746,11 @@ build_eudev() {
     extract "$SRC/eudev-${EUDEVVER}.tar.gz" "$BUILDDIR/eudev-${EUDEVVER}"
     cd "$BUILDDIR/eudev-${EUDEVVER}"
     rm -rf _build
-    # GitHub tarballs do not ship a generated configure; autogen it.
-    NOCONFIGURE=1 ./autogen.sh || die "eudev autogen failed"
+    # GitHub eudev tarballs ship a generated configure; autogen.sh is not
+    # always present (some mirrors drop it). Use configure if available.
+    if [ ! -f configure ]; then
+        NOCONFIGURE=1 ./autogen.sh || die "eudev autogen failed"
+    fi
     ./configure --prefix=/usr --host=x86_64-linux-gnu \
         CC="$MUSL_GCC" CFLAGS="-O2 -I$SYSROOT/usr/include" \
         LDFLAGS="-L$SYSROOT/usr/lib" \
