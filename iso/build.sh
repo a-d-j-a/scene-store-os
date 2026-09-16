@@ -37,6 +37,7 @@ LIBSEATVER="0.7.1"
 MTDEVVER="1.1.6"
 LIBEVDEVVER="1.13.3"
 LIBUDEVSTUBVER="1"
+EUDEVVER="3.2.14"
 WLROOTSVER="0.18.2"
 WPASUPVER="2.11"
 LIBFFIVER="3.4.6"
@@ -727,6 +728,41 @@ build_libseat() {
 }
 
 # ---- phase 5.9: libinput --------------------------------------------------
+build_eudev() {
+    # libinput 1.26 unconditionally requires libudev (dependency('libudev'),
+    # used by udev/ tool executables and src/).  The ISO does not run systemd;
+    # eudev is the musl-compatible udev implementation (Gentoo).  Build only
+    # the libudev library (--disable-programs: no udevd/udevadm/helpers).
+    msg "=== Phase 5.8b: Building eudev (libudev only) ==="
+    setup_musl_gcc
+    fetch "https://github.com/eudev-project/eudev/archive/refs/tags/v${EUDEVVER}.tar.gz" \
+          "$SRC/eudev-${EUDEVVER}.tar.gz"
+    # Validate real gzip (same HTML-trap guard as libseat).
+    if ! gzip -t "$SRC/eudev-${EUDEVVER}.tar.gz" 2>/dev/null; then
+        warn "eudev source not valid gzip — skipping libudev"
+        rm -f "$SRC/eudev-${EUDEVVER}.tar.gz"
+        return 0
+    fi
+    extract "$SRC/eudev-${EUDEVVER}.tar.gz" "$BUILDDIR/eudev-${EUDEVVER}"
+    cd "$BUILDDIR/eudev-${EUDEVVER}"
+    rm -rf _build
+    # GitHub tarballs do not ship a generated configure; autogen it.
+    NOCONFIGURE=1 ./autogen.sh || die "eudev autogen failed"
+    ./configure --prefix=/usr --host=x86_64-linux-gnu \
+        CC="$MUSL_GCC" CFLAGS="-O2 -I$SYSROOT/usr/include" \
+        LDFLAGS="-L$SYSROOT/usr/lib" \
+        --disable-programs --disable-blkid --disable-selinux \
+        --disable-kmod --disable-manpages --disable-hwdb \
+        || die "eudev configure failed"
+    make -C src/libudev -j"$JOBS" || die "libudev build failed"
+    make -C src/libudev install DESTDIR="$SYSROOT" \
+        || die "libudev install failed"
+    # Also install the header + pc file (make install of the subdir handles
+    # src/libudev/libudev.h and libudev.pc per Makefile.am install hooks).
+    cd -
+    msg "eudev done."
+}
+
 build_libinput() {
     msg "=== Phase 5.9: Building libinput ==="
     setup_musl_gcc
@@ -1272,7 +1308,8 @@ case "${1:-}" in
     scene)     build_scene_store ;;
     wlroots)   install_prereqs; fetch_sources; build_musl; build_zlib; build_openssl;
                build_libdrm; build_wayland_protocols; build_wayland; build_pixman;
-               build_libxkbcommon; build_libevdev; build_mtdev; build_libseat;
+               build_libxkbcommon; build_libevdev; build_mtdev;
+               build_eudev; build_libseat;
                build_libinput; build_wlroots ;;
     rootfs)    assemble_rootfs ;;
     initramfs) build_initramfs ;;
@@ -1295,6 +1332,7 @@ case "${1:-}" in
         build_libxkbcommon
         build_libevdev
         build_mtdev
+        build_eudev
         build_libseat
         build_libinput
         build_wlroots

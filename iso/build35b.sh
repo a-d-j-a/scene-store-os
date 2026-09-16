@@ -15,6 +15,7 @@ build_pixman
 build_libxkbcommon
 build_libevdev
 build_mtdev
+build_eudev
 build_libseat
 build_libinput
 build_wlroots
