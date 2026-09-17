@@ -810,10 +810,13 @@ build_wlroots() {
     rm -rf _build
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr --libdir=lib \
-        -Dexamples=false -Dtests=false \
-        -Dxwayland=disabled -Dx11-backend=disabled -Dx11-renderer=disabled \
-        -Dxcb-errors=disabled -Dsession=disabled \
-        -Dpopups=disabled \
+        -Dexamples=false \
+        -Dauto_features=disabled \
+        -Dxwayland=disabled \
+        -Dxcb-errors=disabled \
+        -Dsession=disabled \
+        -Dlibliftoff=disabled \
+        -Dcolor-management=disabled \
         || die "wlroots meson setup failed"
     ninja -C _build -j"$JOBS" || die "wlroots build failed"
     DESTDIR="$SYSROOT" ninja -C _build install || die "wlroots install failed"
