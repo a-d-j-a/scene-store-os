@@ -839,7 +839,7 @@ build_iso_wl() {
     export PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
     export PKG_CONFIG_LIBDIR="$SYSROOT/usr/lib/pkgconfig:$SYSROOT/lib/pkgconfig"
     make build/iso-wl CC="$MUSL_GCC" \
-        CFLAGS="-O2 -I$SYSROOT/usr/include -DWLR_USE_UNSTABLE -Ithird_party/wayland" \
+        CFLAGS="-O2 -I$SYSROOT/usr/include -I$SYSROOT/usr/include/libdrm -DWLR_USE_UNSTABLE -Ithird_party/wayland" \
         2>&1 | tail -20 || warn "iso-wl build failed (non-fatal for ISO)"
     if [ -f build/iso-wl ]; then
         mkdir -p "$SYSROOT/usr/bin"
