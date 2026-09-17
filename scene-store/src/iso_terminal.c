@@ -46,6 +46,8 @@ static scene_app      *g_app;
 static scene_terminal *g_term;
 static scene_node_id   g_content, g_close;
 
+static void render_screen(void);
+
 /* ---- callbacks -------------------------------------------------------- */
 
 static void on_pointer(void *ud, uint64_t seq, int32_t x, int32_t y,
