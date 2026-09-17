@@ -811,6 +811,7 @@ build_wlroots() {
     meson setup _build --cross-file "$BUILDDIR/musl-cross.txt" \
         --prefix=/usr --libdir=lib \
         -Dexamples=false \
+        -Dc_std=c11 \
         -Dauto_features=disabled \
         -Dxwayland=disabled \
         -Dxcb-errors=disabled \
