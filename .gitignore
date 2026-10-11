@@ -31,6 +31,9 @@ git_setup.bat
 serial*.log
 state.img
 
+# Third-party NetSurf source (tarballs + extracted tree, regenerable)
+iso/src/
+
 # Test-run artifacts (app event logs, screenshots)
 *.log
 shot.bmp
