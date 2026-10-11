@@ -2,16 +2,17 @@
  *
  * The honest boundary at the OS seam: browsers arrive as composited
  * textures. NetSurf's framebuffer frontend (-f wld) speaks the LEGACY
- * wayland protocol (wl_compositor/wl_shell/wl_shm at version 1, one
- * reused wl_shm buffer, XRGB8888) - see libnsfb/src/surface/wld.c. This
- * module is the tiny server it connects to: it announces exactly those
- * three globals (no seat, no output), services the handful of requests the
- * client makes, and on every wl_surface.commit hands the attached
- * buffer's pixels (copied at commit time into a one-frame staging
- * buffer) to the consumer. Nothing else is implemented because nothing
- * else arrives: no xdg, no seat, no output, no regions, no frame
- * callbacks. The sockets are POSIX (linux); the core (ingest/parse/
- * state) is platform-neutral and unit-tested on Windows.
+ * wayland protocol (wl_compositor/wl_shell/wl_shm/wl_seat at version 1,
+ * one reused wl_shm buffer, XRGB8888) - see libnsfb/src/surface/wld.c.
+ * This module is the tiny server it connects to: it announces exactly
+ * those four globals, services the handful of requests the client makes,
+ * and on every wl_surface.commit hands the attached buffer's pixels
+ * (copied at commit time into a one-frame staging buffer) to the
+ * consumer. Input is injected host-side (see wlshim_input_* below): the
+ * OS translates raw evdev into whatever key/pointer event the client
+ * wants, and the shim frames it as the matching wayland event. The
+ * sockets are POSIX (linux); the core (ingest/parse/state) is
+ * platform-neutral and unit-tested on Windows.
  *
  * Wire facts the implementation rests on (verified against
  * libnsfb b701cdc src/surface/wld.c + wayland.xml):
@@ -27,6 +28,18 @@
  *   - wl_shm.format (XRGB8888 = 1) must be announced or the client
  *     refuses to start ("WL_SHM_FORMAT_XRGB8888 not available")
  *   - first commit happens at init, before any page content
+ *   - wl_seat: the client binds it and calls get_pointer/get_keyboard
+ *     (wld.c active handlers: pointer motion+button; keyboard is all
+ *     #if 0 in stock wld - the shim still frames key events and the
+ *     sender's patched keyboard_handle_key consumes them). The shim
+ *     emits wl_seat.capabilities (1|2 = pointer|keyboard) on bind.
+ *   - input events the shim can emit (wayland v1 wire):
+ *     wl_pointer.motion (op 2: time, fixed x, fixed y)
+ *     wl_pointer.button (op 3: serial, time, button, state)
+ *     wl_keyboard.key   (op 3: serial, time, key, state)
+ *     All but the wire must-haves; enter/leave/keymap/modifiers are NOT
+ *     needed (client handlers for them are no-ops in the patched wld).
+ *     wl_fixed = value << 8. Pointer surfaces track wld's only surface.
  */
 #ifndef ISO_WLSHIM_H
 #define ISO_WLSHIM_H
@@ -80,6 +93,21 @@ size_t wlshim_out_drain(wlshim *w, uint8_t *out, size_t cap);
 
 /* The last committed frame (NULL if none yet). */
 const wlshim_frame *wlshim_last_frame(const wlshim *w);
+
+/* Input injection: the OS layer drives the client's pointer and
+ * keyboard by framing events against the bound wl_pointer/wl_keyboard
+ * objects. Coordinates are surface-relative (host translates absolute
+ * scene coords -> window-relative before calling). All are no-ops if
+ * the seat/pointer/keyboard isn't bound yet (or the shim is dead) -
+ * injection never crashes a client that hasn't finished binding.
+ * `button` is the Linux input code (BTN_LEFT=0x110, BTN_RIGHT=0x111,
+ * BTN_MIDDLE=0x112); `state` is 0 released / 1 pressed; `key` is the
+ * ASCII/NSFB keysym the patched wld.c keyboard handler forwards
+ * verbatim. Serials and time are generated internally. */
+void wlshim_input_pointer_move(wlshim *w, int32_t x, int32_t y);
+void wlshim_input_pointer_button(wlshim *w, uint32_t button,
+                                 uint32_t state);
+void wlshim_input_keyboard_key(wlshim *w, uint32_t key, uint32_t state);
 
 /* Non-zero after a protocol error (connection was/kill be killed). */
 int wlshim_dead(const wlshim *w);

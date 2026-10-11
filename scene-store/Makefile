@@ -16,7 +16,7 @@ else
   WINLIB =
 endif
 
-all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE) build/iso_demo$(EXE) build/test_video_app$(EXE) build/iso_video$(EXE) build/test_app_wm$(EXE) build/test_hostwm$(EXE) build/test_shellwm$(EXE) build/iso_play$(EXE) build/iso_install$(EXE) build/test_play_app$(EXE) build/iso_files$(EXE) build/test_files_app$(EXE) build/iso_photo$(EXE) build/test_photo_app$(EXE) build/test_searchoverlay$(EXE) build/iso_edit$(EXE) build/test_edit_app$(EXE) build/test_codec$(EXE) build/test_wlshim$(EXE) build/test_fontcache$(EXE)
+all: build/test_store$(EXE) build/test_client$(EXE) build/test_compositor$(EXE) build/test_automation$(EXE) build/test_a11y$(EXE) build/test_rewind$(EXE) build/test_shell$(EXE) build/test_app$(EXE) build/test_terminal$(EXE) build/test_settings$(EXE) build/test_theme$(EXE) build/test_image$(EXE) build/test_wallpaper$(EXE) build/test_sessions$(EXE) build/test_launcher$(EXE) build/test_launcher_app$(EXE) build/iso_preview$(EXE) build/iso_demo$(EXE) build/test_video_app$(EXE) build/iso_video$(EXE) build/test_app_wm$(EXE) build/test_hostwm$(EXE) build/test_shellwm$(EXE) build/iso_play$(EXE) build/iso_install$(EXE) build/test_play_app$(EXE) build/iso_files$(EXE) build/test_files_app$(EXE) build/iso_photo$(EXE) build/test_photo_app$(EXE) build/test_searchoverlay$(EXE) build/iso_edit$(EXE) build/test_edit_app$(EXE) build/test_codec$(EXE) build/test_wlshim$(EXE) build/test_fontcache$(EXE) build/iso_settings$(EXE) build/test_settings_app$(EXE) build/test_browser$(EXE)
 
 # Vendored ffmpeg static build (see third_party/ffmpeg/LICENSE.md for
 # the locked configure and the written adoption justification). The ISO
@@ -315,6 +315,27 @@ build/test_edit_app$(EXE): tests/test_edit_app.c build/scene_fmt.o \
 		build/scene_font_data.o build/scene_compositor.o \
 		$(SOCKLIB) -o $@
 
+# First-party settings GUI guest app (Option=Value + wifi + volume config;
+# compiled once as the guest app with -DISO_SETTINGS_MAIN, once into the
+# test suite with no macro).
+build/iso_settings$(EXE): src/iso_settings.c build/scene_fmt.o \
+	build/scene_transport.o build/scene_client.o build/scene_app.o | build
+	$(CC) $(CFLAGS) -DISO_SETTINGS_MAIN src/iso_settings.c build/scene_fmt.o \
+		build/scene_store.o build/scene_transport.o build/scene_client.o \
+		build/scene_app.o $(SOCKLIB) -o $@
+
+# Settings proof: text-file model + GUI over the loopback harness
+build/test_settings_app$(EXE): tests/test_settings_app.c src/iso_settings.c \
+	build/scene_fmt.o build/scene_store.o build/scene_transport.o \
+	build/scene_client.o build/scene_server.o build/scene_fb.o \
+	build/scene_font.o build/scene_font_data.o build/scene_compositor.o \
+	build/scene_app.o | build
+	$(CC) $(CFLAGS) tests/test_settings_app.c src/iso_settings.c \
+		build/scene_fmt.o build/scene_store.o build/scene_transport.o \
+		build/scene_client.o build/scene_server.o build/scene_fb.o \
+		build/scene_font.o build/scene_font_data.o build/scene_compositor.o \
+		build/scene_app.o $(SOCKLIB) -o $@
+
 # File browser proof: real child over real TCP against a deterministic fixture
 build/test_files_app$(EXE): tests/test_files_app.c build/scene_fmt.o \
 	build/scene_store.o build/scene_transport.o build/scene_client.o \
@@ -452,6 +473,9 @@ test-launcher: build/test_launcher$(EXE)
 test-settings: build/test_settings$(EXE)
 	./build/test_settings$(EXE)
 
+test-settings-app: build/test_settings_app$(EXE) build/iso_settings$(EXE)
+	./build/test_settings_app$(EXE)
+
 test-theme: build/test_theme$(EXE)
 	./build/test_theme$(EXE)
 
@@ -493,6 +517,20 @@ build/test_wlshim$(EXE): tests/test_wlshim.c src/iso_wlshim.c include/iso_wlshim
 
 test-wlshim: build/test_wlshim$(EXE)
 	./build/test_wlshim$(EXE)
+
+build/test_browser$(EXE): tests/test_browser.c src/scene_browser.c \
+	src/iso_wlshim.c include/scene_browser.h include/iso_wlshim.h \
+	build/scene_fmt.o build/scene_store.o build/scene_transport.o \
+	build/scene_client.o build/scene_server.o build/scene_fb.o \
+	build/scene_font.o build/scene_font_data.o build/scene_compositor.o | build
+	$(CC) $(CFLAGS) tests/test_browser.c src/scene_browser.c \
+		src/iso_wlshim.c build/scene_fmt.o build/scene_store.o \
+		build/scene_transport.o build/scene_client.o build/scene_server.o \
+		build/scene_fb.o build/scene_font.o build/scene_font_data.o \
+		build/scene_compositor.o $(SOCKLIB) -o $@
+
+test-browser: build/test_browser$(EXE)
+	./build/test_browser$(EXE)
 
 build/test_fontcache$(EXE): tests/test_fontcache.c build/scene_fontcache.o | build
 	$(CC) $(CFLAGS) -Ithird_party/stb tests/test_fontcache.c build/scene_fontcache.o -o $@
@@ -588,4 +626,4 @@ endif
 clean:
 	rm -rf build
 
-.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-sessions test-launcher test-settings test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm iso-terminal test-video test-appwm test-hostwm test-shellwm test-play clean test-codec wl-proof test-fontcache
+.PHONY: all test test-client test-compositor test-automation test-a11y test-rewind test-shell test-app test-terminal test-sessions test-launcher test-settings test-settings-app test-theme test-image test-wallpaper bench test-dbg iso-compositor iso-drm iso-terminal test-video test-appwm test-hostwm test-shellwm test-play clean test-codec wl-proof test-fontcache test-browser

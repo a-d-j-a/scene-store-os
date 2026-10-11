@@ -143,6 +143,7 @@ static void test_globals_and_bind(void)
     bind_global(&mb, 2, "wl_compositor", 0, 1, 3);
     bind_global(&mb, 2, "wl_shell", 1, 1, 4);
     bind_global(&mb, 2, "wl_shm", 2, 1, 5);
+    bind_global(&mb, 2, "wl_seat", 3, 1, 6);
     wlshim_ingest(w, mb.b, mb.n, NULL, 0);
 
     on = wlshim_out_drain(w, out, sizeof out);
@@ -162,14 +163,19 @@ static void test_globals_and_bind(void)
         } else if (obj == 5 && op == 0) {  /* wl_shm.format */
             formats++;
             CHECK_EQ(((const uint32_t *)pl)[0], 1u);   /* XRGB8888 */
+        } else if (obj == 6 && op == 0) {  /* wl_seat.capabilities */
+            CHECK_EQ(((const uint32_t *)pl)[0], 3u);   /* pointer|keyboard */
         } else unknown++;
     }
-    CHECK_EQ(n, 3u);
-    CHECK_EQ(names[0], 0u); CHECK_EQ(names[1], 1u); CHECK_EQ(names[2], 2u);
+    CHECK_EQ(n, 4u);
+    CHECK_EQ(names[0], 0u); CHECK_EQ(names[1], 1u);
+    CHECK_EQ(names[2], 2u); CHECK_EQ(names[3], 3u);
     CHECK(strcmp(ifaces[0], "wl_compositor") == 0);
     CHECK(strcmp(ifaces[1], "wl_shell") == 0);
     CHECK(strcmp(ifaces[2], "wl_shm") == 0);
-    CHECK_EQ(versions[0], 1u); CHECK_EQ(versions[1], 1u); CHECK_EQ(versions[2], 1u);
+    CHECK(strcmp(ifaces[3], "wl_seat") == 0);
+    CHECK_EQ(versions[0], 1u); CHECK_EQ(versions[1], 1u);
+    CHECK_EQ(versions[2], 1u); CHECK_EQ(versions[3], 1u);
     CHECK_EQ(formats, 1u);
     CHECK_EQ(unknown, 0u);
     wlshim_free(w);
@@ -211,7 +217,7 @@ static void test_surface_shell_title_sync(void)
         else unknown++;
     }
     CHECK_EQ(done, 1u);
-    CHECK_EQ(known, 4u);
+    CHECK_EQ(known, 5u);    /* 4 registry.global + 1 shm.format */
     CHECK_EQ(unknown, 0u);
     wlshim_free(w);
 }
@@ -455,8 +461,137 @@ static void test_unknown_global_bound(void)
 
     mb.n = 0;
     m_put(&mb, 1, 1, 2, NULL, 0);
-    bind_global(&mb, 2, "wl_seat", 7, 1, 9);   /* unknown name: tolerated */
+    bind_global(&mb, 2, "wl_output", 7, 1, 9);   /* unknown name: tolerated */
     wlshim_ingest(w, mb.b, mb.n, NULL, 0);
+    CHECK(!wlshim_dead(w));
+    wlshim_free(w);
+}
+
+#define OP_SEAT_GET_POINTER   0
+#define OP_SEAT_GET_KEYBOARD  1
+
+static void test_seat_bind_and_input(void)
+{
+    wlshim *w = make_shim();
+    m mb;
+    uint8_t out[1024]; size_t on;
+    uint32_t caps = 0, motion = 0, button = 0, key = 0, unknown = 0;
+    uint32_t bpress = 0, brel = 0;    /* button state counts */
+    int32_t mx = 0, my = 0;
+    uint32_t bcode = 0, kcode = 0, kstate = 0;
+    uint32_t bser = 0, kser = 0;
+
+    mb.n = 0;
+    m_put(&mb, 1, 1, 2, NULL, 0);
+    bind_global(&mb, 2, "wl_compositor", 0, 1, 3);
+    bind_global(&mb, 2, "wl_seat", 3, 1, 6);
+    m a; a.n = 0;
+    m_put(&mb, 6, OP_SEAT_GET_POINTER, 7, a.b, a.n);    /* pointer -> 7 */
+    m_put(&mb, 6, OP_SEAT_GET_KEYBOARD, 8, a.b, a.n);   /* keyboard -> 8 */
+    wlshim_ingest(w, mb.b, mb.n, NULL, 0);
+    CHECK(!wlshim_dead(w));
+
+    /* flush: capabilities event must be present */
+    on = wlshim_out_drain(w, out, sizeof out);
+    {
+        e ev; ev.p = out; ev.left = on;
+        while (ev.left > 0) {
+            uint32_t op = 0, obj = 0;
+            const uint8_t *pl = ev_next(&ev, &obj, &op);
+            if (!pl) break;
+            if (obj == 6 && op == 0) {            /* wl_seat.capabilities */
+                caps = ((const uint32_t *)pl)[0];
+            } else unknown++;
+        }
+    }
+    CHECK_EQ(caps, 3u);        /* pointer | keyboard */
+
+    /* now injections reach the client */
+    wlshim_input_pointer_move(w, 123, 456);
+    wlshim_input_pointer_button(w, 0x110, 1);
+    wlshim_input_pointer_button(w, 0x110, 0);
+    wlshim_input_keyboard_key(w, 0x61, 1);        /* 'a' down */
+    wlshim_input_keyboard_key(w, 0x61, 0);        /* 'a' up */
+    unknown = 0;
+    on = wlshim_out_drain(w, out, sizeof out);
+    {
+        e ev; ev.p = out; ev.left = on;
+        while (ev.left > 0) {
+            uint32_t op = 0, obj = 0;
+            const uint8_t *pl = ev_next(&ev, &obj, &op);
+            if (!pl) break;
+            if (obj == 7 && op == 2) {            /* pointer.motion */
+                motion++;
+                mx = (int32_t)(((uint32_t *)pl)[1]) >> 8;
+                my = (int32_t)(((uint32_t *)pl)[2]) >> 8;
+            } else if (obj == 7 && op == 3) {     /* pointer.button */
+                button++;
+                bser = ((const uint32_t *)pl)[0];
+                bcode = ((const uint32_t *)pl)[2];
+                if (((const uint32_t *)pl)[3] == 1) bpress++;
+                else brel++;
+            } else if (obj == 8 && op == 3) {     /* keyboard.key */
+                key++;
+                kser = ((const uint32_t *)pl)[0];
+                kcode = ((const uint32_t *)pl)[2];
+                kstate = ((const uint32_t *)pl)[3];
+            } else unknown++;
+        }
+    }
+    CHECK_EQ(motion, 1u);
+    CHECK_EQ(mx, 123); CHECK_EQ(my, 456);
+    CHECK_EQ(button, 2u);
+    CHECK_EQ(bcode, 0x110u);
+    CHECK_EQ(bpress, 1u);            /* one press, one release */
+    CHECK_EQ(brel, 1u);
+    CHECK_EQ(key, 2u);
+    CHECK_EQ(kcode, 0x61u);
+    CHECK_EQ(kstate, 0u);            /* last key was release */
+    CHECK(bser != 0 && kser != 0);
+    /* serials must be independent per event class */
+    wlshim_input_pointer_button(w, 0x110, 1);
+    wlshim_input_keyboard_key(w, 0x62, 1);
+    unknown = 0;
+    on = wlshim_out_drain(w, out, sizeof out);
+    {
+        e ev; ev.p = out; ev.left = on;
+        while (ev.left > 0) {
+            uint32_t op = 0, obj = 0;
+            const uint8_t *pl = ev_next(&ev, &obj, &op);
+            if (!pl) break;
+            if (obj == 7 && op == 3) {
+                button++;
+                bser = ((const uint32_t *)pl)[0];
+            } else if (obj == 8 && op == 3) {
+                key++;
+                kser = ((const uint32_t *)pl)[0];
+            } else unknown++;
+        }
+    }
+    CHECK_EQ(button, 3u);
+    CHECK_EQ(key, 3u);
+    CHECK(bser > 0 && kser > 0);
+    CHECK_EQ(unknown, 0u);
+    wlshim_free(w);
+}
+
+static void test_seat_no_bind_no_input(void)
+{
+    wlshim *w = make_shim();
+    m mb;
+    uint8_t out[1024]; size_t on;
+
+    mb.n = 0;
+    m_put(&mb, 1, 1, 2, NULL, 0);
+    wlshim_ingest(w, mb.b, mb.n, NULL, 0);
+    on = wlshim_out_drain(w, out, sizeof out);
+    CHECK(on > 0);                   /* registry globals queued */
+    /* no seat bound: injection must be silent */
+    wlshim_input_pointer_move(w, 1, 1);
+    wlshim_input_pointer_button(w, 0x110, 1);
+    wlshim_input_keyboard_key(w, 0x61, 1);
+    on = wlshim_out_drain(w, out, sizeof out);
+    CHECK_EQ(on, 0u);
     CHECK(!wlshim_dead(w));
     wlshim_free(w);
 }
@@ -483,6 +618,10 @@ int main(void)
     test_misc_opcodes_accepted();
     printf("t9\n"); fflush(stdout);
     test_unknown_global_bound();
+    printf("t10\n"); fflush(stdout);
+    test_seat_bind_and_input();
+    printf("t11\n"); fflush(stdout);
+    test_seat_no_bind_no_input();
     printf("wlshim: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

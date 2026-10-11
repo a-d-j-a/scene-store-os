@@ -24,10 +24,13 @@
 
 enum {
     WK_NONE = 0, WK_REGISTRY, WK_COMPOSITOR, WK_SHELL, WK_SHM,
-    WK_SURFACE, WK_SHELL_SURFACE, WK_CALLBACK, WK_POOL, WK_BUFFER
+    WK_SURFACE, WK_SHELL_SURFACE, WK_CALLBACK, WK_POOL, WK_BUFFER,
+    WK_SEAT, WK_POINTER, WK_KEYBOARD
 };
 
 #define WL_SHM_FORMAT_XRGB8888 1u
+#define WL_SEAT_CAP_POINTER    1u
+#define WL_SEAT_CAP_KEYBOARD   2u
 
 struct wlshim {
     uint8_t  ibuf[65536];
@@ -55,6 +58,9 @@ struct wlshim {
 
     uint32_t reg_id;
     uint32_t id_compositor, id_shell, id_shm;
+    uint32_t id_seat, id_pointer, id_keyboard;
+
+    uint32_t ev_serial, ev_time;   /* monotonic serials/timestamps */
 
     uint32_t *stage;
     uint32_t  stage_cap;
@@ -109,9 +115,11 @@ static void o_string(wlshim *w, const char *s)
 
 static void emit_globals(wlshim *w)
 {
-    static const char *ifs[3] = { "wl_compositor", "wl_shell", "wl_shm" };
+    static const char *ifs[4] = {
+        "wl_compositor", "wl_shell", "wl_shm", "wl_seat"
+    };
     uint32_t i;
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < 4; i++) {
         o_hdr(w, w->reg_id, 0);
         o_u32(w, i);
         o_string(w, ifs[i]);
@@ -127,6 +135,13 @@ static void emit_format(wlshim *w)
     o_end(w);
 }
 
+static void emit_capabilities(wlshim *w)
+{
+    o_hdr(w, w->id_seat, 0);
+    o_u32(w, WL_SEAT_CAP_POINTER | WL_SEAT_CAP_KEYBOARD);
+    o_end(w);
+}
+
 static void emit_done(wlshim *w, uint32_t cb)
 {
     o_hdr(w, cb, 0);
@@ -137,6 +152,36 @@ static void emit_done(wlshim *w, uint32_t cb)
 static void emit_release(wlshim *w, uint32_t buf)
 {
     o_hdr(w, buf, 0);
+    o_end(w);
+}
+
+static void emit_pointer_motion(wlshim *w, int32_t x, int32_t y)
+{
+    o_hdr(w, w->id_pointer, 2);
+    o_u32(w, ++w->ev_time);
+    o_u32(w, (uint32_t)((int32_t)x << 8));
+    o_u32(w, (uint32_t)((int32_t)y << 8));
+    o_end(w);
+}
+
+static void emit_pointer_button(wlshim *w, uint32_t button,
+                                 uint32_t state)
+{
+    o_hdr(w, w->id_pointer, 3);
+    o_u32(w, ++w->ev_serial);
+    o_u32(w, ++w->ev_time);
+    o_u32(w, button);
+    o_u32(w, state);
+    o_end(w);
+}
+
+static void emit_keyboard_key(wlshim *w, uint32_t key, uint32_t state)
+{
+    o_hdr(w, w->id_keyboard, 3);
+    o_u32(w, ++w->ev_serial);
+    o_u32(w, ++w->ev_time);
+    o_u32(w, key);
+    o_u32(w, state);
     o_end(w);
 }
 
@@ -238,6 +283,9 @@ static void handle_msg(wlshim *w, const uint8_t *msg, size_t len,
         } else if (strcmp(s, "wl_shm") == 0) {
             w->kind[id] = WK_SHM; w->id_shm = id;
             emit_format(w);
+        } else if (strcmp(s, "wl_seat") == 0) {
+            w->kind[id] = WK_SEAT; w->id_seat = id;
+            emit_capabilities(w);
         } else { w->kind[id] = WK_NONE; }
         return;
 
@@ -284,6 +332,26 @@ static void handle_msg(wlshim *w, const uint8_t *msg, size_t len,
             w->p_size[id] = size;
             if (w->mapfn) w->p_map[id] = w->mapfn(w->mapud, fds[0], size);
         } else if (op == 1) {          /* release: ignore */
+        } else protocol_error(w);
+        return;
+
+    case WK_SEAT:
+        if (op == 0) {                 /* get_pointer */
+            id = d_u32(&d);
+            if (d.err || id == 0 || id >= WLSHIM_MAXID) {
+                protocol_error(w); return;
+            }
+            w->kind[id] = WK_POINTER;
+            w->id_pointer = id;
+        } else if (op == 1) {          /* get_keyboard */
+            id = d_u32(&d);
+            if (d.err || id == 0 || id >= WLSHIM_MAXID) {
+                protocol_error(w); return;
+            }
+            w->kind[id] = WK_KEYBOARD;
+            w->id_keyboard = id;
+        } else if (op == 2) {          /* release: destroy seat */
+            drop_obj(w, obj);
         } else protocol_error(w);
         return;
 
@@ -415,6 +483,31 @@ void wlshim_set_mapfn(wlshim *w, wlshim_map_fn fn, void *ud)
 {
     w->mapfn = fn;
     w->mapud = ud;
+}
+
+void wlshim_input_pointer_move(wlshim *w, int32_t x, int32_t y)
+{
+    if (!w || w->dead || w->id_pointer == 0 ||
+        w->kind[w->id_pointer] != WK_POINTER)
+        return;
+    emit_pointer_motion(w, x, y);
+}
+
+void wlshim_input_pointer_button(wlshim *w, uint32_t button,
+                                 uint32_t state)
+{
+    if (!w || w->dead || w->id_pointer == 0 ||
+        w->kind[w->id_pointer] != WK_POINTER)
+        return;
+    emit_pointer_button(w, button, state);
+}
+
+void wlshim_input_keyboard_key(wlshim *w, uint32_t key, uint32_t state)
+{
+    if (!w || w->dead || w->id_keyboard == 0 ||
+        w->kind[w->id_keyboard] != WK_KEYBOARD)
+        return;
+    emit_keyboard_key(w, key, state);
 }
 
 int wlshim_dead(const wlshim *w)

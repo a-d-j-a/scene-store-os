@@ -878,12 +878,6 @@ static int diff_cb(scene_node_id id, void *out)
     if (!rn) {
         rn = map_insert(ly, id);
         if (!rn) return 0;
-        if (id >= 9000)
-            fprintf(stderr, "DIFF: NEW id=%u role=%u flags=0x%02x tex=%u vis=%d eff=%d replay=%d rect=[%d,%d,%u,%u]\n",
-                    (unsigned)id, (unsigned)v.role, (unsigned)v.flags,
-                    (unsigned)v.tex, !!(v.flags & SCENE_FLAG_VISIBLE),
-                    cp->effects_on, anim_replaying(ly),
-                    v.rect[0], v.rect[1], v.rect[2], v.rect[3]);
         rn->seen = 1;
         rn->role = v.role;
         rn->flags = v.flags;
@@ -1732,19 +1726,8 @@ int scene_compositor_frame(scene_compositor *cp)
     }
     if (!any_change && cp->pending_count == 0 && !anim_active) {
         cp->damage_count = 0;   /* nothing new this frame */
-        if (cp->tick < 200 || (cp->tick % 30) == 0)
-            fprintf(stderr, "SC: no-change seq=%lu rendered=%lu\n",
-                    (unsigned long)scene_store_view_seq(cp->ly[0].store),
-                    (unsigned long)cp->ly[0].rendered_seq);
         return 0;
     }
-    /* DEBUG: trace when the compositor detects changes */
-    if (cp->tick < 200 || (cp->tick % 30) == 0)
-        fprintf(stderr, "SC: any=%d pending=%d anim=%d ly0_seq=%lu rendered=%lu damage=%u\n",
-                any_change, cp->pending_count, anim_active,
-                (unsigned long)scene_store_view_seq(cp->ly[0].store),
-                (unsigned long)cp->ly[0].rendered_seq,
-                cp->damage_count);
     cp->damage_count = 0;       /* fresh report list for this frame */
     for (i = 0; i < cp->ly_count; i++) {
         scene_layer *ly = &cp->ly[i];

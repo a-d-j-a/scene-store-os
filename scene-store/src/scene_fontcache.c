@@ -46,7 +46,7 @@ static uint32_t fc_hash(uint32_t cp)
     return h;
 }
 
-static fc_entry *fc_find(const scene_fontcache *fc, uint32_t cp)
+static fc_entry *fc_find(scene_fontcache *fc, uint32_t cp)
 {
     uint32_t slot = fc_hash(cp) >> (32u - FC_CAP_LOG);
     uint32_t i;
@@ -54,9 +54,42 @@ static fc_entry *fc_find(const scene_fontcache *fc, uint32_t cp)
     for (i = 0; i < (1u << FC_CAP_LOG); i++) {
         fc_entry *e = &fc->entries[(slot + i) & ((1u << FC_CAP_LOG) - 1u)];
         if (!e->used) return NULL;
-        if (e->codepoint == cp) return (fc_entry *)e;
+        if (e->codepoint == cp) return e;
     }
     return NULL;
+}
+
+/* stb_truetype performs NO bounds checking — validate the sfnt header
+ * (version tag + table directory within `size`) before stb parses it.
+ * Garbage data would otherwise make GetFontOffsetForIndex return -1 and
+ * InitFont walk `num_tables` entries off the end of the buffer. */
+static int fc_sfnt_ok(const uint8_t *d, uint32_t size)
+{
+    uint32_t tag, num, dir_bytes;
+
+    if (!d || size < 12u) return 0;
+    tag = ((uint32_t)d[0] << 24) | ((uint32_t)d[1] << 16) |
+          ((uint32_t)d[2] << 8)  | (uint32_t)d[3];
+    switch (tag) {
+    case 0x00010000u:   /* OpenType 1.0 */
+    case 0x4F54544Fu:   /* 'OTTO' (CFF) */
+    case 0x74727565u:   /* 'true' (Apple) */
+    case 0x74797031u:   /* 'typ1' */
+        break;
+    case 0x74746366u:   /* 'ttcf' collection */
+        if (size < 16u) return 0;
+        num = ((uint32_t)d[8] << 24) | ((uint32_t)d[9] << 16) |
+              ((uint32_t)d[10] << 8) | (uint32_t)d[11];
+        if (num > (size - 12u) / 4u) return 0;   /* offset table fits */
+        return 1;
+    default:
+        return 0;
+    }
+    num = ((uint32_t)d[4] << 8) | d[5];       /* numTables (BE u16) */
+    if (num == 0) return 0;
+    dir_bytes = 12u + 16u * num;              /* end of table directory */
+    if (dir_bytes > size) return 0;
+    return 1;
 }
 
 static void fc_evict_lru(scene_fontcache *fc)
@@ -125,9 +158,14 @@ scene_fontcache *scene_fontcache_new(const char *font_path,
 
     fc = scene_fontcache_new_from_mem(buf, (uint32_t)sz, pixel_height);
     if (!fc) { free(buf); return NULL; }
-    /* Transfer ownership of buf to the cache (it keeps it for stbtt). */
+    /* Transfer ownership of buf to the cache (it keeps it for stbtt).
+     * stbtt_InitFont cached info.data = the internal copy, which we are
+     * about to free — re-point it at the new buffer or every later glyph
+     * rasterization reads freed memory (SIGSEGV under musl where the
+     * 267KB mmap is unmapped on free; silent garbage under MSVCRT). */
     free(fc->font_data);
     fc->font_data = buf;
+    fc->info.data  = buf;
     fc->font_size = (uint32_t)sz;
     return fc;
 }
@@ -140,6 +178,7 @@ scene_fontcache *scene_fontcache_new_from_mem(const uint8_t *data,
     int ascent, descent, line_gap;
 
     if (!data || size == 0 || pixel_height <= 0) return NULL;
+    if (!fc_sfnt_ok(data, size)) return NULL;   /* stb has no bounds checks */
 
     fc = (scene_fontcache *)calloc(1, sizeof(*fc));
     if (!fc) return NULL;
